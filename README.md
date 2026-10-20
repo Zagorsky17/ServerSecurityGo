@@ -250,6 +250,7 @@ You can also restrict access by IP with a firewall, for example `ufw allow from 
 /opt/serversecuritygo/scripts/logs.sh -p warning --since today
 /opt/serversecuritygo/scripts/uninstall.sh         # remove the service, keep files and history
 /opt/serversecuritygo/scripts/uninstall.sh --purge # also remove /opt/serversecuritygo and history
+/opt/serversecuritygo/scripts/uninstall.sh --full  # complete removal (see below)
 ```
 
 How updates are protected against failures:
@@ -258,7 +259,36 @@ How updates are protected against failures:
 - the new binary is checked (`version`), and the old one is kept as `bin/serversecuritygo.prev`;
 - after restart `/healthz` is checked; if the service does not come up, the previous version is restored automatically.
 
-Backups are never deleted, even with `--purge`.
+Backups are not deleted, even with `--purge`.
+
+### Complete removal
+
+This removes the application as if it had never been on the server: the service and its traces in systemd, `/opt/serversecuritygo`, the history in `/var/lib/serversecuritygo` and the backups in `/var/backups/serversecuritygo`. This cannot be undone.
+
+```bash
+/opt/serversecuritygo/scripts/uninstall.sh --full -y
+```
+
+If `/opt/serversecuritygo` has already been deleted or damaged, a single command does the same cleanup without the scripts:
+
+```bash
+systemctl disable --now serversecuritygo 2>/dev/null; \
+rm -rf /etc/systemd/system/serversecuritygo.service /etc/systemd/system/serversecuritygo.service.d; \
+systemctl daemon-reload; systemctl reset-failed serversecuritygo 2>/dev/null; \
+rm -rf /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo
+```
+
+What the command leaves alone, and why:
+
+- **the `git`, `curl` and `ca-certificates` packages.** The installer adds them only if they were missing, but other programs need them too. If you are sure you do not need them: `apt-get remove git curl`;
+- **journald entries.** There is no way to delete one service's entries without wiping the whole system journal. They disappear on their own as the journal rotates.
+
+To confirm that nothing is left:
+
+```bash
+systemctl status serversecuritygo        # Unit serversecuritygo.service could not be found.
+ls -d /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo   # No such file or directory
+```
 
 Service status: `systemctl status serversecuritygo`.
 

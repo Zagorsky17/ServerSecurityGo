@@ -248,6 +248,7 @@ server {
 /opt/serversecuritygo/scripts/logs.sh -p warning --since today
 /opt/serversecuritygo/scripts/uninstall.sh         # удалить службу, файлы и историю оставить
 /opt/serversecuritygo/scripts/uninstall.sh --purge # удалить также /opt/serversecuritygo и историю
+/opt/serversecuritygo/scripts/uninstall.sh --full  # полная очистка (см. ниже)
 ```
 
 Как обновление защищено от сбоев:
@@ -257,6 +258,35 @@ server {
 - после перезапуска проверяется `/healthz`; если служба не поднялась, предыдущая версия возвращается автоматически.
 
 Резервные копии не удаляются даже при `--purge`.
+
+### Полное удаление
+
+Удаляет приложение так, будто его на сервере никогда не было: служба и её следы в systemd, `/opt/serversecuritygo`, история `/var/lib/serversecuritygo` и резервные копии `/var/backups/serversecuritygo`. Действие необратимо.
+
+```bash
+/opt/serversecuritygo/scripts/uninstall.sh --full -y
+```
+
+Если каталог `/opt/serversecuritygo` уже удалён или повреждён, ту же очистку выполняет одна команда без скриптов:
+
+```bash
+systemctl disable --now serversecuritygo 2>/dev/null; \
+rm -rf /etc/systemd/system/serversecuritygo.service /etc/systemd/system/serversecuritygo.service.d; \
+systemctl daemon-reload; systemctl reset-failed serversecuritygo 2>/dev/null; \
+rm -rf /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo
+```
+
+Чего команда не трогает, и почему:
+
+- **пакеты `git`, `curl`, `ca-certificates`.** Установщик ставит их, только если их не было, но они нужны и другим программам. Если вы уверены, что они не нужны: `apt-get remove git curl`;
+- **записи в journald.** Удалить записи одной службы нельзя, не стерев журнал всей системы. Они исчезнут сами по мере ротации журнала.
+
+Проверить, что следов не осталось:
+
+```bash
+systemctl status serversecuritygo        # Unit serversecuritygo.service could not be found.
+ls -d /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo   # No such file or directory
+```
 
 Состояние службы: `systemctl status serversecuritygo`.
 
