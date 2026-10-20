@@ -124,6 +124,8 @@ func TestDetectContainer(t *testing.T) {
 		"0::/machine.slice/libpod-" + id + ".scope":                   {"podman", id[:12]},
 		"0::/lxc.payload.web/init.scope":                              {"lxc", ""},
 		"0::/system.slice/nginx.service\n":                            {"", ""},
+		"0::/system.slice/docker.service\n":                           {"", ""},
+		"0::/system.slice/containerd.service":                         {"", ""},
 		"0::/user.slice/user-1000.slice/session-3.scope":              {"", ""},
 	}
 	for in, want := range cases {
