@@ -1,0 +1,78 @@
+name: "🐞 Bug report / Сообщение об ошибке"
+description: "Something does not work as documented. / Что-то работает не так, как описано."
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a problem! Please fill in as much as you can. You are welcome to write in English or Russian.
+        Спасибо, что нашли время сообщить о проблеме! Пожалуйста, заполните поля насколько возможно. Писать можно на английском или русском.
+
+        ⚠️ **Security vulnerabilities:** please do not report them here — see [SECURITY.md](https://github.com/Zagorsky17/ServerSecurityGo/blob/main/SECURITY.md).
+        ⚠️ **Уязвимости:** пожалуйста, не сообщайте о них здесь — см. [SECURITY.md](https://github.com/Zagorsky17/ServerSecurityGo/blob/main/SECURITY.md#русский).
+  - type: textarea
+    id: description
+    attributes:
+      label: "What happened? / Что произошло?"
+      description: "A clear description of the problem. / Понятное описание проблемы."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: "Steps to reproduce / Шаги воспроизведения"
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected behavior / Ожидаемое поведение"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: "Version / Версия"
+      description: "Output of `serversecuritygo version`. / Вывод `serversecuritygo version`."
+      placeholder: "serversecuritygo v0.1.1 (go1.24.13, linux/amd64)"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: "OS and kernel / ОС и ядро"
+      description: "`grep PRETTY /etc/os-release; uname -r`"
+      placeholder: "Ubuntu 24.04.4 LTS, 6.8.0-147-generic"
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: "How is it running? / Как запущено?"
+      options:
+        - "systemd service (install.sh) / служба systemd (install.sh)"
+        - "Manually / вручную"
+        - "Inside a container / внутри контейнера"
+        - "Demo mode / демо-режим"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Logs / Журнал"
+      description: |
+        Output of `/opt/serversecuritygo/scripts/logs.sh -n 50`. Please remove anything you consider private.
+        Вывод `/opt/serversecuritygo/scripts/logs.sh -n 50`. Пожалуйста, удалите всё, что считаете конфиденциальным.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: "Checklist / Проверка"
+      options:
+        - label: "I searched existing issues. / Я поискал среди существующих issue."
+          required: true
+        - label: "I removed private data (IPs, host names, secrets). / Я удалил конфиденциальные данные (IP, имена хостов, секреты)."
+          required: true
