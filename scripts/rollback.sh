@@ -18,4 +18,8 @@ if [ -f bin/.prev-ref ]; then
 fi
 install_unit
 systemctl restart "$APP_NAME"
-health_check && log "Откат выполнен: $(bin/serversecuritygo version)" || die "служба не отвечает после отката — см. scripts/logs.sh"
+if health_check; then
+  log "Откат выполнен: $(bin/serversecuritygo version)"
+else
+  die "служба не отвечает после отката — см. scripts/logs.sh"
+fi

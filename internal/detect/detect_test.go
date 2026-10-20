@@ -194,6 +194,27 @@ func TestPatterns(t *testing.T) {
 	}
 }
 
+func TestRuntimeFalsePositives(t *testing.T) {
+	// Найдено на настоящей системе (раннер GitHub Actions).
+	py := &model.Process{PID: 1, PPID: 0, Name: "python3", Exe: "/usr/bin/python3.12", Args: []string{"python3", "agent.py"}}
+	child := &model.Process{PID: 2, PPID: 1, Name: "python3", Exe: "/usr/bin/python3.12", Args: []string{"python3", "-m", "worker"}}
+	udev := &model.Process{PID: 3, PPID: 0, Name: "systemd-udevd", Exe: "/usr/bin/udevadm", Args: []string{"/usr/lib/systemd/systemd-udevd"}}
+	pam := &model.Process{PID: 4, PPID: 0, Name: "(sd-pam)", Exe: "/usr/lib/systemd/systemd-executor", Args: []string{"(sd-pam)"}}
+	analyze(py, child, udev, pam)
+	for _, p := range []*model.Process{child, udev, pam} {
+		if p.Risk != model.RiskInfo {
+			t.Errorf("%s: %s %v", p.Name, p.Risk, ids(p))
+		}
+	}
+	// А вот оболочка от node — слабый признак остаётся.
+	node := &model.Process{PID: 5, PPID: 0, Name: "node", Exe: "/usr/bin/node", Args: []string{"node"}}
+	sh := &model.Process{PID: 6, PPID: 5, Name: "sh", Exe: "/usr/bin/dash", Args: []string{"sh", "-c", "npm run build"}}
+	analyze(node, sh)
+	if !slices.Contains(ids(sh), "web_spawns_shell") || sh.Risk != model.RiskLow {
+		t.Errorf("node → sh: %s %v", sh.Risk, ids(sh))
+	}
+}
+
 func TestMasquerade(t *testing.T) {
 	p := &model.Process{PID: 800, PPID: 1, Name: "sshd", Exe: "/var/lib/.cache/sshd", Args: []string{"sshd"}}
 	analyze(p)

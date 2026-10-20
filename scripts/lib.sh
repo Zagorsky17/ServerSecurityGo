@@ -5,7 +5,6 @@
 APP_NAME="serversecuritygo"
 APP_DIR="/opt/serversecuritygo"
 REPO_SLUG="Zagorsky17/ServerSecurityGo"
-REPO_URL="https://github.com/${REPO_SLUG}.git"
 UNIT_PATH="/etc/systemd/system/${APP_NAME}.service"
 BACKUP_DIR="/var/backups/${APP_NAME}"
 DATA_DIR="/var/lib/${APP_NAME}"
@@ -21,7 +20,9 @@ require_root() {
 }
 
 require_systemd() {
-  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || die "нужен systemd (Ubuntu/Debian)"
+  if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+    die "нужен systemd (Ubuntu/Debian)"
+  fi
 }
 
 # detect_arch печатает архитектуру в терминах Go (amd64/arm64).
@@ -117,7 +118,8 @@ health_check() {
 # и оставляет 5 последних архивов.
 backup_state() {
   install -d -m 0700 "$BACKUP_DIR"
-  local f="${BACKUP_DIR}/${APP_NAME}-$(date +%Y%m%d-%H%M%S).tar.gz"
+  local f
+  f="${BACKUP_DIR}/${APP_NAME}-$(date +%Y%m%d-%H%M%S).tar.gz"
   local items=()
   [ -d "$DATA_DIR" ] && items+=("$DATA_DIR")
   [ -f "${APP_DIR}/.env" ] && items+=("${APP_DIR}/.env")
@@ -125,7 +127,9 @@ backup_state() {
   if [ "${#items[@]}" -gt 0 ]; then
     tar -czf "$f" "${items[@]}" 2>/dev/null && chmod 600 "$f" && log "Резервная копия: $f"
   fi
-  ls -1t "${BACKUP_DIR}/${APP_NAME}-"*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+  # Имена архивов содержат дату, поэтому сортировка по имени = по времени.
+  find "$BACKUP_DIR" -maxdepth 1 -name "${APP_NAME}-*.tar.gz" -printf '%f\n' | sort -r | tail -n +6 \
+    | while read -r old; do rm -f -- "${BACKUP_DIR}/${old}"; done
 }
 
 # install_unit копирует systemd-юнит, если он изменился.

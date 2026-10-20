@@ -63,6 +63,10 @@ if [ -f bin/serversecuritygo.prev ]; then
   git -c advice.detachedHead=false checkout -q "$PREV_REF" || true
   install_unit
   systemctl restart "$APP_NAME"
-  health_check && warn "Предыдущая версия восстановлена" || warn "Предыдущая версия тоже не отвечает — смотрите scripts/logs.sh"
+  if health_check; then
+    warn "Предыдущая версия восстановлена"
+  else
+    warn "Предыдущая версия тоже не отвечает — смотрите scripts/logs.sh"
+  fi
 fi
 exit 1

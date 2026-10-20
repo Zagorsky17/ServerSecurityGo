@@ -1,0 +1,2 @@
+# Настройки shellcheck: lib.sh ищется рядом со скриптом.
+source-path=SCRIPTDIR

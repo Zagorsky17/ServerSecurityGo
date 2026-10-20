@@ -28,6 +28,10 @@ var systemDirs = []string{
 	"/usr/libexec/", "/usr/local/bin/", "/usr/local/sbin/", "/usr/local/lib/", "/snap/", "/usr/share/",
 }
 
+// distroDirs — каталоги, куда файлы попадают только из пакетов
+// дистрибутива (в отличие от /usr/local и /opt, куда ставят вручную).
+var distroDirs = []string{"/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/usr/lib/", "/lib/", "/usr/lib64/", "/lib64/", "/usr/libexec/"}
+
 // shells — командные оболочки.
 var shells = set("sh", "bash", "dash", "zsh", "ksh", "ash", "csh", "tcsh", "fish", "busybox", "mksh")
 
@@ -299,6 +303,12 @@ func ruleNameMismatch(p *model.Process, _ *Context) []model.Finding {
 	if skipUserRules(p) || p.Exe == "" || p.Name == "" || strings.HasPrefix(p.Exe, "/memfd:") {
 		return nil
 	}
+	// Программы из каталогов дистрибутива нередко штатно называются иначе
+	// (systemd-udevd → udevadm, (sd-pam) → systemd-executor). Маскировку
+	// под системные имена ловит отдельное правило system_name_masquerade.
+	if hasAnyPrefix(p.Exe, distroDirs) {
+		return nil
+	}
 	exeBase := filepath.Base(p.Exe)
 	if wrappers[exeBase] || isInterpreter(p) || shells[exeBase] || strings.HasPrefix(exeBase, "python") || strings.HasPrefix(exeBase, "java") {
 		return nil
@@ -379,6 +389,12 @@ func ruleWebShellChain(p *model.Process, c *Context) []model.Finding {
 	strong := webServers[pname] || webServers[progName(par)]
 	weak := weakWebServers[pname] || weakWebServers[progName(par)]
 	if !strong && !weak {
+		return nil
+	}
+	// Среды выполнения (python, node, java) постоянно запускают сами себя
+	// и другие интерпретаторы; для них учитываются только оболочки и
+	// сетевые утилиты.
+	if !strong && !(isShell(p) || networkTools[child] || networkTools[p.Name]) {
 		return nil
 	}
 	f := model.Finding{
