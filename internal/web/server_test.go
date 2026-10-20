@@ -13,7 +13,6 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
-	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 )
 
@@ -26,7 +25,7 @@ func newTestServer(t *testing.T, passwordHash string) *Server {
 	}
 	hist, _ := history.Open(history.Options{})
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	sc := scanner.New(scanner.Options{FS: procfs.New(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist, Logger: log})
+	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist, Logger: log})
 	if _, err := sc.ScanOnce(); err != nil {
 		t.Fatal(err)
 	}

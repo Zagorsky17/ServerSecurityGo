@@ -357,7 +357,7 @@ func cmdDemo(args []string) error {
 	det.CPUSustainScan = 3 // в демо признак длительной нагрузки появляется быстрее
 	hist, _ := history.Open(history.Options{CPUThreshold: cfg.CPUThreshold, MemThreshold: cfg.MemThreshold})
 	anim := fakeproc.NewAnimator(tree, procRoot)
-	sc := scanner.New(scanner.Options{FS: procfs.New(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
+	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
 		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true})
 	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (демо)", ListenAddr: cfg.ListenAddr, Demo: true})
 	log.Info("демо-режим: данные вымышленные", "dir", dir)

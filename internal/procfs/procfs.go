@@ -47,6 +47,10 @@ type FS struct {
 	// MaxFiles — сколько открытых файлов сохранять в Process.Files.
 	// Сокеты сопоставляются всегда, независимо от лимита.
 	MaxFiles int
+	// SkipExeStat отключает stat исполняемого файла. Нужно для поддельных
+	// деревьев (тесты, демо): там exe — обычный симлинк, и stat попал бы
+	// на настоящий файл хоста с тем же путём.
+	SkipExeStat bool
 }
 
 // New создаёт FS с разумными значениями по умолчанию.
@@ -220,7 +224,9 @@ func (f *FS) ReadProcess(pid int, bootTime time.Time) (*Raw, error) {
 	if !p.Kernel {
 		if target, err := os.Readlink(f.path(pidStr, "exe")); err == nil {
 			p.Exe, p.ExeDeleted = splitDeleted(target)
-			p.ExeInfo = f.statExe(pidStr)
+			if !f.SkipExeStat {
+				p.ExeInfo = f.statExe(pidStr)
+			}
 		} else if isPerm(err) {
 			p.Access = append(p.Access, "exe")
 		}

@@ -11,7 +11,6 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
-	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 )
 
 // newDemoScanner создаёт сканер над демонстрационным деревом.
@@ -25,7 +24,7 @@ func newDemoScanner(t *testing.T) (*Scanner, *fakeproc.Tree, string) {
 	hist, _ := history.Open(history.Options{CPUThreshold: 80, MemThreshold: 50})
 	cfg := detect.DefaultConfig()
 	cfg.CPUSustainScan = 2
-	sc := New(Options{FS: procfs.New(procRoot, hostRoot), Detect: cfg, History: hist, Interval: time.Second,
+	sc := New(Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: cfg, History: hist, Interval: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Hostname: "test"})
 	return sc, tree, procRoot
 }

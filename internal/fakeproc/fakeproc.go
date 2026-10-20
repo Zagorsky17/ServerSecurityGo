@@ -4,8 +4,10 @@
 // функциями, что и настоящий /proc, поэтому проверяется весь конвейер
 // (сбор → анализ → история → интерфейс) даже на macOS.
 //
-// Симлинки exe/cwd/fd указывают на несуществующие пути — это нормально:
-// procfs читает их через Readlink и не открывает цели.
+// Симлинки exe/cwd/fd указывают на пути из описания процесса — procfs
+// читает их через Readlink. Цели могут случайно существовать на машине,
+// где идут тесты, поэтому для поддельных деревьев в procfs.FS выставляется
+// SkipExeStat (см. NewFS).
 package fakeproc
 
 import (
@@ -15,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 )
 
 // Proc — описание поддельного процесса.
@@ -256,4 +260,11 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// NewFS создаёт procfs.FS для записанного поддельного дерева.
+func NewFS(procRoot, hostRoot string) *procfs.FS {
+	fs := procfs.New(procRoot, hostRoot)
+	fs.SkipExeStat = true
+	return fs
 }
