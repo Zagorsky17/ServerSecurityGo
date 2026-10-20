@@ -23,6 +23,7 @@ import (
 // Config — все настройки приложения.
 type Config struct {
 	ListenAddr       string
+	SocketPath       string // локальный Unix-сокет для терминального интерфейса; "" — выключен
 	ScanInterval     time.Duration
 	DataDir          string
 	ProcRoot         string
@@ -44,10 +45,15 @@ type Config struct {
 	LogLevel         string
 }
 
+// DefaultSocketPath — Unix-сокет службы. Каталог /run/serversecuritygo
+// создаёт systemd (RuntimeDirectory) с правами 0700.
+const DefaultSocketPath = "/run/serversecuritygo/api.sock"
+
 // Default возвращает значения по умолчанию.
 func Default() Config {
 	return Config{
 		ListenAddr:      "127.0.0.1:8090",
+		SocketPath:      DefaultSocketPath,
 		ScanInterval:    30 * time.Second,
 		DataDir:         "/var/lib/serversecuritygo",
 		ProcRoot:        "/proc",
@@ -138,6 +144,10 @@ func FromEnv() (Config, error) {
 		}
 	}
 	str("SSG_LISTEN_ADDR", &c.ListenAddr)
+	str("SSG_SOCKET_PATH", &c.SocketPath)
+	if strings.EqualFold(c.SocketPath, "off") {
+		c.SocketPath = ""
+	}
 	dur("SSG_SCAN_INTERVAL", &c.ScanInterval)
 	str("SSG_DATA_DIR", &c.DataDir)
 	str("SSG_PROC_ROOT", &c.ProcRoot)

@@ -11,7 +11,9 @@
 #   2. собирает бинарник, если установлен Go 1.24+, иначе скачивает готовый
 #      из GitHub Releases и проверяет SHA256;
 #   3. создаёт /opt/serversecuritygo/.env (права 600) из .env.example;
-#   4. ставит systemd-юнит, включает и запускает службу, проверяет /healthz.
+#   4. ставит systemd-юнит, включает и запускает службу, проверяет /healthz;
+#   5. создаёт ссылку /usr/local/bin/serversecuritygo для запуска
+#      терминального интерфейса одной командой.
 # Скрипт ничего не удаляет и не трогает другие проекты в /opt.
 set -euo pipefail
 
@@ -73,6 +75,7 @@ fi
 chmod 600 "$APP_DIR/.env"
 
 install_unit
+install_link
 systemctl enable --now "$APP_NAME" >/dev/null 2>&1 || systemctl enable --now "$APP_NAME"
 
 log "Проверка запуска…"
@@ -85,8 +88,8 @@ fi
 
 cat <<INFO
 
-Панель: http://$(listen_addr)/  (только с самого сервера)
-Открыть со своего компьютера через SSH-туннель:
+Терминальный интерфейс (на сервере):  serversecuritygo
+Веб-панель: http://$(listen_addr)/  (только с самого сервера), со своего компьютера через SSH-туннель:
   ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>   →   http://127.0.0.1:8090
 
 Разовая проверка в консоли:  $APP_DIR/bin/serversecuritygo scan --env-file $APP_DIR/.env

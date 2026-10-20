@@ -6,18 +6,20 @@
 [![Release](https://img.shields.io/github/v/release/Zagorsky17/ServerSecurityGo)](https://github.com/Zagorsky17/ServerSecurityGo/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for suspicious processes, signs of malware and unauthorized access. The scanner reads `/proc` and scores every process on a combination of verifiable indicators. It explains each score, keeps a history of changes and shows everything in a web dashboard. The dashboard UI is currently in Russian.
+Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for suspicious processes, signs of malware and unauthorized access. The scanner reads `/proc` and scores every process on a combination of verifiable indicators. It explains each score, keeps a history of changes and shows everything in a web dashboard. The interface texts are currently in Russian.
 
 **The application only observes.** It never kills processes, deletes files or blocks connections. All decisions stay with the administrator.
 
-- A single static binary with no dependencies: only the Go standard library, with the web UI embedded in the binary.
+- A lazygit-style terminal UI: on the server, just type `serversecuritygo`. The web dashboard over an SSH tunnel is optional.
+- A single static binary with no dependencies: only the Go standard library, with both interfaces embedded in the binary.
 - By default the dashboard is reachable only at `127.0.0.1:8090`.
 - Risk levels are `INFO`, `LOW`, `MEDIUM`, `HIGH` and `CRITICAL`. Every level comes with an explanation: which rules fired, with what weight and on which facts.
 
 ## Contents
 
 - [Installation from GitHub](#installation-from-github)
-- [Opening the dashboard](#opening-the-dashboard)
+- [Terminal UI](#terminal-ui)
+- [Web dashboard (optional)](#web-dashboard-optional)
 - [Features](#features)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
@@ -52,6 +54,7 @@ What the installer does:
 2. Builds the binary from source if Go 1.24+ is installed. Otherwise it downloads a prebuilt binary from [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) and verifies its SHA256. Go is not required on the server.
 3. Creates `/opt/serversecuritygo/.env` from `.env.example` with permissions `600`.
 4. Installs `serversecuritygo.service`, enables and starts it, then checks `/healthz`.
+5. Creates the link `/usr/local/bin/serversecuritygo`, so the interface opens with a single command.
 
 If `git` or `curl` is missing, the installer installs it with `apt-get`. It makes no other changes to the system and does not touch other directories in `/opt`.
 
@@ -66,6 +69,8 @@ Where things live:
 | Backups | `/var/backups/serversecuritygo` (mode 700) |
 | Logs | journald: `journalctl -u serversecuritygo` |
 | systemd unit | `/etc/systemd/system/serversecuritygo.service` |
+| Launch command | `/usr/local/bin/serversecuritygo` (link to the binary) |
+| Terminal UI socket | `/run/serversecuritygo/api.sock` (mode 600, root only; created when the service starts) |
 
 Manual installation without the script:
 
@@ -78,9 +83,61 @@ install -m 644 deploy/serversecuritygo.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now serversecuritygo
 ```
 
-## Opening the dashboard
+## Terminal UI
 
-The dashboard listens only on `127.0.0.1:8090`. To open it from your own computer, use an SSH tunnel:
+This is the main way to work. Connect to the server over SSH and type:
+
+```bash
+serversecuritygo
+```
+
+```
+╭ [1] Сводка ──────────────────────────────╮╭ PID 3202 · bash ─────────────────────────────────────╮
+│ web-01 · Ubuntu 24.04 LTS · 6.8.0-147    ││  CRITICAL   102 балл. · www-data · bash              │
+│ Скан 21:37:58 (56 мс) · каждые 30s · …   ││                                                      │
+│ CRIT 4  HIGH 1  MED 1  LOW 3             ││ Оценка риска                                         │
+╰──────────────────────────────────────────╯│   Итог CRITICAL: 102 балл(ов), признаков — 4, …      │
+╭ [2] Подозрительные (9) ──────────────────╮│ Признаки                                             │
+│CRITICAL  3202 www-data bash     /usr/bin…││   ● Ввод/вывод оболочки подключён к сетевому сокету  │
+│CRITICAL  3101 root     kworkerds /dev/sh…││       · /proc/3202/fd/0 → socket:[2002] tcp … 4444   │
+╰──────────────────────────────────────────╯│   ● Командная строка содержит конструкцию reverse …  │
+╭ [3] Процессы (47) · риск ────────────────╮│ Командная строка  (y — копировать)                   │
+╭ [4] Сеть (17) ───────────────────────────╮│   bash -i                                            │
+╭ [5] История (25) ────────────────────────╮│ Цепочка запуска                                      │
+╭ [6] Система (2) ─────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
+↑↓ выбор  1-6/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
+```
+
+On the left are six panels: summary, suspicious processes, all processes (as a list or a tree), network connections, history and system checks. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. The interface texts are in Russian.
+
+| Keys | Action |
+|---|---|
+| `1`…`6`, `Tab` / `Shift+Tab` | switch panel |
+| `↑` `↓` / `j` `k`, `PgUp` `PgDn`, `g` `G` | select a row; scroll in the details |
+| `Enter` / `→`, `Esc` / `←` | go to the details and back |
+| `/` | filter the panel by name, PID, path, user, indicator or risk level |
+| `s`, `t`, `K` | sort processes (risk, CPU, memory, PID, name), tree view, kernel threads |
+| `r`, `p` | scan now, pause auto-refresh |
+| `y`, `Y` | copy the command line or JSON to your computer's clipboard (OSC 52, works over SSH) |
+| `+` | expand the active side to full screen |
+| `?`, `q` | help, quit |
+
+The mouse works too: a click selects a panel and row, and the wheel scrolls.
+
+**Where the data comes from.** If the service is running, the interface connects to it through the Unix socket `/run/serversecuritygo/api.sock`. Only root can access the socket, so no password or tunnel is needed, and the full collected history is visible. If the service is not running, or an older version without the socket is installed, the interface scans processes itself, and the history then lasts only for the session. The source is shown in the Summary panel.
+
+```bash
+serversecuritygo tui --local            # always scan on its own
+serversecuritygo tui --refresh 2s       # refresh the screen more often
+```
+
+To see the processes of all users, run the interface as root. In service mode the service already collects the data.
+
+If copying with `y` does not work: OSC 52 is supported by iTerm2, kitty, WezTerm, Alacritty, Windows Terminal and modern xterm. In tmux, it needs `set -g set-clipboard on`.
+
+## Web dashboard (optional)
+
+The web dashboard shows the same data in a browser. It listens only on `127.0.0.1:8090`. To open it from your own computer, use an SSH tunnel:
 
 ```bash
 ssh -L 8090:127.0.0.1:8090 root@<server-IP>
@@ -109,7 +166,7 @@ If you connect with a dedicated key, add `-i ~/.ssh/<key> -o IdentitiesOnly=yes`
 
 System persistence checks cover `/etc/ld.so.preload`, cron (`/etc/crontab`, `/etc/cron.*`, `/var/spool/cron`), systemd units in `/etc/systemd/system`, `/etc/rc.local`, `/etc/init.d`, `/etc/profile.d`, `.bashrc`, `update-motd.d` and `authorized_keys`.
 
-**Web dashboard** (light and dark themes):
+The **terminal UI** is described [above](#terminal-ui). **Web dashboard** (light and dark themes):
 
 1. **Suspicious** — processes with indicators, sorted by risk. Each row shows the indicators, score, first and last seen time, and a recommendation.
 2. **All processes** — search, sorting by any column, filters by PID/PPID, user, name, path and minimum risk level.
@@ -179,9 +236,9 @@ This is a heuristic tool for initial triage, not an antivirus or an EDR.
 
 | Environment | What was verified |
 |---|---|
-| Ubuntu 24.04.4 LTS, kernel 6.8.0, x86_64, 1 vCPU / 2 GB, Docker (test VPS) | installation with the README command; the service running under systemd restrictions (exe, fd and sockets read for every process, no restrictions); the dashboard over an SSH tunnel; `update.sh`, `rollback.sh` and `logs.sh`; history persisting across restarts; password login; refusal to start on a network address without a password or TLS; detection of harmless simulations (kworker masquerade from `/tmp`, a binary deleted after start, bash with input from a TCP socket) |
+| Ubuntu 24.04.4 LTS, kernel 6.8.0, x86_64, 1 vCPU / 2 GB, Docker (test VPS) | installation with the README command; the service running under systemd restrictions (exe, fd and sockets read for every process, no restrictions); the dashboard over an SSH tunnel; `update.sh`, `rollback.sh` and `logs.sh`; history persisting across restarts; password login; refusal to start on a network address without a password or TLS; detection of harmless simulations (kworker masquerade from `/tmp`, a binary deleted after start, bash with input from a TCP socket); the terminal UI in tmux in both modes, its own scanning and connecting to the service through the socket (panels, tree, filter, details, help) |
 | GitHub Actions `ubuntu-latest` | all tests, the real `/proc` test as root, a one-off scan of the runner, shellcheck |
-| macOS | tests on a fake `/proc`, demo mode, the UI in Chrome |
+| macOS | tests on a fake `/proc`, demo mode, the web dashboard in Chrome |
 
 The application has not yet been run on Debian. It relies only on standard `/proc` and systemd interfaces, but Debian testing is still pending. Automatic rollback in `update.sh` when a new version fails to start has not been reproduced separately. Manual `rollback.sh` has been verified.
 
@@ -193,7 +250,8 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | dashboard address |
+| `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | web dashboard address |
+| `SSG_SOCKET_PATH` | `/run/serversecuritygo/api.sock` | terminal UI socket (`off` disables it) |
 | `SSG_SCAN_INTERVAL` | `30s` | scan period (minimum `2s`) |
 | `SSG_AUTH_PASSWORD_HASH` | — | password hash (`serversecuritygo hash-password`) |
 | `SSG_ALLOWED_HOSTS` | — | allowed host names for network access |
@@ -263,7 +321,7 @@ Backups are not deleted, even with `--purge`.
 
 ### Complete removal
 
-This removes the application as if it had never been on the server: the service and its traces in systemd, `/opt/serversecuritygo`, the history in `/var/lib/serversecuritygo` and the backups in `/var/backups/serversecuritygo`. This cannot be undone.
+This removes the application as if it had never been on the server: the service and its traces in systemd, the link `/usr/local/bin/serversecuritygo`, `/opt/serversecuritygo`, the history in `/var/lib/serversecuritygo` and the backups in `/var/backups/serversecuritygo`. This cannot be undone.
 
 ```bash
 /opt/serversecuritygo/scripts/uninstall.sh --full -y
@@ -275,7 +333,8 @@ If `/opt/serversecuritygo` has already been deleted or damaged, a single command
 systemctl disable --now serversecuritygo 2>/dev/null; \
 rm -rf /etc/systemd/system/serversecuritygo.service /etc/systemd/system/serversecuritygo.service.d; \
 systemctl daemon-reload; systemctl reset-failed serversecuritygo 2>/dev/null; \
-rm -rf /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo
+[ -L /usr/local/bin/serversecuritygo ] && rm -f /usr/local/bin/serversecuritygo; \
+rm -rf /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo /run/serversecuritygo
 ```
 
 What the command leaves alone, and why:
@@ -287,7 +346,7 @@ To confirm that nothing is left:
 
 ```bash
 systemctl status serversecuritygo        # Unit serversecuritygo.service could not be found.
-ls -d /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo   # No such file or directory
+ls -d /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo /usr/local/bin/serversecuritygo   # No such file or directory
 ```
 
 Service status: `systemctl status serversecuritygo`.
@@ -302,10 +361,11 @@ A one-off scan that does not touch the service history:
 /opt/serversecuritygo/bin/serversecuritygo scan --format json --min-risk INFO > scan.json
 ```
 
-Demo mode with fictional data runs on any OS, including macOS:
+Demo mode with fictional data runs on Linux and macOS:
 
 ```bash
-go run ./cmd/serversecuritygo demo      # http://127.0.0.1:8090
+go run ./cmd/serversecuritygo demo --tui   # in the terminal
+go run ./cmd/serversecuritygo demo         # in the browser: http://127.0.0.1:8090
 ```
 
 ## Building and testing
@@ -324,14 +384,16 @@ Tests use a fake `/proc` tree (`internal/fakeproc`), so they pass on any OS. On 
 ## Project layout
 
 ```
-cmd/serversecuritygo/     entry point: serve, scan, demo, hash-password, version
+cmd/serversecuritygo/     entry point: tui (default), serve, scan, demo, hash-password, version
 internal/
   procfs/                 reading /proc: stat, status, cmdline, exe, fd, ns, cgroup, net
   detect/                 rules, risk scoring, explanations, allowlist, system checks
   redact/                 masking secrets in command lines
   history/                process history and event log (state.json, events.jsonl)
   scanner/                periodic scanning: collect → analyze → history
-  web/                    HTTP server, authentication, API; static/ holds the embedded UI
+  web/                    HTTP server, authentication, API; static/ holds the embedded web dashboard
+  tui/                    terminal UI (no external libraries: termios, ANSI, mouse)
+  view/                   data views shared by the web dashboard and the terminal UI
   config/                 settings from environment variables
   fakeproc/               fake /proc for tests and demo data
   model/                  shared data structures
@@ -347,7 +409,8 @@ API (JSON, for automation): `GET /api/status`, `/api/processes`, `/api/process/{
 ## Security
 
 - Read-only: the code contains no kill calls, file deletion or network rule changes.
-- By default the dashboard listens only on `127.0.0.1`. A network address will not start without a password, `SSG_ALLOWED_HOSTS` and HTTPS.
+- The terminal UI gets its data through a Unix socket with mode `600` in a `700` directory. The file permissions are the authorization, so only root can connect. Control characters from process names and command lines are never written to the terminal, so a process name cannot execute an escape sequence in your terminal.
+- By default the web dashboard listens only on `127.0.0.1`. A network address will not start without a password, `SSG_ALLOWED_HOSTS` and HTTPS.
 - A `Host` header check protects against DNS rebinding, a CSRF token protects every POST request, and CSP forbids inline scripts. Process names and command lines are rendered as text only, so an attacker cannot inject HTML through the name of their process.
 - Secrets in command lines are masked **before** analysis, storage and output: `--password=…`, mysql `-pPASSWORD`, `user:pass@` in URLs, `*_TOKEN=…`, AWS and GitHub keys, JWTs, Telegram tokens. Environment variable values never reach the history. Passwords, cookies and command lines are never written to the log.
 - The service runs as root, because otherwise other users' processes are invisible, but with reduced capabilities: `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`. The filesystem is read-only for the service except `/var/lib/serversecuritygo`, and it runs with `NoNewPrivileges`, a system call filter, and the limits `MemoryMax=256M` and `CPUQuota=50%`.

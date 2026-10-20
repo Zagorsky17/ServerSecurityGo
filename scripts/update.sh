@@ -50,6 +50,7 @@ mv -f bin/serversecuritygo.new bin/serversecuritygo
 [ -f .env ] && chmod 600 .env
 
 install_unit
+install_link
 systemctl restart "$APP_NAME"
 if health_check; then
   log "Обновлено: $(bin/serversecuritygo version)"

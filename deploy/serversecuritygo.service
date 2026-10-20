@@ -26,6 +26,11 @@ StandardError=journal
 # Каталог данных /var/lib/serversecuritygo создаётся systemd с правами 700.
 StateDirectory=serversecuritygo
 StateDirectoryMode=0700
+# /run/serversecuritygo (0700) — для Unix-сокета api.sock, через который
+# терминальный интерфейс (команда serversecuritygo) получает данные службы.
+# Каталог удаляется systemd при остановке службы.
+RuntimeDirectory=serversecuritygo
+RuntimeDirectoryMode=0700
 
 # --- Ограничения ---
 # CAP_SYS_PTRACE — readlink /proc/PID/exe и чтение fd/environ чужих процессов;
