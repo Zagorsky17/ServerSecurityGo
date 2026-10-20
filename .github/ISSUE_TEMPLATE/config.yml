@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "🔒 Security vulnerability / Уязвимость"
+    url: https://github.com/Zagorsky17/ServerSecurityGo/security/advisories/new
+    about: "Please report vulnerabilities privately, not in public issues. / Пожалуйста, сообщайте об уязвимостях закрыто, а не в публичных issue."
+  - name: "📖 Documentation / Документация"
+    url: https://github.com/Zagorsky17/ServerSecurityGo#readme
+    about: "Installation, configuration and detection limitations. / Установка, настройка и ограничения обнаружения."

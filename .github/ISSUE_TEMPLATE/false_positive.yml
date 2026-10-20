@@ -1,0 +1,59 @@
+name: "🎯 False positive / missed detection — Ложное срабатывание или пропуск"
+description: "A legitimate process got a high risk, or a suspicious one was not flagged. / Легитимный процесс получил высокий риск или подозрительный не был отмечен."
+labels: ["detection"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you! Reports like this directly improve detection quality.
+        Спасибо! Такие сообщения напрямую улучшают качество обнаружения.
+
+        Please review the data before posting and remove anything you consider private (host names, IP addresses, paths, user names). Secrets in command lines are masked automatically, but please check anyway.
+        Пожалуйста, просмотрите данные перед публикацией и удалите всё, что считаете конфиденциальным (имена хостов, IP-адреса, пути, имена пользователей). Секреты в командных строках маскируются автоматически, но, пожалуйста, всё равно проверьте.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: "Type / Тип"
+      options:
+        - "False positive (legitimate process flagged) / Ложное срабатывание (отмечен легитимный процесс)"
+        - "Missed detection (suspicious process not flagged) / Пропуск (подозрительный процесс не отмечен)"
+        - "Wrong risk level / Неверный уровень риска"
+    validations:
+      required: true
+  - type: input
+    id: program
+    attributes:
+      label: "Program / Программа"
+      description: "What is this process and where does it come from? / Что это за процесс и откуда он?"
+      placeholder: "e.g. GitLab Runner from the official package / например, GitLab Runner из официального пакета"
+    validations:
+      required: true
+  - type: input
+    id: rules
+    attributes:
+      label: "Rule IDs and level / Идентификаторы правил и уровень"
+      placeholder: "exe_in_temp, root_from_writable → MEDIUM"
+  - type: textarea
+    id: card
+    attributes:
+      label: "Process card JSON / JSON карточки процесса"
+      description: |
+        The "Копировать JSON" button in the process card, or the relevant part of `serversecuritygo scan --format json --min-risk INFO`.
+        Кнопка «Копировать JSON» в карточке процесса или нужная часть вывода `serversecuritygo scan --format json --min-risk INFO`.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "What would be correct? / Как было бы правильно?"
+      description: "Expected level and why. / Ожидаемый уровень и почему."
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: "Version, OS, kernel / Версия, ОС, ядро"
+      placeholder: "v0.1.1, Ubuntu 24.04.4, 6.8.0-147-generic"
+    validations:
+      required: true

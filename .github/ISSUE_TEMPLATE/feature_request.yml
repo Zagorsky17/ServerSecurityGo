@@ -1,0 +1,34 @@
+name: "💡 Feature request / Предложение"
+description: "A new detection rule, data source or improvement. / Новое правило обнаружения, источник данных или улучшение."
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the idea! Please describe the problem first — this helps us find the best solution together.
+        Спасибо за идею! Пожалуйста, сначала опишите задачу — так нам будет проще вместе найти лучшее решение.
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem / Задача"
+      description: "What would you like to detect or do, and why? / Что вы хотели бы обнаруживать или делать и зачем?"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Proposed solution / Предлагаемое решение"
+      description: "For a detection rule: which verifiable facts would it rely on, and which legitimate cases could trigger it? / Для правила обнаружения: на какие проверяемые факты оно опирается и какие легитимные случаи могут его вызвать?"
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives / Альтернативы"
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: "Project principles / Принципы проекта"
+      description: "The application only observes and uses the Go standard library only. / Приложение только наблюдает и использует только стандартную библиотеку Go."
+      options:
+        - label: "The proposal does not require killing processes, deleting files or blocking connections. / Предложение не требует завершать процессы, удалять файлы или блокировать соединения."
+          required: true
+        - label: "I would like to implement it myself. / Я хотел(а) бы реализовать это сам(а)."
