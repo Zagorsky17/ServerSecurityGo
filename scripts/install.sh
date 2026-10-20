@@ -93,6 +93,6 @@ cat <<INFO
 Журнал:      $APP_DIR/scripts/logs.sh
 Обновление:  $APP_DIR/scripts/update.sh
 Откат:       $APP_DIR/scripts/rollback.sh
-Удаление:    $APP_DIR/scripts/uninstall.sh
+Удаление:    $APP_DIR/scripts/uninstall.sh  (полная очистка: --full)
 Настройки:   $APP_DIR/.env (после правки: systemctl restart $APP_NAME)
 INFO
