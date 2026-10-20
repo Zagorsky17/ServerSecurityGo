@@ -502,6 +502,12 @@ func DetectContainer(cgroup string) (runtime, id string) {
 			continue
 		}
 		id = findContainerID(path)
+		// Сами службы docker.service/containerd.service тоже лежат в cgroup
+		// со словом docker/containerd, но контейнерами не являются. Для
+		// этих сред контейнер признаётся только при наличии идентификатора.
+		if id == "" && runtime != "kubernetes" && runtime != "lxc" {
+			continue
+		}
 		return runtime, id
 	}
 	return "", ""
