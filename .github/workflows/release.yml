@@ -1,0 +1,28 @@
+# Релиз по тегу v*: тесты, сборка linux/amd64 и linux/arm64, SHA256SUMS,
+# публикация в GitHub Releases. Эти файлы скачивают install.sh и update.sh.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+      - run: make build-linux VERSION=${GITHUB_REF_NAME}
+      - name: Публикация
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/serversecuritygo-linux-amd64 dist/serversecuritygo-linux-arm64 dist/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" --generate-notes

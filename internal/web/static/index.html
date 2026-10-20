@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerSecurityGo</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">◉</span>
+    <div>
+      <h1>ServerSecurityGo</h1>
+      <div class="host" id="hostline">Загрузка…</div>
+    </div>
+  </div>
+  <div class="controls">
+    <span id="scaninfo" class="muted"></span>
+    <label class="inline">Автообновление
+      <select id="refresh">
+        <option value="0">выкл.</option>
+        <option value="5">5 с</option>
+        <option value="10" selected>10 с</option>
+        <option value="30">30 с</option>
+        <option value="60">60 с</option>
+      </select>
+    </label>
+    <button id="btn-rescan" type="button">Пересканировать</button>
+    <button id="btn-logout" type="button" class="secondary hidden">Выйти</button>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<section class="summary" id="summary"></section>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="suspicious" class="active">Подозрительные <span class="badge" id="cnt-suspicious">0</span></button>
+  <button role="tab" data-tab="all">Все процессы <span class="badge" id="cnt-all">0</span></button>
+  <button role="tab" data-tab="tree">Дерево</button>
+  <button role="tab" data-tab="net">Сеть <span class="badge" id="cnt-net">0</span></button>
+  <button role="tab" data-tab="history">История</button>
+  <button role="tab" data-tab="system">Система <span class="badge" id="cnt-system">0</span></button>
+</nav>
+
+<main>
+  <!-- Фильтры процессов: общие для вкладок «Подозрительные» и «Все процессы». -->
+  <form class="filters" id="proc-filters" autocomplete="off">
+    <input type="search" id="f-q" placeholder="Поиск по всему (имя, путь, команда, признаки)">
+    <input type="text" id="f-pid" placeholder="PID / PPID" inputmode="numeric">
+    <input type="text" id="f-user" placeholder="Пользователь">
+    <input type="text" id="f-name" placeholder="Имя">
+    <input type="text" id="f-path" placeholder="Путь exe">
+    <select id="f-risk" title="Минимальный уровень риска">
+      <option value="">Любой риск</option>
+      <option value="LOW">LOW и выше</option>
+      <option value="MEDIUM">MEDIUM и выше</option>
+      <option value="HIGH">HIGH и выше</option>
+      <option value="CRITICAL">Только CRITICAL</option>
+    </select>
+    <label class="inline"><input type="checkbox" id="f-kernel"> потоки ядра</label>
+    <button type="reset" class="secondary">Сбросить</button>
+  </form>
+
+  <section id="tab-suspicious" class="tab active">
+    <p class="hint">Процессы с хотя бы одним признаком, по убыванию риска. Уровень — оценка по совокупности проверяемых признаков, а не доказательство заражения. Нажмите на строку, чтобы открыть карточку.</p>
+    <div class="table-wrap"><table id="t-suspicious"></table></div>
+  </section>
+
+  <section id="tab-all" class="tab">
+    <div class="table-wrap"><table id="t-all"></table></div>
+  </section>
+
+  <section id="tab-tree" class="tab">
+    <div class="toolbar">
+      <input type="search" id="tree-q" placeholder="Подсветить: имя, PID, путь">
+      <button type="button" id="tree-expand" class="secondary">Развернуть всё</button>
+      <button type="button" id="tree-collapse" class="secondary">Свернуть всё</button>
+      <label class="inline"><input type="checkbox" id="tree-kernel"> потоки ядра</label>
+    </div>
+    <div id="tree" class="tree"></div>
+  </section>
+
+  <section id="tab-net" class="tab">
+    <form class="filters" id="net-filters" autocomplete="off">
+      <input type="search" id="n-q" placeholder="Адрес, порт, процесс">
+      <select id="n-proto"><option value="">Все протоколы</option><option>tcp</option><option>tcp6</option><option>udp</option><option>udp6</option></select>
+      <select id="n-state"><option value="">Все состояния</option><option>LISTEN</option><option>ESTABLISHED</option><option>UNCONN</option><option>TIME_WAIT</option><option>CLOSE_WAIT</option><option>SYN_SENT</option></select>
+      <label class="inline"><input type="checkbox" id="n-external"> только внешние адреса</label>
+      <button type="reset" class="secondary">Сбросить</button>
+    </form>
+    <div class="table-wrap"><table id="t-net"></table></div>
+  </section>
+
+  <section id="tab-history" class="tab">
+    <form class="filters" id="hist-filters" autocomplete="off">
+      <input type="search" id="h-q" placeholder="PID, имя, подробности">
+      <select id="h-type">
+        <option value="">Все события</option>
+        <option value="started">Запуск</option>
+        <option value="exited">Завершение</option>
+        <option value="changed">Изменение</option>
+        <option value="risk_up">Рост риска</option>
+        <option value="risk_down">Снижение риска</option>
+        <option value="finding">Новый признак</option>
+        <option value="listen">Новый порт</option>
+        <option value="system">Система</option>
+        <option value="baseline">Начало наблюдения</option>
+      </select>
+      <select id="h-risk"><option value="">Любой риск</option><option value="LOW">LOW и выше</option><option value="MEDIUM">MEDIUM и выше</option><option value="HIGH">HIGH и выше</option></select>
+      <button type="reset" class="secondary">Сбросить</button>
+    </form>
+    <div class="table-wrap"><table id="t-history"></table></div>
+  </section>
+
+  <section id="tab-system" class="tab">
+    <div class="grid2">
+      <div class="card"><h3>Сервер</h3><dl id="sys-host" class="kv"></dl></div>
+      <div class="card"><h3>Условия сканирования</h3><ul id="sys-warn" class="plain"></ul></div>
+    </div>
+    <h3>Проверки закрепления</h3>
+    <p class="hint">cron, systemd, rc.local, профили shell, /etc/ld.so.preload, authorized_keys. Только чтение; ключи SSH и секреты не показываются.</p>
+    <div class="table-wrap"><table id="t-system"></table></div>
+  </section>
+</main>
+
+<!-- Карточка процесса -->
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="m-title">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2 id="m-title"></h2>
+      <div class="modal-actions">
+        <button type="button" id="m-copy-json" class="secondary">Копировать JSON</button>
+        <button type="button" id="m-close" class="secondary" aria-label="Закрыть">✕</button>
+      </div>
+    </div>
+    <div id="m-body" class="modal-body"></div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+</body>
+</html>

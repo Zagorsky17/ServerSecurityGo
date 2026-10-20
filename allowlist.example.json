@@ -1,0 +1,17 @@
+{
+  "_comment": "Пример исключений. Скопируйте в /opt/serversecuritygo/allowlist.json и отредактируйте. Поле exe и name поддерживают шаблоны (*, ?). Пустой список rules — подавить все признаки процесса (используйте осторожно). Правило без exe, name и user игнорируется. Идентификаторы правил видны в JSON карточки процесса (поле findings[].id).",
+  "rules": [
+    {
+      "exe": "/tmp/go-build*/exe/*",
+      "user": "deploy",
+      "rules": ["exe_in_temp", "root_from_writable"],
+      "comment": "go run собирает бинарники во временном каталоге"
+    },
+    {
+      "name": "xmrig",
+      "exe": "/opt/mining/xmrig",
+      "rules": ["miner_name", "miner_pattern", "pool_port", "cpu_sustained"],
+      "comment": "согласованный майнинг на тестовом стенде"
+    }
+  ]
+}

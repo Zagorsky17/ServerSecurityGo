@@ -1,0 +1,40 @@
+# Проверки на каждый push и pull request: форматирование, vet, тесты
+# (на ubuntu выполняется и тест на настоящем /proc), shellcheck скриптов,
+# кросс-сборка.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt и vet
+        run: make vet
+      - name: Тесты
+        run: go test -race -v ./...
+      - name: Тест настоящего /proc от root
+        # Тестовый бинарник собираем от пользователя (чтобы не испортить
+        # права на кеш сборки), а запускаем от root.
+        run: |
+          go test -c -o /tmp/procfs.test ./internal/procfs
+          sudo /tmp/procfs.test -test.v -test.run TestRealProc
+      - name: Разовое сканирование настоящей системы
+        run: |
+          go build -o /tmp/ssg ./cmd/serversecuritygo
+          sudo /tmp/ssg scan --min-risk INFO | head -40
+          sudo /tmp/ssg scan --format json --min-risk INFO > /tmp/scan.json
+          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
+      - name: Кросс-сборка
+        run: make build-linux
+      - name: shellcheck
+        run: shellcheck -x scripts/*.sh
