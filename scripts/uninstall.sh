@@ -6,7 +6,8 @@
 #                                                        # (перед удалением делается резервная копия)
 #   /opt/serversecuritygo/scripts/uninstall.sh --full   # полная очистка, как будто приложения не было:
 #                                                        # служба, /opt/serversecuritygo, история,
-#                                                        # резервные копии, следы в systemd
+#                                                        # резервные копии, следы в systemd,
+#                                                        # ссылка /usr/local/bin/serversecuritygo
 #   добавьте -y, чтобы не спрашивать подтверждение
 #
 # Что не трогается никогда:
@@ -60,12 +61,14 @@ case "$MODE" in
     ;;
   purge)
     cd /
+    remove_link
     rm -rf -- "$DATA_DIR" "$APP_DIR"
     log "Удалены ${APP_DIR} и ${DATA_DIR}. Резервные копии остались в ${BACKUP_DIR}"
     ;;
   full)
     cd /
-    rm -rf -- "$DATA_DIR" "$APP_DIR" "$BACKUP_DIR"
+    remove_link
+    rm -rf -- "$DATA_DIR" "$APP_DIR" "$BACKUP_DIR" /run/serversecuritygo
     log "Удалены ${APP_DIR}, ${DATA_DIR}, ${BACKUP_DIR}. Следов приложения на сервере не осталось"
     log "(пакеты git/curl и записи journald не трогались — см. комментарий в начале скрипта)"
     ;;

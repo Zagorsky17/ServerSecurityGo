@@ -6,6 +6,8 @@ APP_NAME="serversecuritygo"
 APP_DIR="/opt/serversecuritygo"
 REPO_SLUG="Zagorsky17/ServerSecurityGo"
 UNIT_PATH="/etc/systemd/system/${APP_NAME}.service"
+# Ссылка для запуска командой serversecuritygo из любого каталога.
+LINK_PATH="/usr/local/bin/${APP_NAME}"
 BACKUP_DIR="/var/backups/${APP_NAME}"
 DATA_DIR="/var/lib/${APP_NAME}"
 # Минимальная версия Go для сборки из исходников (см. go.mod).
@@ -138,5 +140,23 @@ install_unit() {
     install -m 0644 "${APP_DIR}/deploy/${APP_NAME}.service" "$UNIT_PATH"
     systemctl daemon-reload
     log "systemd-юнит обновлён"
+  fi
+}
+
+# install_link создаёт /usr/local/bin/serversecuritygo → бинарник в
+# /opt/serversecuritygo, чтобы терминальный интерфейс открывался одной
+# командой. Чужой файл с тем же именем не перезаписывается.
+install_link() {
+  if [ -e "$LINK_PATH" ] && [ ! -L "$LINK_PATH" ]; then
+    warn "$LINK_PATH уже существует и это не ссылка — пропускаю; запускайте ${APP_DIR}/bin/${APP_NAME}"
+    return 0
+  fi
+  ln -sfn "${APP_DIR}/bin/${APP_NAME}" "$LINK_PATH"
+}
+
+# remove_link удаляет ссылку, только если она указывает на наш бинарник.
+remove_link() {
+  if [ -L "$LINK_PATH" ] && [ "$(readlink "$LINK_PATH")" = "${APP_DIR}/bin/${APP_NAME}" ]; then
+    rm -f "$LINK_PATH"
   fi
 }

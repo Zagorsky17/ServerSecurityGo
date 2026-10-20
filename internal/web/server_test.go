@@ -14,6 +14,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
 
 func newTestServer(t *testing.T, passwordHash string) *Server {
@@ -54,7 +55,7 @@ func TestNoAuthAPI(t *testing.T) {
 		t.Fatalf("код %d: %s", w.Code, w.Body)
 	}
 	var resp struct {
-		Processes []procSummary `json:"processes"`
+		Processes []view.Summary `json:"processes"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || len(resp.Processes) == 0 {
 		t.Fatalf("ответ: %v", err)
