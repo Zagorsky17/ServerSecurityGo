@@ -214,7 +214,7 @@ ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>
 | Недавно изменён `authorized_keys` | недавнее изменение ключей SSH | LOW (системная) |
 
 Полный список правил с идентификаторами для allowlist:
-`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. Системные проверки: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`.
+`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. Системные проверки: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`.
 
 ## Ограничения обнаружения
 

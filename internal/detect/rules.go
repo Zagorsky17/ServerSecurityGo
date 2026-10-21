@@ -366,6 +366,24 @@ func ruleEmptyCmdline(p *model.Process, _ *Context) []model.Finding {
 	})
 }
 
+// ruleCmdlineTruncated: командная строка длиннее лимита сканера. Так
+// бывает у Java с длинным classpath, но огромная строка — и способ
+// спрятать команду за мусором или перегрузить мониторинг.
+func ruleCmdlineTruncated(p *model.Process, _ *Context) []model.Finding {
+	if !p.CmdlineTruncated {
+		return nil
+	}
+	w := 8
+	if progName(p) == "java" {
+		w = 2 // длинный classpath — обычное дело
+	}
+	return one(model.Finding{
+		ID: "cmdline_truncated", Title: "Очень длинная командная строка (прочитана не полностью)", Category: model.CatMasquerade, Weight: w,
+		Evidence:       []string{fmt.Sprintf("прочитано %d байт, остальное правила не проверяли", len(p.Cmdline))},
+		Recommendation: fmt.Sprintf("Посмотрите полную строку: tr '\\0' ' ' < /proc/%d/cmdline | less. Команду могли спрятать в конце, за длинным заполнением.", p.PID),
+	})
+}
+
 // ---------------------------------------------------------------------
 // Цепочки запуска
 // ---------------------------------------------------------------------

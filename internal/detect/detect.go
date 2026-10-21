@@ -76,6 +76,7 @@ var Rules = []Rule{
 	ruleNameMismatch,
 	ruleUnusualName,
 	ruleEmptyCmdline,
+	ruleCmdlineTruncated,
 	ruleWebShellChain,
 	ruleSchedulerChain,
 	ruleStdioSocket,

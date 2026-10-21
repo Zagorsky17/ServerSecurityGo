@@ -17,9 +17,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +46,9 @@ var ErrGone = errors.New("процесс завершился")
 type FS struct {
 	Root     string // обычно "/proc"
 	HostRoot string // обычно "/"; используется для /etc/passwd
+	// MaxCmdline — сколько байт /proc/PID/cmdline читать (лимит по
+	// умолчанию для ReadProcess).
+	MaxCmdline int
 	// MaxFiles — сколько открытых файлов сохранять в Process.Files.
 	// Сокеты сопоставляются всегда, независимо от лимита.
 	MaxFiles int
@@ -61,7 +66,7 @@ func New(root, hostRoot string) *FS {
 	if hostRoot == "" {
 		hostRoot = "/"
 	}
-	return &FS{Root: root, HostRoot: hostRoot, MaxFiles: 200}
+	return &FS{Root: root, HostRoot: hostRoot, MaxCmdline: DefaultMaxCmdline, MaxFiles: 200}
 }
 
 func (f *FS) path(parts ...string) string {
@@ -159,9 +164,37 @@ type Raw struct {
 	RawArgs []string
 }
 
+// Ограничения объёма данных одного процесса. Содержимое /proc/PID/*
+// задаёт сам процесс: без лимитов несколько процессов с командной строкой
+// в мегабайты (ARG_MAX — четверть лимита стека, пользователь его
+// поднимает) или с сотнями длинных путей в fd исчерпывали память службы
+// (MemoryMax) и роняли её при каждом сканировании.
+const (
+	// DefaultMaxCmdline — лимит командной строки (32 КБ хватает даже для
+	// длинных classpath Java; обрезка отмечается признаком cmdline_truncated).
+	DefaultMaxCmdline = 32 << 10
+	// MaxFDTarget — максимальная длина пути открытого файла в Files.
+	MaxFDTarget = 1024
+)
+
+// Limits — лимиты для одного вызова ReadProcessLimits.
+type Limits struct {
+	Cmdline int // байт cmdline; 0 — DefaultMaxCmdline
+	Files   int // записей в Process.Files
+}
+
 // ReadProcess собирает сведения о процессе pid. bootTime нужен для
 // вычисления абсолютного времени старта.
 func (f *FS) ReadProcess(pid int, bootTime time.Time) (*Raw, error) {
+	return f.ReadProcessLimits(pid, bootTime, Limits{Cmdline: f.MaxCmdline, Files: f.MaxFiles})
+}
+
+// ReadProcessLimits — ReadProcess с явными лимитами: сканер уменьшает
+// их, когда общий бюджет сканирования на исходе.
+func (f *FS) ReadProcessLimits(pid int, bootTime time.Time, lim Limits) (*Raw, error) {
+	if lim.Cmdline <= 0 {
+		lim.Cmdline = DefaultMaxCmdline
+	}
 	p := &model.Process{PID: pid}
 	raw := &Raw{Proc: p, SocketInodes: map[uint64][]int{}}
 	pidStr := strconv.Itoa(pid)
@@ -214,8 +247,10 @@ func (f *FS) ReadProcess(pid int, bootTime time.Time) (*Raw, error) {
 	}
 
 	// cmdline: аргументы разделены NUL. У потоков ядра пусто.
-	if data, err := os.ReadFile(f.path(pidStr, "cmdline")); err == nil {
+	if data, truncated, err := readLimited(f.path(pidStr, "cmdline"), lim.Cmdline); err == nil {
 		raw.RawArgs = ParseCmdline(data)
+		p.CmdlineTruncated = truncated
+		clear(data)
 	} else if isPerm(err) {
 		p.Access = append(p.Access, "cmdline")
 	}
@@ -235,7 +270,7 @@ func (f *FS) ReadProcess(pid int, bootTime time.Time) (*Raw, error) {
 		} else if isPerm(err) {
 			p.Access = append(p.Access, "cwd")
 		}
-		f.readFDs(pidStr, raw)
+		f.readFDs(pidStr, raw, lim.Files)
 		p.EnvFlags = f.readEnvFlags(pidStr, p)
 	}
 
@@ -270,7 +305,7 @@ func (f *FS) statExe(pidStr string) *model.FileInfo {
 
 // readFDs перечисляет /proc/PID/fd, сохраняет первые MaxFiles записей и
 // все inode сокетов.
-func (f *FS) readFDs(pidStr string, raw *Raw) {
+func (f *FS) readFDs(pidStr string, raw *Raw, maxFiles int) {
 	p := raw.Proc
 	dir := f.path(pidStr, "fd")
 	entries, err := os.ReadDir(dir)
@@ -299,7 +334,10 @@ func (f *FS) readFDs(pidStr string, raw *Raw) {
 				raw.SocketInodes[inode] = append(raw.SocketInodes[inode], fd)
 			}
 		}
-		if len(p.Files) < f.MaxFiles {
+		if len(p.Files) < maxFiles {
+			if len(target) > MaxFDTarget {
+				target = target[:MaxFDTarget] + "…"
+			}
 			p.Files = append(p.Files, model.OpenFile{FD: fd, Target: target, Kind: kind})
 		}
 	}
@@ -310,26 +348,70 @@ func (f *FS) readFDs(pidStr string, raw *Raw) {
 var dangerousEnv = []string{"LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"}
 
 // readEnvFlags возвращает имена опасных переменных, заданных у процесса
-// (с непустым значением). Сам буфер окружения затирается после проверки.
+// (с непустым значением). Окружение читается потоком через небольшой
+// буфер: от каждой записи хранится только начало (имя и первый байт
+// значения), поэтому память не зависит от размера окружения, а сами
+// значения не задерживаются в памяти — буферы затираются.
 func (f *FS) readEnvFlags(pidStr string, p *model.Process) []string {
-	data, err := os.ReadFile(f.path(pidStr, "environ"))
+	file, err := os.Open(f.path(pidStr, "environ"))
 	if err != nil {
 		if isPerm(err) {
 			p.Access = append(p.Access, "environ")
 		}
 		return nil
 	}
-	defer clear(data)
+	defer file.Close()
+	buf := make([]byte, 4096)
+	head := make([]byte, 0, 32) // длиннее самого длинного «ИМЯ=» + 1 байт
+	defer clear(buf)
+	defer clear(head[:cap(head)])
 	var flags []string
-	for entry := range bytes.SplitSeq(data, []byte{0}) {
+	check := func() {
 		for _, name := range dangerousEnv {
 			prefix := name + "="
-			if len(entry) > len(prefix) && string(entry[:len(prefix)]) == prefix {
+			if len(head) > len(prefix) && string(head[:len(prefix)]) == prefix && !slices.Contains(flags, name) {
 				flags = append(flags, name)
 			}
 		}
+		head = head[:0]
 	}
+	for {
+		n, err := file.Read(buf)
+		for _, b := range buf[:n] {
+			if b == 0 {
+				check()
+			} else if len(head) < cap(head) {
+				head = append(head, b)
+			}
+		}
+		if err != nil {
+			// Ядро проверяет права и при чтении, а не только при открытии.
+			if isPerm(err) {
+				p.Access = append(p.Access, "environ")
+			}
+			break
+		}
+	}
+	check() // последняя запись без завершающего NUL
 	return flags
+}
+
+// readLimited читает не больше max байт и сообщает, был ли файл длиннее.
+func readLimited(path string, max int) ([]byte, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, int64(max)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) > max {
+		clear(data[max:])
+		return data[:max], true, nil
+	}
+	return data, false, nil
 }
 
 var nsNames = []string{"pid", "net", "mnt", "user", "uts", "ipc", "cgroup"}

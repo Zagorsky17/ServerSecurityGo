@@ -135,3 +135,47 @@ func TestHistoryAcrossScans(t *testing.T) {
 		t.Errorf("майнер: CPU %.0f%%, cpu_sustained=%v", miner.CPUPercent, found)
 	}
 }
+
+// TestScanBudget: тысячи процессов с длинными командными строками не
+// раздувают снимок — после общего бюджета строки читаются по минимуму и
+// получают признак cmdline_truncated.
+func TestScanBudget(t *testing.T) {
+	old := scanCmdlineBudget
+	scanCmdlineBudget = 256 << 10 // 40 процессов по 30 КБ его заведомо превышают
+	defer func() { scanCmdlineBudget = old }()
+	tree := fakeproc.Demo(time.Now())
+	const n = 40
+	for i := range n {
+		tree.Procs = append(tree.Procs, &fakeproc.Proc{PID: 10000 + i, PPID: 1, Comm: "sleep", UID: 1000, State: "S", StartTicks: 100,
+			Args: []string{"sleep", strings.Repeat("9", 30<<10)}, Exe: "/usr/bin/sleep", Cwd: "/"})
+	}
+	procRoot, hostRoot, err := tree.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist, _ := history.Open(history.Options{})
+	sc := New(Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist, Interval: time.Second,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	snap, err := sc.ScanOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	total, truncated, flagged := 0, 0, 0
+	for _, p := range snap.Processes {
+		total += len(p.Cmdline)
+		if p.CmdlineTruncated {
+			truncated++
+		}
+		for _, f := range p.Findings {
+			if f.ID == "cmdline_truncated" {
+				flagged++
+			}
+		}
+	}
+	if limit := scanCmdlineBudget + n*minCmdline + 64<<10; total > limit {
+		t.Errorf("командные строки в снимке: %d байт, лимит %d", total, limit)
+	}
+	if truncated < n/4 || flagged != truncated {
+		t.Errorf("обрезано %d, признаков %d", truncated, flagged)
+	}
+}
