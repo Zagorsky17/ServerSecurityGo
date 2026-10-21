@@ -300,9 +300,9 @@ func (a *App) row(p panelID, i, w int) []seg {
 		return segs
 	case pNet:
 		sk := a.socks[i]
-		remote := "—"
+		remote := []seg{{fit("—", 21) + " ", stNormal}}
 		if sk.RemotePort != 0 {
-			remote = fmt.Sprintf("%s:%d", sk.RemoteAddr, sk.RemotePort)
+			remote = addrSegs(sk.RemoteAddr, sk.RemotePort, 21)
 		}
 		owner := "неизвестно"
 		ost := stDim
@@ -313,13 +313,10 @@ func (a *App) row(p panelID, i, w int) []seg {
 		if sk.State == "LISTEN" {
 			stState = stAccent
 		}
-		return []seg{
-			{fit(sk.Proto, 5) + " ", stDim},
-			{fit(fmt.Sprintf("%s:%d", sk.LocalAddr, sk.LocalPort), 21) + " ", stNormal},
-			{fit(remote, 21) + " ", stNormal},
-			{fit(sk.State, 11) + " ", stState},
-			{owner, ost},
-		}
+		segs := []seg{{fit(sk.Proto, 5) + " ", stDim}}
+		segs = append(segs, addrSegs(sk.LocalAddr, sk.LocalPort, 21)...)
+		segs = append(segs, remote...)
+		return append(segs, seg{fit(sk.State, 11) + " ", stState}, seg{owner, ost})
 	case pHist:
 		e := a.events[i]
 		who := e.Name
@@ -435,6 +432,22 @@ func (b *lb) kv(k, v string) {
 		}
 		b.add(seg{"  " + fit(key, kw), stDim}, seg{p, stNormal})
 	}
+}
+
+// kvAddr — пара «ключ: адрес:порт» с адресом цвета stAddr.
+func (b *lb) kvAddr(k, addr string, port int) {
+	b.add(seg{"  " + fit(k, 20), stDim}, seg{sanitize(addr), stAddr}, seg{fmt.Sprintf(":%d", port), stNormal})
+}
+
+// addrSegs — колонка «адрес:порт» шириной w плюс пробел-разделитель:
+// адрес цвета stAddr, порт обычным цветом. Не помещающийся адрес
+// обрезается с «…» и красится целиком.
+func addrSegs(addr string, port, w int) []seg {
+	p := fmt.Sprintf(":%d", port)
+	if strWidth(addr)+strWidth(p) > w {
+		return []seg{{fit(addr+p, w) + " ", stAddr}}
+	}
+	return []seg{{addr, stAddr}, {fit(p, w-strWidth(addr)) + " ", stNormal}}
 }
 
 func fmtTime(t time.Time) string {
@@ -645,11 +658,11 @@ func (a *App) processDetail(b *lb, key string) {
 	}
 	b.header(fmt.Sprintf("Сеть (TCP/UDP: %d, unix: %d)", len(inet), unix))
 	for _, sk := range inet {
-		remote := ""
+		segs := []seg{{fmt.Sprintf("  %-5s ", sk.Proto), stNormal}, {sk.LocalAddr, stAddr}, {fmt.Sprintf(":%d", sk.LocalPort), stNormal}}
 		if sk.RemotePort != 0 {
-			remote = fmt.Sprintf(" → %s:%d", sk.RemoteAddr, sk.RemotePort)
+			segs = append(segs, seg{" → ", stNormal}, seg{sk.RemoteAddr, stAddr}, seg{fmt.Sprintf(":%d", sk.RemotePort), stNormal})
 		}
-		b.add(seg{fmt.Sprintf("  %-5s %s:%d%s ", sk.Proto, sk.LocalAddr, sk.LocalPort, remote), stNormal}, seg{sk.State, stAccent})
+		b.add(append(segs, seg{" ", stNormal}, seg{sk.State, stAccent})...)
 	}
 	if len(p.Files) > 0 {
 		b.header(fmt.Sprintf("Открытые файлы (%d из %d)", len(p.Files), p.FDCount))
@@ -717,9 +730,9 @@ func orDash(s string) string {
 
 func (a *App) socketDetail(b *lb, sk model.Socket) {
 	b.kv("Протокол", sk.Proto)
-	b.kv("Локальный адрес", fmt.Sprintf("%s:%d", sk.LocalAddr, sk.LocalPort))
+	b.kvAddr("Локальный адрес", sk.LocalAddr, sk.LocalPort)
 	if sk.RemotePort != 0 {
-		b.kv("Удалённый адрес", fmt.Sprintf("%s:%d", sk.RemoteAddr, sk.RemotePort))
+		b.kvAddr("Удалённый адрес", sk.RemoteAddr, sk.RemotePort)
 	}
 	b.kv("Состояние", sk.State)
 	b.kv("inode", strconv.FormatUint(sk.Inode, 10))
