@@ -78,18 +78,26 @@ func ValidHash(encoded string) bool {
 // session — серверная сессия. Хранится в памяти: после перезапуска
 // службы нужно войти заново, зато токены нигде не лежат на диске.
 type session struct {
-	csrf    string
-	expires time.Time
+	csrf     string
+	expires  time.Time // абсолютный срок (SSG_SESSION_TTL)
+	lastSeen time.Time // последний запрос — для тайм-аута простоя
 }
+
+// sessionIdle — сессия без запросов дольше этого закрывается, даже если
+// SSG_SESSION_TTL ещё не истёк: забытая открытая вкладка на чужом
+// компьютере не остаётся входом в панель на 12 часов. Открытая панель
+// обновляет данные сама, поэтому рабочую вкладку тайм-аут не закрывает.
+const sessionIdle = 2 * time.Hour
 
 type sessionStore struct {
 	mu   sync.Mutex
 	ttl  time.Duration
+	idle time.Duration
 	data map[string]session
 }
 
 func newSessionStore(ttl time.Duration) *sessionStore {
-	return &sessionStore{ttl: ttl, data: map[string]session{}}
+	return &sessionStore{ttl: ttl, idle: min(sessionIdle, ttl), data: map[string]session{}}
 }
 
 func randomToken() string {
@@ -106,12 +114,12 @@ func (s *sessionStore) create(now time.Time) (string, string) {
 	defer s.mu.Unlock()
 	// Заодно чистим просроченные.
 	for k, v := range s.data {
-		if now.After(v.expires) {
+		if s.expired(v, now) {
 			delete(s.data, k)
 		}
 	}
 	tok, csrf := randomToken(), randomToken()
-	s.data[tok] = session{csrf: csrf, expires: now.Add(s.ttl)}
+	s.data[tok] = session{csrf: csrf, expires: now.Add(s.ttl), lastSeen: now}
 	return tok, csrf
 }
 
@@ -119,11 +127,17 @@ func (s *sessionStore) get(tok string, now time.Time) (session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, ok := s.data[tok]
-	if !ok || now.After(v.expires) {
+	if !ok || s.expired(v, now) {
 		delete(s.data, tok)
 		return session{}, false
 	}
+	v.lastSeen = now
+	s.data[tok] = v
 	return v, true
+}
+
+func (s *sessionStore) expired(v session, now time.Time) bool {
+	return now.After(v.expires) || now.Sub(v.lastSeen) > s.idle
 }
 
 func (s *sessionStore) delete(tok string) {

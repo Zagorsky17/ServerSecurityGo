@@ -67,6 +67,10 @@ CPUQuota=50%
 Nice=10
 IOSchedulingClass=idle
 UMask=0077
+# Без дампов памяти: в памяти службы бывают командные строки до
+# маскирования секретов (строки Go нельзя затереть), и дамп при падении
+# сохранил бы их на диск.
+LimitCORE=0
 
 [Install]
 WantedBy=multi-user.target

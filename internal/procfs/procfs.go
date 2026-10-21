@@ -155,7 +155,8 @@ type Raw struct {
 	// SocketInodes — inode сокетов из /proc/PID/fd, с номерами fd.
 	SocketInodes map[uint64][]int
 	// RawArgs — аргументы до маскирования секретов. Используются только
-	// внутри сканера и никуда не сохраняются.
+	// внутри сканера и никуда не сохраняются (но и не затираются в
+	// памяти — см. комментарий в scanner.collect).
 	RawArgs []string
 }
 
