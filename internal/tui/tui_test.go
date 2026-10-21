@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -310,5 +311,73 @@ func TestRemoteSource(t *testing.T) {
 	}
 	if _, err := DialSocket(filepath.Join(dir, "nope.sock")); err == nil {
 		t.Error("подключение к несуществующему сокету должно падать")
+	}
+}
+
+// cellsAt ищет на экране строку text и возвращает её ячейки.
+func cellsAt(a *App, text string) []cell {
+	rs := []rune(text)
+	for y := 0; y < a.scr.H; y++ {
+		row := a.scr.cells[y*a.scr.W : (y+1)*a.scr.W]
+		for x := 0; x+len(rs) <= len(row); x++ {
+			ok := true
+			for i, r := range rs {
+				if row[x+i].r != r {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return row[x : x+len(rs)]
+			}
+		}
+	}
+	return nil
+}
+
+// TestAddrColor: IP-адреса в панели «Сеть» всегда своего цвета, в том числе
+// в выделенной строке, — иначе подсветка Termius «мигает» при прокрутке.
+func TestAddrColor(t *testing.T) {
+	a, _ := newTestApp(t, 160, 45)
+	press(a, r('4'))
+	if len(a.socks) < 2 {
+		t.Fatalf("в демо мало сокетов: %d", len(a.socks))
+	}
+	a.render()
+	for i, sk := range a.socks[:2] {
+		addr := sk.LocalAddr
+		port := fmt.Sprintf(":%d", sk.LocalPort)
+		// Ищем вместе с протоколом: тот же адрес есть и в заголовке подробностей.
+		pre := fit(sk.Proto, 5) + " "
+		cs := cellsAt(a, pre+addr+port)
+		if cs == nil {
+			t.Fatalf("сокет %d: %s%s не найден в списке", i, addr, port)
+		}
+		cs = cs[len([]rune(pre)):]
+		n := len([]rune(addr))
+		for _, c := range cs[:n] {
+			if c.st.FG != stAddr.FG {
+				t.Errorf("сокет %d: цвет адреса %d, ожидался %d", i, c.st.FG, stAddr.FG)
+				break
+			}
+		}
+		selected := i == a.lists[pNet].cursor
+		if selected && cs[0].st.BG != stSelFocus.BG {
+			t.Errorf("выделенная строка без фона выделения")
+		}
+		if !selected && cs[n].st.FG != stNormal.FG {
+			t.Errorf("сокет %d: цвет порта %d, ожидался цвет по умолчанию", i, cs[n].st.FG)
+		}
+	}
+}
+
+func TestAddrSegs(t *testing.T) {
+	segs := addrSegs("10.0.0.1", 22, 21)
+	if len(segs) != 2 || segs[0].t != "10.0.0.1" || segs[0].st != stAddr || strWidth(segs[0].t+segs[1].t) != 22 {
+		t.Errorf("обычный адрес: %#v", segs)
+	}
+	long := addrSegs("2001:db8:aaaa:bbbb:cccc::1", 443, 21)
+	if len(long) != 1 || strWidth(long[0].t) != 22 || !strings.Contains(long[0].t, "…") {
+		t.Errorf("длинный адрес: %#v", long)
 	}
 }

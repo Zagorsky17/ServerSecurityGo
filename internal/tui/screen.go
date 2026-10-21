@@ -16,6 +16,9 @@ type Style struct {
 	Bold    bool
 	Dim     bool
 	Reverse bool
+	// KeepFG — цвет текста сохраняется и в выделенной строке (Fill меняет
+	// только фон).
+	KeepFG bool
 }
 
 // Базовые стили интерфейса. Цвета подобраны так, чтобы читаться и на
@@ -34,6 +37,11 @@ var (
 	stOK       = Style{FG: 76, BG: -1}
 	stSelFocus = Style{FG: 255, BG: 24, Bold: true} // выбранная строка в активной панели
 	stSelBlur  = Style{FG: -1, BG: 237}             // выбранная строка в неактивной панели
+	// stAddr — IP-адреса. Termius и похожие клиенты сами красят IP в розовый,
+	// но только при части перерисовок: при прокрутке адрес получал цвет
+	// терминала по умолчанию и «мигал». Явный близкий розовый делает цвет
+	// одинаковым в обоих случаях; в выделенной строке он тоже сохраняется.
+	stAddr = Style{FG: 168, BG: -1, KeepFG: true}
 )
 
 // riskStyle — цвет уровня риска.
@@ -130,7 +138,7 @@ func (s *Screen) Fill(x, y, w, h int, st Style) {
 			if i >= 0 && j >= 0 && i < s.W && j < s.H {
 				c := &s.cells[j*s.W+i]
 				c.st.BG = st.BG
-				if st.FG != -1 {
+				if st.FG != -1 && !c.st.KeepFG {
 					c.st.FG = st.FG
 				}
 				c.st.Bold = c.st.Bold || st.Bold
