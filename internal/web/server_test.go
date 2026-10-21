@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/pbkdf2"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -305,5 +308,82 @@ func TestLimiterSweep(t *testing.T) {
 	l.begin("192.0.2.1", t0.Add(l.window+time.Minute))
 	if len(l.fails) != 1 {
 		t.Errorf("после окна осталось %d записей", len(l.fails))
+	}
+}
+
+// TestPeerCheck: без пароля панель доступна только пользователям из
+// LocalUIDs (по умолчанию root), /healthz и локальный сокет — всем.
+func TestPeerCheck(t *testing.T) {
+	s := newTestServer(t, "")
+	s.opt.CheckPeer, s.opt.LocalUIDs = true, []int{0}
+	req := func(path string, info *peerInfo) int {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Host = "127.0.0.1:8090"
+		if info != nil {
+			r = r.WithContext(context.WithValue(r.Context(), peerKey{}, *info))
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w.Code
+	}
+	for _, c := range []struct {
+		path string
+		info *peerInfo
+		want int
+	}{
+		{"/api/processes", &peerInfo{uid: 0, ok: true}, 200},
+		{"/api/processes", &peerInfo{uid: 33, ok: true}, 403}, // www-data
+		{"/api/status", &peerInfo{uid: 1000, ok: true}, 403},
+		{"/", &peerInfo{uid: 1000, ok: true}, 403},
+		{"/api/processes", &peerInfo{}, 403}, // владелец не определён
+		{"/api/processes", nil, 403},
+		{"/healthz", &peerInfo{uid: 33, ok: true}, 200},
+	} {
+		if got := req(c.path, c.info); got != c.want {
+			t.Errorf("%s %+v: код %d, ожидался %d", c.path, c.info, got, c.want)
+		}
+	}
+	// Через Unix-сокет службы (терминальный интерфейс) проверка не нужна.
+	r := httptest.NewRequest("GET", "/api/processes", nil)
+	w := httptest.NewRecorder()
+	s.LocalHandler().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Errorf("локальный сокет: %d", w.Code)
+	}
+	// С паролем решает вход, а не UID.
+	sp := newTestServer(t, "x")
+	sp.opt.CheckPeer, sp.opt.LocalUIDs = true, []int{0}
+	if code := do(sp, "GET", "/api/processes", "127.0.0.1:8090", "", nil).Code; code != 401 {
+		t.Errorf("с паролем: %d", code)
+	}
+}
+
+// TestPeerContext: в owner передаются адрес клиента и адрес службы.
+func TestPeerContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer ln.Close()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	sc, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Close()
+	var gotLocal, gotRemote netip.AddrPort
+	ctx := PeerContext(func(local, remote netip.AddrPort) (int, bool) {
+		gotLocal, gotRemote = local, remote
+		return 1000, true
+	})(context.Background(), sc)
+	if gotLocal.String() != c.LocalAddr().String() || gotRemote.String() != ln.Addr().String() {
+		t.Errorf("owner(%s, %s), ожидалось (%s, %s)", gotLocal, gotRemote, c.LocalAddr(), ln.Addr())
+	}
+	if uid, ok := peerUID(ctx); uid != 1000 || !ok {
+		t.Errorf("peerUID = %d %v", uid, ok)
 	}
 }

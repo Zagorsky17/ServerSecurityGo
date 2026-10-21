@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/hex"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -78,6 +79,34 @@ func ParseNetTable(data, proto, netns string) []model.Socket {
 		})
 	}
 	return out
+}
+
+// SocketOwner возвращает UID владельца TCP-сокета с локальным адресом
+// local и удалённым remote из таблиц /proc/net/tcp и tcp6 пространства
+// имён самого сканера. Для TCP нет SO_PEERCRED, поэтому служба так узнаёт,
+// какой пользователь подключился к ней по loopback: клиентский сокет — это
+// строка, где local — адрес клиента, а remote — адрес службы.
+// false — сокет не найден (соединение уже закрыто или /proc недоступен).
+func (f *FS) SocketOwner(local, remote netip.AddrPort) (int, bool) {
+	for _, proto := range []string{"tcp", "tcp6"} {
+		data, err := os.ReadFile(f.path("net", proto))
+		if err != nil {
+			continue
+		}
+		for _, s := range ParseNetTable(string(data), proto, "") {
+			if sameAddrPort(s.LocalAddr, s.LocalPort, local) && sameAddrPort(s.RemoteAddr, s.RemotePort, remote) {
+				return s.UID, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// sameAddrPort сравнивает адрес из таблицы с ap; IPv4 в виде
+// ::ffff:a.b.c.d (сокеты tcp6 с двойным стеком) равен a.b.c.d.
+func sameAddrPort(addr string, port int, ap netip.AddrPort) bool {
+	a, err := netip.ParseAddr(addr)
+	return err == nil && port == int(ap.Port()) && a.Unmap() == ap.Addr().Unmap()
 }
 
 // ParseUnixTable разбирает /proc/net/unix.

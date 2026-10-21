@@ -34,6 +34,7 @@ type Config struct {
 	TLSKey           string
 	TrustProxyTLS    bool
 	AllowedHosts     []string
+	LocalUIDs        []int // кому разрешена панель без пароля по loopback
 	Retention        time.Duration
 	EventsMaxMB      int
 	CPUThreshold     float64
@@ -66,6 +67,7 @@ func Default() Config {
 		MemThreshold:    50,
 		RecentDays:      7,
 		AllowlistFile:   "/opt/serversecuritygo/allowlist.json",
+		LocalUIDs:       []int{0},
 		MaxFiles:        200,
 		LogLevel:        "info",
 	}
@@ -168,6 +170,21 @@ func FromEnv() (Config, error) {
 			if h = strings.TrimSpace(h); h != "" {
 				c.AllowedHosts = append(c.AllowedHosts, strings.ToLower(h))
 			}
+		}
+	}
+	if v := os.Getenv("SSG_LOCAL_UIDS"); strings.TrimSpace(v) != "" {
+		c.LocalUIDs = nil
+		for f := range strings.SplitSeq(v, ",") {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			uid, err := strconv.Atoi(f)
+			if err != nil || uid < 0 {
+				errs = append(errs, fmt.Errorf("SSG_LOCAL_UIDS: ожидаются числовые UID через запятую, получено %q", f))
+				continue
+			}
+			c.LocalUIDs = append(c.LocalUIDs, uid)
 		}
 	}
 	dur("SSG_HISTORY_RETENTION", &c.Retention)

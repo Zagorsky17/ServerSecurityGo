@@ -141,28 +141,31 @@ type FileInfo struct {
 type Process struct {
 	// Key = "PID-starttime": PID переиспользуется, а пара с временем
 	// старта однозначно определяет экземпляр процесса.
-	Key        string    `json:"key"`
-	PID        int       `json:"pid"`
-	PPID       int       `json:"ppid"`
-	Name       string    `json:"name"` // comm, до 15 символов
-	State      string    `json:"state"`
-	UID        int       `json:"uid"`
-	EUID       int       `json:"euid"`
-	GID        int       `json:"gid"`
-	User       string    `json:"user"`
-	Cmdline    string    `json:"cmdline"` // секреты замаскированы
-	Args       []string  `json:"args"`
-	Exe        string    `json:"exe"`
-	ExeDeleted bool      `json:"exeDeleted"`
-	Cwd        string    `json:"cwd"`
-	StartTime  time.Time `json:"startTime"`
-	StartTicks uint64    `json:"-"`
-	CPUTicks   uint64    `json:"-"` // utime+stime в тиках
-	Threads    int       `json:"threads"`
-	RSSBytes   uint64    `json:"rssBytes"`
-	VMSBytes   uint64    `json:"vmsBytes"`
-	MemPercent float64   `json:"memPercent"`
-	CPUPercent float64   `json:"cpuPercent"`
+	Key     string   `json:"key"`
+	PID     int      `json:"pid"`
+	PPID    int      `json:"ppid"`
+	Name    string   `json:"name"` // comm, до 15 символов
+	State   string   `json:"state"`
+	UID     int      `json:"uid"`
+	EUID    int      `json:"euid"`
+	GID     int      `json:"gid"`
+	User    string   `json:"user"`
+	Cmdline string   `json:"cmdline"` // секреты замаскированы
+	Args    []string `json:"args"`
+	// CmdlineTruncated — командная строка длиннее лимита сканера и
+	// прочитана не целиком (см. procfs.Limits).
+	CmdlineTruncated bool      `json:"cmdlineTruncated,omitempty"`
+	Exe              string    `json:"exe"`
+	ExeDeleted       bool      `json:"exeDeleted"`
+	Cwd              string    `json:"cwd"`
+	StartTime        time.Time `json:"startTime"`
+	StartTicks       uint64    `json:"-"`
+	CPUTicks         uint64    `json:"-"` // utime+stime в тиках
+	Threads          int       `json:"threads"`
+	RSSBytes         uint64    `json:"rssBytes"`
+	VMSBytes         uint64    `json:"vmsBytes"`
+	MemPercent       float64   `json:"memPercent"`
+	CPUPercent       float64   `json:"cpuPercent"`
 	// CPUAverage — CPU посчитан как среднее с момента запуска (первое
 	// наблюдение процесса, мгновенного значения ещё нет).
 	CPUAverage bool `json:"cpuAverage"`

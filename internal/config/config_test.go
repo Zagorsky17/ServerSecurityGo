@@ -83,3 +83,21 @@ func TestAllowlistFile(t *testing.T) {
 		t.Error("битый allowlist принят")
 	}
 }
+
+func TestLocalUIDs(t *testing.T) {
+	t.Setenv("SSG_LOCAL_UIDS", "")
+	os.Unsetenv("SSG_LOCAL_UIDS")
+	if c, _ := FromEnv(); len(c.LocalUIDs) != 1 || c.LocalUIDs[0] != 0 {
+		t.Errorf("по умолчанию: %v", c.LocalUIDs)
+	}
+	t.Setenv("SSG_LOCAL_UIDS", "0, 1000")
+	if c, err := FromEnv(); err != nil || len(c.LocalUIDs) != 2 || c.LocalUIDs[1] != 1000 {
+		t.Errorf("0,1000: %v %v", c.LocalUIDs, err)
+	}
+	for _, bad := range []string{"root", "-1", "1000x"} {
+		t.Setenv("SSG_LOCAL_UIDS", bad)
+		if _, err := FromEnv(); err == nil {
+			t.Errorf("%q принято", bad)
+		}
+	}
+}

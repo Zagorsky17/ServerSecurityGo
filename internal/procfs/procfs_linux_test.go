@@ -3,6 +3,8 @@
 package procfs
 
 import (
+	"net"
+	"net/netip"
 	"os"
 	"testing"
 )
@@ -47,5 +49,33 @@ func TestRealProc(t *testing.T) {
 	}
 	if len(fs.ReadNetTables(0, "")) == 0 {
 		t.Log("таблицы сокетов пусты (возможно, нет сети в песочнице)")
+	}
+}
+
+// TestRealSocketOwner: владелец настоящего клиентского сокета на loopback
+// — текущий пользователь (так служба проверяет доступ без пароля).
+func TestRealSocketOwner(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("нет loopback:", err)
+	}
+	defer ln.Close()
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			defer c.Close()
+			buf := make([]byte, 1)
+			c.Read(buf)
+		}
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	client := netip.MustParseAddrPort(c.LocalAddr().String())
+	server := netip.MustParseAddrPort(ln.Addr().String())
+	uid, ok := New("/proc", "/").SocketOwner(client, server)
+	if !ok || uid != os.Getuid() {
+		t.Errorf("SocketOwner = %d %v, ожидался %d", uid, ok, os.Getuid())
 	}
 }

