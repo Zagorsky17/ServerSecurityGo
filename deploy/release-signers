@@ -1,0 +1,7 @@
+# Ключи подписи релизов ServerSecurityGo (формат allowed_signers из ssh-keygen(1)).
+# update.sh и install.sh проверяют ими подпись тега версии (namespace git) и
+# SHA256SUMS релиза (namespace serversecuritygo-release). Отпечаток ключа:
+#   SHA256:FTMg0RpZQU+IwbNRzcFbYhSrQLTw0LtOfr+zSd5liyg
+# Смена ключа: добавить новую строку, выпустить релиз, подписанный старым
+# ключом, и только затем удалить старую строку.
+release@serversecuritygo namespaces="git,serversecuritygo-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClRrJuduVUG+9HQDFkWuT3HcW/9S3uXTPSjTlbosVgB

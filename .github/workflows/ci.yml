@@ -38,3 +38,5 @@ jobs:
         run: make build-linux
       - name: shellcheck
         run: shellcheck -x scripts/*.sh
+      - name: Проверка подписи релизов (update.sh, install.sh)
+        run: bash scripts/test-release-verify.sh

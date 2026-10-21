@@ -320,6 +320,8 @@ How updates are protected against failures:
 
 Backups are not deleted, even with `--purge`.
 
+**Release signing.** Every release starting with v0.2.3 is signed with the maintainer's SSH key, which is not stored on GitHub. The public key is in [`deploy/release-signers`](deploy/release-signers), and its fingerprint is `SHA256:FTMg0RpZQU+IwbNRzcFbYhSrQLTw0LtOfr+zSd5liyg`. `update.sh` verifies the version tag signature with the already installed script, before switching to the new version, and verifies the binary signature on download. The binary signature is bound to the tag, so files from an old release cannot be passed off as a new one. Even if the GitHub account or CI is compromised, servers will not accept a tampered release. Releases v0.1.0–v0.2.2 are unsigned and are checked against commits and hashes pinned in `scripts/lib.sh`. The `main` branch (`update.sh main`) is not signed. On first installation the key comes from the downloaded repository, so compare the fingerprint shown by `install.sh` with this README. The protection applies from the first update performed by `update.sh` v0.2.3 or newer.
+
 ### Complete removal
 
 This removes the application as if it had never been on the server: the service and its traces in systemd, the link `/usr/local/bin/serversecuritygo`, `/opt/serversecuritygo`, the history in `/var/lib/serversecuritygo` and the backups in `/var/backups/serversecuritygo`. This cannot be undone.

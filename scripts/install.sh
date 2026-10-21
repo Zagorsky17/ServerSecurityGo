@@ -63,6 +63,16 @@ cd "$APP_DIR"
 # shellcheck source=lib.sh
 . "$APP_DIR/scripts/lib.sh"
 require_systemd
+# Подпись тега проверяется ключом из только что скачанного репозитория:
+# это ловит подменённый релиз, но не подмену самого репозитория — при
+# первой установке доверять приходится GitHub. Сверьте отпечаток ключа
+# с README. Дальше update.sh проверяет каждую версию ключом установленной.
+if [ -n "$TAG" ]; then
+  verify_release_tag "$TAG"
+  log "Ключ подписи релизов: $(awk '!/^#/ && NF {print $3" "$4}' "$RELEASE_SIGNERS" | ssh-keygen -lf - 2>/dev/null | awk '{print $2}' | head -n1) (сверьте с README)"
+else
+  warn "релизов пока нет, устанавливается неподписанная ветка main"
+fi
 
 install -d -m 0755 "$APP_DIR/bin"
 obtain_binary "$APP_DIR/bin/serversecuritygo.new" "$TAG"

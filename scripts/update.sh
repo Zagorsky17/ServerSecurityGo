@@ -3,7 +3,11 @@
 #
 #   /opt/serversecuritygo/scripts/update.sh            # до последнего релиза
 #   /opt/serversecuritygo/scripts/update.sh v0.2.0     # до указанной версии
-#   /opt/serversecuritygo/scripts/update.sh main       # до свежей ветки main (нужен Go)
+#   /opt/serversecuritygo/scripts/update.sh main       # до свежей ветки main (нужен Go, без подписи)
+#
+# Каждый релиз подписан ключом сопровождающего (deploy/release-signers):
+# подпись тега проверяется до перехода на новую версию, подпись бинарника —
+# при загрузке (см. «Подпись релизов» в lib.sh). Ветка main не подписана.
 #
 # Порядок: резервная копия истории и настроек → загрузка новой версии →
 # проверка нового бинарника → замена с сохранением предыдущего (.prev) →
@@ -31,6 +35,10 @@ if [ "${1:-}" = "--apply" ]; then
   TAG="${2:-}"
   PREV_REF="${3:-}"
   [ -n "$PREV_REF" ] || die "--apply — внутренний флаг update.sh, запускайте скрипт без него"
+  # Тег уже проверен первым этапом. Проверяем ещё раз ключом новой версии:
+  # если первым этапом был старый update.sh без проверки подписи, это
+  # хотя бы ловит подменённый релиз при нетронутом репозитории.
+  [ -z "$TAG" ] || verify_release_tag "$TAG"
 else
   TARGET="${1:-}"
   git fetch -q --tags origin
@@ -46,18 +54,24 @@ else
   backup_state
 
   if [ "$TARGET" = "main" ]; then
+    warn "ветка main не подписана: для серверов используйте релизы"
     git checkout -q main
     git pull -q --ff-only origin main
     TAG=""
   else
+    # Подпись проверяет этот (уже установленный и доверенный) скрипт со
+    # своими ключами — до того, как управление получит код новой версии.
+    verify_release_tag "$TARGET"
     git -c advice.detachedHead=false checkout -q "refs/tags/$TARGET" || die "версия $TARGET не найдена"
     TAG="$TARGET"
   fi
 
-  # Продолжаем скриптом новой версии. Версии без признака SSG_UPDATE_APPLY_STAGE
-  # (v0.2.0 и старше) флага --apply не знают — при переходе на них
-  # доделываем обновление этим файлом с уже подключённым lib.sh.
-  if grep -q 'SSG_UPDATE_APPLY_STAGE' scripts/update.sh; then
+  # Продолжаем скриптом новой версии. Исключения — доделываем этим файлом
+  # с уже подключённым lib.sh:
+  #   - релизы до подписи: их update.sh не проверяет подпись бинарника;
+  #   - версии без признака SSG_UPDATE_APPLY_STAGE (v0.2.0 и старше) не
+  #     знают флага --apply.
+  if ! is_legacy_tag "$TAG" && grep -q 'SSG_UPDATE_APPLY_STAGE' scripts/update.sh; then
     exec bash ./scripts/update.sh --apply "$TAG" "$PREV_REF"
   fi
 fi
