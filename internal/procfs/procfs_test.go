@@ -1,6 +1,9 @@
 package procfs
 
 import (
+	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -144,6 +147,42 @@ func TestFDKind(t *testing.T) {
 	for in, want := range cases {
 		if got := FDKind(in); got != want {
 			t.Errorf("%s: %s, want %s", in, got, want)
+		}
+	}
+}
+
+// TestSocketOwner: владелец клиентского сокета ищется по паре адресов в
+// /proc/net/tcp и tcp6, IPv4 в tcp6 записан как ::ffff:a.b.c.d.
+func TestSocketOwner(t *testing.T) {
+	root := t.TempDir()
+	hdr := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+	tcp := hdr +
+		"   0: 0100007F:1F9A 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 100 1\n" + // служба слушает
+		"   1: 0100007F:C350 0100007F:1F9A 01 00000000:00000000 00:00000000 00000000  1000        0 101 1\n" + // клиент uid 1000
+		"   2: 0100007F:1F9A 0100007F:C350 01 00000000:00000000 00:00000000 00000000     0        0 102 1\n" // сторона службы
+	tcp6 := hdr +
+		"   0: 0000000000000000FFFF00000100007F:C351 0000000000000000FFFF00000100007F:1F9A 01 00000000:00000000 00:00000000 00000000    33        0 103 1\n" +
+		"   1: 00000000000000000000000001000000:C352 00000000000000000000000001000000:1F9A 01 00000000:00000000 00:00000000 00000000     0        0 104 1\n"
+	os.MkdirAll(filepath.Join(root, "net"), 0o755)
+	os.WriteFile(filepath.Join(root, "net", "tcp"), []byte(tcp), 0o644)
+	os.WriteFile(filepath.Join(root, "net", "tcp6"), []byte(tcp6), 0o644)
+	fs := New(root, "/")
+	srv4 := netip.MustParseAddrPort("127.0.0.1:8090")
+	cases := []struct {
+		client string
+		server netip.AddrPort
+		uid    int
+		ok     bool
+	}{
+		{"127.0.0.1:50000", srv4, 1000, true},
+		{"127.0.0.1:50001", srv4, 33, true}, // IPv4 через сокет tcp6
+		{"[::1]:50002", netip.MustParseAddrPort("[::1]:8090"), 0, true},
+		{"127.0.0.1:50003", srv4, 0, false}, // соединения нет
+	}
+	for _, c := range cases {
+		uid, ok := fs.SocketOwner(netip.MustParseAddrPort(c.client), c.server)
+		if uid != c.uid || ok != c.ok {
+			t.Errorf("%s: uid %d ok %v, ожидалось %d %v", c.client, uid, ok, c.uid, c.ok)
 		}
 	}
 }

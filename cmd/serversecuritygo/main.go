@@ -38,12 +38,14 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/config"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/tui"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/web"
 )
 
@@ -166,6 +168,9 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	for _, w := range detect.WeakAllowRules(detCfg.Allow) {
+		log.Warn("слабое правило allowlist", "rule", w)
+	}
 	hist, err := history.Open(history.Options{Dir: cfg.DataDir, Retention: cfg.Retention, MaxEventsBytes: int64(cfg.EventsMaxMB) << 20,
 		CPUThreshold: cfg.CPUThreshold, MemThreshold: cfg.MemThreshold})
 	if err != nil {
@@ -175,16 +180,25 @@ func cmdServe(args []string) error {
 	pfs.MaxFiles = cfg.MaxFiles
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log})
 
+	// Без пароля панель только для LocalUIDs: владельца подключения служба
+	// определяет по /proc/net/tcp (см. web.Options.CheckPeer).
+	noAuth := cfg.AuthPasswordHash == ""
 	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version, ListenAddr: cfg.ListenAddr, PasswordHash: cfg.AuthPasswordHash,
-		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts})
+		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, TrustProxy: cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts,
+		CheckPeer: noAuth, LocalUIDs: cfg.LocalUIDs})
+	var connCtx func(context.Context, net.Conn) context.Context
+	if noAuth {
+		connCtx = web.PeerContext(pfs.SocketOwner)
+	}
 	log.Info("запуск", "version", version, "listen", cfg.ListenAddr, "interval", cfg.ScanInterval.String(), "data", cfg.DataDir,
-		"auth", cfg.AuthPasswordHash != "", "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow))
-	return run(sc, srv, srv.LocalHandler(), cfg, log, func() { _ = hist.Flush(time.Now()) })
+		"auth", !noAuth, "local_uids", fmt.Sprint(cfg.LocalUIDs), "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow))
+	return run(sc, srv, srv.LocalHandler(), connCtx, cfg, log, func() { _ = hist.Flush(time.Now()) })
 }
 
 // run запускает сканер и HTTP-сервер и корректно останавливает их по
 // SIGINT/SIGTERM.
-func run(sc *scanner.Scanner, handler, local http.Handler, cfg config.Config, log *slog.Logger, onStop func()) error {
+// connCtx (может быть nil) — http.Server.ConnContext для TCP-панели.
+func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.Context, net.Conn) context.Context, cfg config.Config, log *slog.Logger, onStop func()) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -200,6 +214,7 @@ func run(sc *scanner.Scanner, handler, local http.Handler, cfg config.Config, lo
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		ConnContext:       connCtx,
 	}
 	if cfg.TLSEnabled() {
 		httpSrv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -423,10 +438,16 @@ func cmdScan(args []string) error {
 		return enc.Encode(map[string]any{"time": snap.Time, "host": snap.Host, "stats": snap.Stats, "warnings": snap.Warnings, "processes": procs, "system": sys})
 	}
 
+	// Таблица уходит прямо в терминал администратора, а имя процесса
+	// (comm), путь и командную строку задаёт сам процесс: ESC-последовательности
+	// в них сменили бы заголовок окна или записали бы буфер обмена (OSC 52).
+	// Поэтому всё из системы выводится через view.Printable. JSON
+	// экранирует управляющие символы сам.
+	pr := view.Printable
 	fmt.Printf("Хост: %s, %s, ядро %s. Процессов: %d, сокетов: %d, сканирование %s\n",
-		snap.Host.Hostname, snap.Host.OS, snap.Host.Kernel, snap.Stats.Total, snap.Stats.Sockets, snap.Duration.Round(time.Millisecond))
+		pr(snap.Host.Hostname), pr(snap.Host.OS), pr(snap.Host.Kernel), snap.Stats.Total, snap.Stats.Sockets, snap.Duration.Round(time.Millisecond))
 	for _, w := range snap.Warnings {
-		fmt.Println("! " + w)
+		fmt.Println("! " + pr(w))
 	}
 	fmt.Printf("По уровням: CRITICAL %d, HIGH %d, MEDIUM %d, LOW %d, INFO %d\n\n",
 		snap.Stats.ByRisk["CRITICAL"], snap.Stats.ByRisk["HIGH"], snap.Stats.ByRisk["MEDIUM"], snap.Stats.ByRisk["LOW"], snap.Stats.ByRisk["INFO"])
@@ -443,7 +464,7 @@ func cmdScan(args []string) error {
 		if p.ExeDeleted {
 			exe += " (удалён)"
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\n", p.Risk, p.Score, p.PID, p.User, p.Name, exe, strings.Join(titles, "; "))
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\n", p.Risk, p.Score, p.PID, pr(p.User), pr(p.Name), pr(exe), pr(strings.Join(titles, "; ")))
 	}
 	tw.Flush()
 	if len(procs) == 0 {
@@ -452,9 +473,9 @@ func cmdScan(args []string) error {
 	if len(sys) > 0 {
 		fmt.Println("\nСистемные проверки:")
 		for _, f := range sys {
-			fmt.Printf("  [%s] %s — %s\n", f.Risk, f.Title, f.Path)
+			fmt.Printf("  [%s] %s — %s\n", f.Risk, pr(f.Title), pr(f.Path))
 			for _, e := range f.Evidence {
-				fmt.Println("      " + e)
+				fmt.Println("      " + pr(e))
 			}
 		}
 	}
@@ -518,7 +539,7 @@ func cmdDemo(args []string) error {
 	}
 	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (демо)", ListenAddr: cfg.ListenAddr, Demo: true})
 	log.Info("демо-режим: данные вымышленные", "dir", dir)
-	return run(sc, srv, nil, cfg, log, nil)
+	return run(sc, srv, nil, nil, cfg, log, nil)
 }
 
 func cmdHashPassword() error {

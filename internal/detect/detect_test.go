@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -330,4 +331,197 @@ func keys(m map[string]model.SystemFinding) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// TestAllowlistNameOnly: правило без exe не подавляет признаки процесса,
+// который лишь назвался разрешённым именем.
+func TestAllowlistNameOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Allow = []AllowRule{{Name: "runner", Rules: []string{"exe_in_temp"}}, {Name: "systemd-journal", Rules: []string{"exe_in_temp"}}}
+	run := func(name, exe string) bool {
+		p := &model.Process{PID: 1000, PPID: 1, Name: name, Exe: exe, Args: []string{name}, UID: 1000, EUID: 1000}
+		Analyze([]*model.Process{p}, &Context{Cfg: cfg})
+		for _, f := range p.Findings {
+			if f.ID == "exe_in_temp" {
+				return f.Suppressed
+			}
+		}
+		t.Fatalf("%s: нет exe_in_temp", exe)
+		return false
+	}
+	if !run("runner", "/tmp/build-1/runner") {
+		t.Error("законный runner не подавлен")
+	}
+	if run("runner", "/tmp/.x/xmrig") {
+		t.Error("xmrig с именем runner подавлен правилом только по имени")
+	}
+	if nameMatchesExe("runner", "") {
+		t.Error("процесс без прочитанного exe совпал с правилом по имени")
+	}
+	// comm обрезается до 15 байт: systemd-journald → «systemd-journal».
+	if !run("systemd-journal", "/tmp/x/systemd-journald") {
+		t.Error("обрезанный comm не совпал с exe")
+	}
+	weak := WeakAllowRules([]AllowRule{{Name: "node"}, {User: "deploy"}, {Exe: "/opt/a"}, {}})
+	if len(weak) != 2 || !strings.Contains(weak[0], "без exe") || !strings.Contains(weak[1], "только пользователь") {
+		t.Errorf("WeakAllowRules: %q", weak)
+	}
+}
+
+func TestUnicodeControl(t *testing.T) {
+	p := &model.Process{PID: 50, PPID: 1, Name: "ss​hd", Exe: "/usr/sbin/sshd", Args: []string{"sshd", "‮txt.exe"}}
+	f := findingByIDLocal(p, "unicode_control")
+	if f == nil || len(f.Evidence) != 2 || !strings.Contains(f.Evidence[0], "U+200B") || !strings.Contains(f.Evidence[1], "U+202E") {
+		t.Fatalf("признак: %+v", f)
+	}
+	if findingByIDLocal(&model.Process{PID: 51, PPID: 1, Name: "nginx", Exe: "/usr/sbin/nginx", Args: []string{"nginx: кириллица"}}, "unicode_control") != nil {
+		t.Error("ложное срабатывание на обычной строке")
+	}
+}
+
+func findingByIDLocal(p *model.Process, id string) *model.Finding {
+	analyze(p)
+	for i := range p.Findings {
+		if p.Findings[i].ID == id {
+			return &p.Findings[i]
+		}
+	}
+	return nil
+}
+
+// findingByID анализирует процесс и возвращает признак с этим ID.
+func findingByID(p *model.Process, id string) *model.Finding {
+	analyze(p)
+	for i := range p.Findings {
+		if p.Findings[i].ID == id {
+			return &p.Findings[i]
+		}
+	}
+	return nil
+}
+
+func TestCmdlineTruncated(t *testing.T) {
+	p := &model.Process{PID: 42, Name: "bash", Exe: "/usr/bin/bash", Args: []string{"bash", "-c", "x"}, Cmdline: "bash -c x", CmdlineTruncated: true}
+	f := findingByID(p, "cmdline_truncated")
+	if f == nil || f.Weight != 8 {
+		t.Fatalf("признак: %+v", f)
+	}
+	j := &model.Process{PID: 43, Name: "java", Exe: "/usr/bin/java", Args: []string{"java", "-cp", "a.jar"}, Cmdline: "java -cp a.jar", CmdlineTruncated: true}
+	if f := findingByID(j, "cmdline_truncated"); f == nil || f.Weight != 2 {
+		t.Fatalf("java: %+v", f)
+	}
+	p.CmdlineTruncated = false
+	if findingByID(p, "cmdline_truncated") != nil {
+		t.Error("признак без обрезки")
+	}
+}
+
+// systemChecksTimeout запускает SystemChecks и падает, если проверки
+// зависли (FIFO вместо файла раньше блокировал сканирование навсегда).
+func systemChecksTimeout(t *testing.T, root string) []model.SystemFinding {
+	t.Helper()
+	done := make(chan []model.SystemFinding, 1)
+	go func() { done <- SystemChecks(root, time.Now(), DefaultConfig()) }()
+	select {
+	case res := <-done:
+		return res
+	case <-time.After(10 * time.Second):
+		t.Fatal("SystemChecks зависли")
+		return nil
+	}
+}
+
+// TestSystemChecksUnsafeKeys: authorized_keys в домашнем каталоге
+// контролирует пользователь. FIFO, симлинк на устройство или чужой файл и
+// огромный файл не читаются, а дают признак ssh_keys_not_regular.
+func TestSystemChecksUnsafeKeys(t *testing.T) {
+	root := t.TempDir()
+	mk := func(user string) string {
+		dir := filepath.Join(root, "home", user, ".ssh")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(dir, "authorized_keys")
+	}
+	if err := syscall.Mkfifo(mk("fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/zero", mk("zero")); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(root, "secret")
+	if err := os.WriteFile(secret, []byte("a\nb\nc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, mk("link")); err != nil {
+		t.Fatal(err)
+	}
+	big, err := os.Create(mk("big"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := big.Truncate(4 << 30); err != nil { // разреженный файл 4 ГБ
+		t.Fatal(err)
+	}
+	big.Close()
+	if err := os.WriteFile(mk("ok"), []byte("ssh-ed25519 AAAA user@host\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systemChecksTimeout(t, root)
+	got := map[string]string{}
+	for _, f := range res {
+		got[f.Path] += f.ID + " " + strings.Join(f.Evidence, "; ") + "|"
+	}
+	for user, want := range map[string]string{"fifo": "FIFO", "zero": "/dev/zero", "link": "ссылка", "big": "больше лимита"} {
+		g := got["/home/"+user+"/.ssh/authorized_keys"]
+		if !strings.Contains(g, "ssh_keys_not_regular") || !strings.Contains(g, want) {
+			t.Errorf("%s: %q, ожидался ssh_keys_not_regular с «%s»", user, g, want)
+		}
+		if strings.Contains(g, "ssh_keys_recent") {
+			t.Errorf("%s: файл прочитан (%q)", user, g)
+		}
+	}
+	// Обычный файл по-прежнему проверяется.
+	if g := got["/home/ok/.ssh/authorized_keys"]; !strings.Contains(g, "ssh_keys_recent") || !strings.Contains(g, "ключей: 1") {
+		t.Errorf("обычный authorized_keys: %q", g)
+	}
+}
+
+// TestSystemChecksPreloadSymlink: /etc/ld.so.preload принадлежит root, и
+// загрузчик идёт по ссылке — значит, и проверка должна. FIFO на его месте
+// не вешает сканирование.
+func TestSystemChecksPreloadSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib := filepath.Join(root, "hidden.cfg")
+	if err := os.WriteFile(lib, []byte("/lib/libhide.so\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(lib, filepath.Join(root, "etc/ld.so.preload")); err != nil {
+		t.Fatal(err)
+	}
+	if !hasSystem(systemChecksTimeout(t, root), "ld_so_preload") {
+		t.Error("ld.so.preload через симлинк не обнаружен")
+	}
+
+	root2 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root2, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(root2, "etc/ld.so.preload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	systemChecksTimeout(t, root2) // главное — не зависнуть
+}
+
+func hasSystem(res []model.SystemFinding, id string) bool {
+	for _, f := range res {
+		if f.ID == id {
+			return true
+		}
+	}
+	return false
 }

@@ -63,6 +63,9 @@ SystemCallFilter=~@privileged @resources @mount @swap @reboot @raw-io @module @d
 # ProtectProc/ProcSubset намеренно НЕ включены: приложению нужен полный /proc.
 # Лимиты ресурсов, чтобы сканер не мешал работе сервера.
 MemoryMax=256M
+# Мягкий лимит для сборщика мусора Go: ближе к MemoryMax он собирает
+# мусор чаще, вместо того чтобы служба упёрлась в лимит и была убита.
+Environment=GOMEMLIMIT=200MiB
 CPUQuota=50%
 Nice=10
 IOSchedulingClass=idle

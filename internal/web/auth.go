@@ -146,18 +146,63 @@ func (s *sessionStore) delete(tok string) {
 	delete(s.data, tok)
 }
 
-// loginLimiter ограничивает число неудачных попыток входа с одного
-// адреса: не более maxFails за окно window.
+// loginLimiter ограничивает число попыток входа с одного адреса: не
+// более maxFails за окно window. Попытка учитывается до проверки пароля
+// (begin), а не после: PBKDF2 идёт сотни миллисекунд, и при проверке
+// «заблокирован?» → пароль → «записать неудачу» все параллельные запросы
+// успевали пройти первую проверку — сотня запросов давала сотню попыток.
 type loginLimiter struct {
 	mu       sync.Mutex
 	maxFails int
 	window   time.Duration
 	fails    map[string][]time.Time
+	// verify ограничивает число одновременных проверок PBKDF2: поток
+	// запросов не займёт весь процессор и не задержит сканирование.
+	verify chan struct{}
+	// lastSweep — когда таблица целиком чистилась от устаревших записей.
+	// prune чистит только адрес текущего запроса, и записи адресов, с
+	// которых больше не приходили, копились бы бесконечно.
+	lastSweep time.Time
 }
 
+// maxParallelVerify — сколько паролей проверяется одновременно.
+const maxParallelVerify = 2
+
 func newLoginLimiter() *loginLimiter {
-	return &loginLimiter{maxFails: 5, window: 15 * time.Minute, fails: map[string][]time.Time{}}
+	return &loginLimiter{maxFails: 5, window: 15 * time.Minute, fails: map[string][]time.Time{},
+		verify: make(chan struct{}, maxParallelVerify)}
 }
+
+// begin атомарно проверяет лимит и сразу учитывает попытку. false —
+// адрес заблокирован. При успешном входе попытки сбрасывает reset.
+func (l *loginLimiter) begin(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if now.Sub(l.lastSweep) > l.window {
+		for k := range l.fails {
+			l.prune(k, now)
+		}
+		l.lastSweep = now
+	}
+	list := l.prune(key, now)
+	if len(list) >= l.maxFails {
+		return false
+	}
+	l.fails[key] = append(list, now)
+	return true
+}
+
+// acquire занимает слот проверки пароля, ожидая не дольше wait.
+func (l *loginLimiter) acquire(wait time.Duration) bool {
+	select {
+	case l.verify <- struct{}{}:
+		return true
+	case <-time.After(wait):
+		return false
+	}
+}
+
+func (l *loginLimiter) release() { <-l.verify }
 
 func (l *loginLimiter) prune(ip string, now time.Time) []time.Time {
 	list := l.fails[ip]
@@ -175,18 +220,6 @@ func (l *loginLimiter) prune(ip string, now time.Time) []time.Time {
 		l.fails[ip] = list
 	}
 	return list
-}
-
-func (l *loginLimiter) blocked(ip string, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.prune(ip, now)) >= l.maxFails
-}
-
-func (l *loginLimiter) fail(ip string, now time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.fails[ip] = append(l.prune(ip, now), now)
 }
 
 func (l *loginLimiter) reset(ip string) {

@@ -146,6 +146,8 @@ ssh -L 8090:127.0.0.1:8090 root@<server-IP>
 
 If you connect with a dedicated key, add `-i ~/.ssh/<key> -o IdentitiesOnly=yes`.
 
+While no password is set, the service lets only root into the dashboard: for every connection to `127.0.0.1` it looks up the socket owner in `/proc/net/tcp`. A tunnel opened as root works, while other users on the server (for example, a compromised `www-data`) get error 403. If you log in over SSH as your own user, add its UID to `SSG_LOCAL_UIDS` (for example, `0,1000`) or set a password.
+
 ## Features
 
 **Data collection** reads `/proc` and related sources:
@@ -216,7 +218,7 @@ All examples are included in the demo data (`serversecuritygo demo`) and in the 
 | Recently modified `authorized_keys` | recent SSH key change | LOW (system) |
 
 Full list of rule IDs for the allowlist:
-`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`.
+`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`.
 
 ## Detection limitations
 
@@ -263,7 +265,7 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 
 After editing `.env`, run `systemctl restart serversecuritygo`.
 
-**Allowlist.** Copy [`allowlist.example.json`](allowlist.example.json) to `/opt/serversecuritygo/allowlist.json`. A rule sets `exe` and `name` (with `*` and `?` wildcards), `user` and a list of `rules` (indicator IDs). A rule with no conditions is ignored, so nothing gets suppressed by accident.
+**Allowlist.** Copy [`allowlist.example.json`](allowlist.example.json) to `/opt/serversecuritygo/allowlist.json`. A rule sets `exe` and `name` (with `*` and `?` wildcards), `user` and a list of `rules` (indicator IDs). A rule with no conditions is ignored, so nothing gets suppressed by accident. A process sets its own name (`comm`), so a rule without `exe` matches only if the name also matches the executable's file name: a miner calling itself `node` is not covered by `{"name": "node"}`. For programs running on an interpreter (for example, `gunicorn` on Python), specify `exe`. The service warns about rules without `exe` in its log at startup.
 
 ## Remote access
 
@@ -290,11 +292,14 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8090;
         proxy_set_header Host 127.0.0.1;
+        # Client address for login rate limiting: without it every
+        # client looks like 127.0.0.1 and shares one counter.
+        proxy_set_header X-Forwarded-For $remote_addr;
     }
 }
 ```
 
-The password is stored only as a PBKDF2-SHA256 hash (600,000 iterations). After five failed attempts, login from that address is blocked for 15 minutes. Sessions live in memory, and cookies are marked `HttpOnly`, `SameSite=Strict` and `Secure`.
+The password is stored only as a PBKDF2-SHA256 hash (600,000 iterations). After five failed attempts, login from that address (for IPv6, from that /64 network) is blocked for 15 minutes. An attempt is counted before the password is checked, so parallel requests cannot bypass the limit, and no more than two passwords are checked at once. Behind a reverse proxy, the client address is taken from `X-Forwarded-For` set by the proxy (see the example above). Sessions live in memory, and cookies are marked `HttpOnly`, `SameSite=Strict` and `Secure`.
 
 You can also restrict access by IP with a firewall, for example `ufw allow from <your IP> to any port 443`.
 
@@ -412,6 +417,7 @@ API (JSON, for automation): `GET /api/status`, `/api/processes`, `/api/process/{
 - Read-only: the code contains no kill calls, file deletion or network rule changes.
 - The terminal UI gets its data through a Unix socket with mode `600` in a `700` directory. The file permissions are the authorization, so only root can connect. Control characters from process names and command lines are never written to the terminal, so a process name cannot execute an escape sequence in your terminal.
 - By default the web dashboard listens only on `127.0.0.1`. A network address will not start without a password, `SSG_ALLOWED_HOSTS` and HTTPS.
+- Without a password, the dashboard is available only to users listed in `SSG_LOCAL_UIDS` (root by default): the owner of every loopback connection is looked up in `/proc/net/tcp`, and everyone else gets 403. Otherwise any local user could read what the service collects as root: paths, open files and sockets of other users' processes, and check results.
 - A `Host` header check protects against DNS rebinding, a CSRF token protects every POST request, and CSP forbids inline scripts. Process names and command lines are rendered as text only, so an attacker cannot inject HTML through the name of their process.
 - Secrets in command lines are masked **before** analysis, storage and output: `--password=…`, mysql `-pPASSWORD`, `user:pass@` in URLs, `*_TOKEN=…`, AWS and GitHub keys, JWTs, Telegram tokens. Environment variable values never reach the history. Passwords, cookies and command lines are never written to the log.
 - The service runs as root, because otherwise other users' processes are invisible, but with reduced capabilities: `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`. The filesystem is read-only for the service except `/var/lib/serversecuritygo`, and it runs with `NoNewPrivileges`, a system call filter, and the limits `MemoryMax=256M` and `CPUQuota=50%`.

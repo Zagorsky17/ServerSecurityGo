@@ -366,6 +366,59 @@ func ruleEmptyCmdline(p *model.Process, _ *Context) []model.Finding {
 	})
 }
 
+// ruleUnicodeControl: в имени, пути или аргументах есть невидимые символы
+// форматирования (model.InvisibleRune). Штатным программам они не нужны,
+// а символ «справа налево» или нулевой ширины меняет вид строки в ps и в
+// панели. Сами символы интерфейсы показывают как «�».
+func ruleUnicodeControl(p *model.Process, _ *Context) []model.Finding {
+	if p.Kernel {
+		return nil
+	}
+	var ev []string
+	check := func(field, s string) {
+		for _, r := range s {
+			if model.InvisibleRune(r) {
+				ev = append(ev, fmt.Sprintf("%s: символ U+%04X", field, r))
+				return
+			}
+		}
+	}
+	check("имя", p.Name)
+	check("путь", p.Exe)
+	for i, a := range p.Args {
+		if len(ev) >= 5 {
+			break
+		}
+		check(fmt.Sprintf("argv[%d]", i), a)
+	}
+	if len(ev) == 0 {
+		return nil
+	}
+	return one(model.Finding{
+		ID: "unicode_control", Title: "Невидимые символы Unicode в имени или командной строке", Category: model.CatMasquerade, Weight: 15,
+		Evidence:       ev,
+		Recommendation: fmt.Sprintf("Так маскируют настоящую команду. Посмотрите байты: od -c /proc/%d/comm; tr '\\0' ' ' < /proc/%d/cmdline | od -c | head.", p.PID, p.PID),
+	})
+}
+
+// ruleCmdlineTruncated: командная строка длиннее лимита сканера. Так
+// бывает у Java с длинным classpath, но огромная строка — и способ
+// спрятать команду за мусором или перегрузить мониторинг.
+func ruleCmdlineTruncated(p *model.Process, _ *Context) []model.Finding {
+	if !p.CmdlineTruncated {
+		return nil
+	}
+	w := 8
+	if progName(p) == "java" {
+		w = 2 // длинный classpath — обычное дело
+	}
+	return one(model.Finding{
+		ID: "cmdline_truncated", Title: "Очень длинная командная строка (прочитана не полностью)", Category: model.CatMasquerade, Weight: w,
+		Evidence:       []string{fmt.Sprintf("прочитано %d байт, остальное правила не проверяли", len(p.Cmdline))},
+		Recommendation: fmt.Sprintf("Посмотрите полную строку: tr '\\0' ' ' < /proc/%d/cmdline | less. Команду могли спрятать в конце, за длинным заполнением.", p.PID),
+	})
+}
+
 // ---------------------------------------------------------------------
 // Цепочки запуска
 // ---------------------------------------------------------------------

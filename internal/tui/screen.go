@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/netip"
 	"strings"
 	"unicode"
-	"unicode/utf8"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
 
 // Style — оформление символа. Цвета — номера палитры xterm-256
@@ -111,10 +114,14 @@ func (s *Screen) Set(x, y int, r rune, st Style) {
 }
 
 // Text выводит строку начиная с (x, y), не дальше maxW символов.
-// Возвращает число занятых колонок.
+// Возвращает число занятых колонок. IP-адреса внутри текста (заголовки,
+// события, признаки) выводятся цветом stAddr — см. комментарий к нему.
 func (s *Screen) Text(x, y, maxW int, text string, st Style) int {
+	rs := []rune(text)
+	addr := addrMask(rs)
+	ast := Style{FG: stAddr.FG, BG: st.BG, Bold: st.Bold, KeepFG: true}
 	used := 0
-	for _, r := range text {
+	for i, r := range rs {
 		w := runeWidth(r)
 		if w == 0 {
 			continue
@@ -122,13 +129,70 @@ func (s *Screen) Text(x, y, maxW int, text string, st Style) int {
 		if used+w > maxW {
 			break
 		}
-		s.Set(x+used, y, r, st)
+		cst := st
+		if addr != nil && addr[i] {
+			cst = ast
+		}
+		s.Set(x+used, y, r, cst)
 		if w == 2 {
-			s.Set(x+used+1, y, 0, st) // вторая половина широкого символа
+			s.Set(x+used+1, y, 0, cst) // вторая половина широкого символа
 		}
 		used += w
 	}
 	return used
+}
+
+// addrMask отмечает символы, входящие в IP-адреса (IPv4 и IPv6, порт после
+// двоеточия не отмечается). Возвращает nil, если адресов нет.
+func addrMask(rs []rune) []bool {
+	var mask []bool
+	isAddrRune := func(r rune) bool {
+		return r == '.' || r == ':' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+	}
+	for i := 0; i < len(rs); {
+		if !isAddrRune(rs[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(rs) && isAddrRune(rs[j]) {
+			j++
+		}
+		// Кусок должен быть отдельным словом: «go1.24.1.2» — не адрес.
+		if i == 0 || !unicode.IsLetter(rs[i-1]) && !unicode.IsDigit(rs[i-1]) {
+			if n := addrPrefix(string(rs[i:j])); n > 0 {
+				if mask == nil {
+					mask = make([]bool, len(rs))
+				}
+				for k := i; k < i+n; k++ {
+					mask[k] = true
+				}
+			}
+		}
+		i = j
+	}
+	return mask
+}
+
+// addrPrefix возвращает длину адреса в начале куска из символов адреса
+// (ASCII, поэтому байты = руны) или 0. Понимает «адрес», «адрес:порт» и
+// точку или двоеточие в конце (конец предложения, «адрес:»).
+func addrPrefix(w string) int {
+	w = strings.TrimRight(w, ".:")
+	// Только IPv4 или IPv6 с «::»/полными группами; время «12:32:08»,
+	// MAC-адрес и версии не проходят netip.ParseAddr.
+	if !strings.Contains(w, ".") && strings.Count(w, ":") < 2 {
+		return 0
+	}
+	if _, err := netip.ParseAddr(w); err == nil {
+		return len(w)
+	}
+	if k := strings.LastIndexByte(w, ':'); k > 0 && k < len(w)-1 && strings.Trim(w[k+1:], "0123456789") == "" {
+		if _, err := netip.ParseAddr(w[:k]); err == nil {
+			return k
+		}
+	}
+	return 0
 }
 
 // Fill закрашивает прямоугольник стилем (для выделения строки).
@@ -243,7 +307,7 @@ func (s *Screen) String() string {
 // латиница — 1.
 func runeWidth(r rune) int {
 	switch {
-	case r == 0 || r < 32 || (r >= 0x7f && r < 0xa0):
+	case r == 0 || r < 32 || (r >= 0x7f && r < 0xa0) || model.InvisibleRune(r):
 		return 0
 	case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
 		return 0
@@ -345,23 +409,8 @@ func splitWidth(s string, w int) (string, string) {
 	return s, ""
 }
 
-// sanitize убирает управляющие символы из строк, пришедших из системы:
-// имя процесса или cmdline могут содержать ESC-последовательности,
-// которые иначе выполнил бы терминал.
-func sanitize(s string) string {
-	if !strings.ContainsFunc(s, func(r rune) bool { return r < 32 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == utf8.RuneError }) {
-		return s
-	}
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == '\t' || r == '\n':
-			b.WriteRune(' ')
-		case r < 32 || r == 0x7f || (r >= 0x80 && r < 0xa0):
-			b.WriteRune('�')
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
+// sanitize убирает управляющие и невидимые символы из строк, пришедших из
+// системы: имя процесса или cmdline могут содержать ESC-последовательности,
+// которые иначе выполнил бы терминал, и символы направления текста,
+// меняющие вид строки (см. view.Printable).
+func sanitize(s string) string { return view.Printable(s) }

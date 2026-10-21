@@ -1,7 +1,10 @@
 package detect
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +29,55 @@ var persistPattern = regexp.MustCompile(`(?i)(curl|wget)\b[^\n|]*\|\s*(ba|da)?sh
 // штатных скриптах, поэтому даёт только LOW.
 var tempPattern = regexp.MustCompile(`(^|[\s;'"=])/(var/)?tmp/[^\s;'"]+`)
 
+// maxSystemFile — больше этого файлы проверок не читаются: настоящие
+// crontab, профили и authorized_keys намного меньше.
+const maxSystemFile = 1 << 20
+
+var (
+	errNotRegular = errors.New("не обычный файл")
+	errTooLarge   = errors.New("файл больше 1 МБ")
+)
+
+// readRegular безопасно читает файл проверки: только обычный файл и не
+// больше max байт. Сканер работает от root, а файлы в домашних каталогах
+// (authorized_keys) создаёт пользователь: FIFO на их месте повесил бы
+// сканирование навсегда, а симлинк на /dev/zero или огромный файл
+// исчерпал бы память службы. follow = false — симлинк не открывается
+// (для файлов, которыми управляет пользователь). Тип и размер берутся из
+// уже открытого дескриптора, поэтому подмена файла между проверкой и
+// чтением ничего не даёт.
+func readRegular(path string, max int64, follow bool) ([]byte, fs.FileInfo, error) {
+	f, err := openForRead(path, follow)
+	if err != nil {
+		// Открыть не удалось из-за типа (симлинк при follow = false):
+		// сообщаем об этом отдельно от «файла нет».
+		if fi, lerr := os.Lstat(path); lerr == nil && !fi.Mode().IsRegular() {
+			return nil, fi, errNotRegular
+		}
+		return nil, nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fi, errNotRegular
+	}
+	if fi.Size() > max {
+		return nil, fi, errTooLarge
+	}
+	// Файл мог вырасти после Stat — читаем не больше max+1 байт.
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, fi, err
+	}
+	if int64(len(data)) > max {
+		return nil, fi, errTooLarge
+	}
+	return data, fi, nil
+}
+
 // SystemChecks выполняет проверки относительно корня хоста hostRoot.
 func SystemChecks(hostRoot string, now time.Time, cfg Config) []model.SystemFinding {
 	if cfg.RecentDays <= 0 {
@@ -37,14 +89,16 @@ func SystemChecks(hostRoot string, now time.Time, cfg Config) []model.SystemFind
 
 	// 1. /etc/ld.so.preload — глобальная подгрузка библиотек во все
 	//    процессы. В штатной системе файла нет или он пустой.
-	if data, err := os.ReadFile(h("etc/ld.so.preload")); err == nil {
+	// Файл принадлежит root; по симлинку идём (динамический загрузчик тоже
+	// идёт), но без блокировки на FIFO и с ограничением размера.
+	if data, fi, err := readRegular(h("etc/ld.so.preload"), maxSystemFile, true); err == nil {
 		lines := meaningfulLines(string(data))
 		if len(lines) > 0 {
 			out = append(out, sys(model.Finding{
 				ID: "ld_so_preload", Title: "Глобальная подгрузка библиотек через /etc/ld.so.preload", Category: model.CatPersistence, Weight: 35, Strong: true,
 				Evidence:       append([]string{"файл не пустой, библиотеки подгружаются во ВСЕ процессы:"}, lines...),
 				Recommendation: "Штатно файл отсутствует. Проверьте каждую библиотеку: dpkg -S <путь>; sha256sum <путь>. Так работают многие руткиты пользовательского уровня.",
-			}, "/etc/ld.so.preload", model.RiskHigh, modTime(h("etc/ld.so.preload"))))
+			}, "/etc/ld.so.preload", model.RiskHigh, fi.ModTime()))
 		}
 	}
 
@@ -64,15 +118,12 @@ func SystemChecks(hostRoot string, now time.Time, cfg Config) []model.SystemFind
 			continue
 		}
 		seen[f] = true
-		fi, err := os.Lstat(f)
-		if err != nil || !fi.Mode().IsRegular() || fi.Size() > 1<<20 {
-			continue
-		}
-		rel := "/" + strings.TrimPrefix(strings.TrimPrefix(f, filepath.Clean(hostRoot)), "/")
-		data, err := os.ReadFile(f)
+		// Симлинки, каталоги и большие файлы пропускаются, как и раньше.
+		data, fi, err := readRegular(f, maxSystemFile, false)
 		if err != nil {
 			continue
 		}
+		rel := "/" + strings.TrimPrefix(strings.TrimPrefix(f, filepath.Clean(hostRoot)), "/")
 		var hits, tempHits []string
 		for i, line := range strings.Split(string(data), "\n") {
 			t := strings.TrimSpace(line)
@@ -116,12 +167,21 @@ func SystemChecks(hostRoot string, now time.Time, cfg Config) []model.SystemFind
 	homes, _ := filepath.Glob(h("home/*/.ssh/authorized_keys"))
 	keys = append(keys, homes...)
 	for _, f := range keys {
-		fi, err := os.Stat(f)
+		rel := "/" + strings.TrimPrefix(strings.TrimPrefix(f, filepath.Clean(hostRoot)), "/")
+		// Файл в домашнем каталоге контролирует его владелец: по симлинку
+		// не идём, FIFO и устройства не открываем, размер ограничен.
+		data, fi, err := readRegular(f, maxSystemFile, false)
+		if errors.Is(err, errNotRegular) || errors.Is(err, errTooLarge) {
+			out = append(out, sys(model.Finding{
+				ID: "ssh_keys_not_regular", Title: "Файл authorized_keys — не обычный файл или слишком большой", Category: model.CatPersistence, Weight: 10,
+				Evidence:       []string{describeUnusual(f, fi, err)},
+				Recommendation: "Файл не прочитан: сканер не открывает ссылки, FIFO и устройства в домашних каталогах. sshd по ссылке идёт — проверьте, куда она указывает и кто её создал (ls -la " + filepath.Dir(rel) + ").",
+			}, rel, model.RiskLow, fi.ModTime()))
+			continue
+		}
 		if err != nil {
 			continue
 		}
-		rel := "/" + strings.TrimPrefix(strings.TrimPrefix(f, filepath.Clean(hostRoot)), "/")
-		data, _ := os.ReadFile(f)
 		lines := meaningfulLines(string(data))
 		var cmdHits []string
 		for i, l := range lines {
@@ -151,11 +211,22 @@ func sys(f model.Finding, path string, r model.Risk, mt time.Time) model.SystemF
 	return model.SystemFinding{Finding: f, Path: path, Risk: r, ModTime: mt}
 }
 
-func modTime(p string) time.Time {
-	if fi, err := os.Stat(p); err == nil {
-		return fi.ModTime()
+// describeUnusual — пояснение, почему файл проверки не прочитан.
+func describeUnusual(path string, fi fs.FileInfo, err error) string {
+	switch {
+	case errors.Is(err, errTooLarge):
+		return fmt.Sprintf("размер %d байт — больше лимита 1 МБ", fi.Size())
+	case fi.Mode()&fs.ModeSymlink != 0:
+		target, _ := os.Readlink(path)
+		return "символическая ссылка → " + target
+	case fi.Mode()&fs.ModeNamedPipe != 0:
+		return "именованный канал (FIFO)"
+	case fi.Mode()&fs.ModeDevice != 0:
+		return "файл устройства"
+	case fi.IsDir():
+		return "каталог"
 	}
-	return time.Time{}
+	return "тип файла: " + fi.Mode().Type().String()
 }
 
 func meaningfulLines(s string) []string {
