@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -330,4 +331,114 @@ func keys(m map[string]model.SystemFinding) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// systemChecksTimeout запускает SystemChecks и падает, если проверки
+// зависли (FIFO вместо файла раньше блокировал сканирование навсегда).
+func systemChecksTimeout(t *testing.T, root string) []model.SystemFinding {
+	t.Helper()
+	done := make(chan []model.SystemFinding, 1)
+	go func() { done <- SystemChecks(root, time.Now(), DefaultConfig()) }()
+	select {
+	case res := <-done:
+		return res
+	case <-time.After(10 * time.Second):
+		t.Fatal("SystemChecks зависли")
+		return nil
+	}
+}
+
+// TestSystemChecksUnsafeKeys: authorized_keys в домашнем каталоге
+// контролирует пользователь. FIFO, симлинк на устройство или чужой файл и
+// огромный файл не читаются, а дают признак ssh_keys_not_regular.
+func TestSystemChecksUnsafeKeys(t *testing.T) {
+	root := t.TempDir()
+	mk := func(user string) string {
+		dir := filepath.Join(root, "home", user, ".ssh")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(dir, "authorized_keys")
+	}
+	if err := syscall.Mkfifo(mk("fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/zero", mk("zero")); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(root, "secret")
+	if err := os.WriteFile(secret, []byte("a\nb\nc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, mk("link")); err != nil {
+		t.Fatal(err)
+	}
+	big, err := os.Create(mk("big"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := big.Truncate(4 << 30); err != nil { // разреженный файл 4 ГБ
+		t.Fatal(err)
+	}
+	big.Close()
+	if err := os.WriteFile(mk("ok"), []byte("ssh-ed25519 AAAA user@host\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res := systemChecksTimeout(t, root)
+	got := map[string]string{}
+	for _, f := range res {
+		got[f.Path] += f.ID + " " + strings.Join(f.Evidence, "; ") + "|"
+	}
+	for user, want := range map[string]string{"fifo": "FIFO", "zero": "/dev/zero", "link": "ссылка", "big": "больше лимита"} {
+		g := got["/home/"+user+"/.ssh/authorized_keys"]
+		if !strings.Contains(g, "ssh_keys_not_regular") || !strings.Contains(g, want) {
+			t.Errorf("%s: %q, ожидался ssh_keys_not_regular с «%s»", user, g, want)
+		}
+		if strings.Contains(g, "ssh_keys_recent") {
+			t.Errorf("%s: файл прочитан (%q)", user, g)
+		}
+	}
+	// Обычный файл по-прежнему проверяется.
+	if g := got["/home/ok/.ssh/authorized_keys"]; !strings.Contains(g, "ssh_keys_recent") || !strings.Contains(g, "ключей: 1") {
+		t.Errorf("обычный authorized_keys: %q", g)
+	}
+}
+
+// TestSystemChecksPreloadSymlink: /etc/ld.so.preload принадлежит root, и
+// загрузчик идёт по ссылке — значит, и проверка должна. FIFO на его месте
+// не вешает сканирование.
+func TestSystemChecksPreloadSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib := filepath.Join(root, "hidden.cfg")
+	if err := os.WriteFile(lib, []byte("/lib/libhide.so\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(lib, filepath.Join(root, "etc/ld.so.preload")); err != nil {
+		t.Fatal(err)
+	}
+	if !hasSystem(systemChecksTimeout(t, root), "ld_so_preload") {
+		t.Error("ld.so.preload через симлинк не обнаружен")
+	}
+
+	root2 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root2, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(root2, "etc/ld.so.preload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	systemChecksTimeout(t, root2) // главное — не зависнуть
+}
+
+func hasSystem(res []model.SystemFinding, id string) bool {
+	for _, f := range res {
+		if f.ID == id {
+			return true
+		}
+	}
+	return false
 }
