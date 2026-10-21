@@ -290,3 +290,20 @@ func TestLoginIPv6Prefix(t *testing.T) {
 		t.Errorf("соседняя /64: %d", c)
 	}
 }
+
+// TestLimiterSweep: записи адресов, с которых больше не приходили,
+// удаляются, а не копятся бесконечно.
+func TestLimiterSweep(t *testing.T) {
+	l := newLoginLimiter()
+	t0 := time.Now()
+	for i := range 1000 {
+		l.begin(fmt.Sprintf("10.0.%d.%d", i/256, i%256), t0)
+	}
+	if len(l.fails) != 1000 {
+		t.Fatalf("записей %d", len(l.fails))
+	}
+	l.begin("192.0.2.1", t0.Add(l.window+time.Minute))
+	if len(l.fails) != 1 {
+		t.Errorf("после окна осталось %d записей", len(l.fails))
+	}
+}

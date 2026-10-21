@@ -145,6 +145,10 @@ type loginLimiter struct {
 	// verify ограничивает число одновременных проверок PBKDF2: поток
 	// запросов не займёт весь процессор и не задержит сканирование.
 	verify chan struct{}
+	// lastSweep — когда таблица целиком чистилась от устаревших записей.
+	// prune чистит только адрес текущего запроса, и записи адресов, с
+	// которых больше не приходили, копились бы бесконечно.
+	lastSweep time.Time
 }
 
 // maxParallelVerify — сколько паролей проверяется одновременно.
@@ -160,6 +164,12 @@ func newLoginLimiter() *loginLimiter {
 func (l *loginLimiter) begin(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if now.Sub(l.lastSweep) > l.window {
+		for k := range l.fails {
+			l.prune(k, now)
+		}
+		l.lastSweep = now
+	}
 	list := l.prune(key, now)
 	if len(list) >= l.maxFails {
 		return false
