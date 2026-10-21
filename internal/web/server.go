@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,6 +49,12 @@ type Options struct {
 	SecureCookie bool     // TLS включён (свой или на прокси)
 	AllowedHosts []string // дополнительные допустимые значения Host
 	Demo         bool
+	// CheckPeer — без пароля пускать только пользователей LocalUIDs: UID
+	// владельца клиентского сокета кладёт в контекст PeerContext. Иначе
+	// любой локальный пользователь (например, взломанный www-data) читал
+	// бы через 127.0.0.1 данные, которые служба собирает от root.
+	CheckPeer bool
+	LocalUIDs []int
 }
 
 // Server — HTTP-обработчик приложения.
@@ -124,7 +131,48 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "недопустимый заголовок Host (см. SSG_ALLOWED_HOSTS)", http.StatusMisdirectedRequest)
 		return
 	}
+	// /healthz открыт всем: он не раскрывает данных, а по нему скрипты
+	// проверяют запуск службы.
+	if s.opt.CheckPeer && !s.authEnabled() && !trusted(r) && r.URL.Path != "/healthz" {
+		if uid, ok := peerUID(r.Context()); !ok || !slices.Contains(s.opt.LocalUIDs, uid) {
+			who := "неизвестен"
+			if ok {
+				who = strconv.Itoa(uid)
+			}
+			s.opt.Logger.Warn("отклонён доступ к панели без пароля: пользователь не в SSG_LOCAL_UIDS", "uid", who, "remote", r.RemoteAddr)
+			http.Error(w, "без пароля панель доступна только root (SSG_LOCAL_UIDS); задайте пароль или подключитесь через SSH-туннель под root", http.StatusForbidden)
+			return
+		}
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// peerKey — UID владельца клиентского сокета в контексте соединения.
+type peerKey struct{}
+
+type peerInfo struct {
+	uid int
+	ok  bool
+}
+
+// PeerContext возвращает функцию для http.Server.ConnContext: при
+// подключении она определяет UID владельца клиентского сокета через
+// owner (procfs.FS.SocketOwner) и кладёт его в контекст соединения.
+func PeerContext(owner func(local, remote netip.AddrPort) (int, bool)) func(context.Context, net.Conn) context.Context {
+	return func(ctx context.Context, c net.Conn) context.Context {
+		var info peerInfo
+		client, err1 := netip.ParseAddrPort(c.RemoteAddr().String())
+		server, err2 := netip.ParseAddrPort(c.LocalAddr().String())
+		if err1 == nil && err2 == nil {
+			info.uid, info.ok = owner(client, server)
+		}
+		return context.WithValue(ctx, peerKey{}, info)
+	}
+}
+
+func peerUID(ctx context.Context) (int, bool) {
+	info, _ := ctx.Value(peerKey{}).(peerInfo)
+	return info.uid, info.ok
 }
 
 // trustedKey помечает запросы, пришедшие через локальный Unix-сокет.

@@ -146,6 +146,8 @@ ssh -L 8090:127.0.0.1:8090 root@<server-IP>
 
 If you connect with a dedicated key, add `-i ~/.ssh/<key> -o IdentitiesOnly=yes`.
 
+While no password is set, the service lets only root into the dashboard: for every connection to `127.0.0.1` it looks up the socket owner in `/proc/net/tcp`. A tunnel opened as root works, while other users on the server (for example, a compromised `www-data`) get error 403. If you log in over SSH as your own user, add its UID to `SSG_LOCAL_UIDS` (for example, `0,1000`) or set a password.
+
 ## Features
 
 **Data collection** reads `/proc` and related sources:
@@ -412,6 +414,7 @@ API (JSON, for automation): `GET /api/status`, `/api/processes`, `/api/process/{
 - Read-only: the code contains no kill calls, file deletion or network rule changes.
 - The terminal UI gets its data through a Unix socket with mode `600` in a `700` directory. The file permissions are the authorization, so only root can connect. Control characters from process names and command lines are never written to the terminal, so a process name cannot execute an escape sequence in your terminal.
 - By default the web dashboard listens only on `127.0.0.1`. A network address will not start without a password, `SSG_ALLOWED_HOSTS` and HTTPS.
+- Without a password, the dashboard is available only to users listed in `SSG_LOCAL_UIDS` (root by default): the owner of every loopback connection is looked up in `/proc/net/tcp`, and everyone else gets 403. Otherwise any local user could read what the service collects as root: paths, open files and sockets of other users' processes, and check results.
 - A `Host` header check protects against DNS rebinding, a CSRF token protects every POST request, and CSP forbids inline scripts. Process names and command lines are rendered as text only, so an attacker cannot inject HTML through the name of their process.
 - Secrets in command lines are masked **before** analysis, storage and output: `--password=…`, mysql `-pPASSWORD`, `user:pass@` in URLs, `*_TOKEN=…`, AWS and GitHub keys, JWTs, Telegram tokens. Environment variable values never reach the history. Passwords, cookies and command lines are never written to the log.
 - The service runs as root, because otherwise other users' processes are invisible, but with reduced capabilities: `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`. The filesystem is read-only for the service except `/var/lib/serversecuritygo`, and it runs with `NoNewPrivileges`, a system call filter, and the limits `MemoryMax=256M` and `CPUQuota=50%`.

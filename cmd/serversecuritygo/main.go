@@ -175,16 +175,25 @@ func cmdServe(args []string) error {
 	pfs.MaxFiles = cfg.MaxFiles
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log})
 
+	// Без пароля панель только для LocalUIDs: владельца подключения служба
+	// определяет по /proc/net/tcp (см. web.Options.CheckPeer).
+	noAuth := cfg.AuthPasswordHash == ""
 	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version, ListenAddr: cfg.ListenAddr, PasswordHash: cfg.AuthPasswordHash,
-		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts})
+		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts,
+		CheckPeer: noAuth, LocalUIDs: cfg.LocalUIDs})
+	var connCtx func(context.Context, net.Conn) context.Context
+	if noAuth {
+		connCtx = web.PeerContext(pfs.SocketOwner)
+	}
 	log.Info("запуск", "version", version, "listen", cfg.ListenAddr, "interval", cfg.ScanInterval.String(), "data", cfg.DataDir,
-		"auth", cfg.AuthPasswordHash != "", "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow))
-	return run(sc, srv, srv.LocalHandler(), cfg, log, func() { _ = hist.Flush(time.Now()) })
+		"auth", !noAuth, "local_uids", fmt.Sprint(cfg.LocalUIDs), "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow))
+	return run(sc, srv, srv.LocalHandler(), connCtx, cfg, log, func() { _ = hist.Flush(time.Now()) })
 }
 
 // run запускает сканер и HTTP-сервер и корректно останавливает их по
 // SIGINT/SIGTERM.
-func run(sc *scanner.Scanner, handler, local http.Handler, cfg config.Config, log *slog.Logger, onStop func()) error {
+// connCtx (может быть nil) — http.Server.ConnContext для TCP-панели.
+func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.Context, net.Conn) context.Context, cfg config.Config, log *slog.Logger, onStop func()) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -200,6 +209,7 @@ func run(sc *scanner.Scanner, handler, local http.Handler, cfg config.Config, lo
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		ConnContext:       connCtx,
 	}
 	if cfg.TLSEnabled() {
 		httpSrv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -518,7 +528,7 @@ func cmdDemo(args []string) error {
 	}
 	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (демо)", ListenAddr: cfg.ListenAddr, Demo: true})
 	log.Info("демо-режим: данные вымышленные", "dir", dir)
-	return run(sc, srv, nil, cfg, log, nil)
+	return run(sc, srv, nil, nil, cfg, log, nil)
 }
 
 func cmdHashPassword() error {
