@@ -198,6 +198,62 @@ func TestPasswordHash(t *testing.T) {
 	}
 }
 
+// TestSessionIdle: сессия закрывается после простоя, даже если общий срок
+// не истёк; запросы продлевают её.
+func TestSessionIdle(t *testing.T) {
+	st := newSessionStore(12 * time.Hour)
+	t0 := time.Now()
+	tok, _ := st.create(t0)
+	if _, ok := st.get(tok, t0.Add(90*time.Minute)); !ok {
+		t.Fatal("активная сессия закрыта")
+	}
+	if _, ok := st.get(tok, t0.Add(3*time.Hour)); !ok {
+		t.Fatal("запрос через 90 минут не продлил сессию")
+	}
+	if _, ok := st.get(tok, t0.Add(3*time.Hour+sessionIdle+time.Second)); ok {
+		t.Error("сессия пережила простой дольше sessionIdle")
+	}
+	// Абсолютный срок по-прежнему действует, даже при постоянной работе.
+	tok2, _ := st.create(t0)
+	for h := 1; h <= 12; h++ {
+		st.get(tok2, t0.Add(time.Duration(h)*time.Hour))
+	}
+	if _, ok := st.get(tok2, t0.Add(12*time.Hour+time.Minute)); ok {
+		t.Error("сессия пережила SSG_SESSION_TTL")
+	}
+	// Короткий TTL меньше простоя: простой не дольше TTL.
+	if newSessionStore(30*time.Minute).idle != 30*time.Minute {
+		t.Error("idle больше TTL")
+	}
+}
+
+func TestTokenEqual(t *testing.T) {
+	if !tokenEqual("abc", "abc") || tokenEqual("abd", "abc") || tokenEqual("", "") || tokenEqual("abc", "") {
+		t.Error("tokenEqual")
+	}
+}
+
+// TestHostCookie: при TLS cookie сессии с префиксом __Host- и вход работает.
+func TestHostCookie(t *testing.T) {
+	hash, _ := HashPassword("correct horse battery")
+	s := newTestServer(t, hash)
+	s.opt.SecureCookie = true
+	w := do(s, "POST", "/api/login", "127.0.0.1", `{"password":"correct horse battery"}`, nil)
+	var sess *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		sess = c
+	}
+	if sess == nil || sess.Name != "__Host-ssg_session" || !sess.Secure || sess.Path != "/" || sess.Domain != "" {
+		t.Fatalf("cookie: %+v", sess)
+	}
+	if w := do(s, "GET", "/api/status", "127.0.0.1", "", nil, sess); w.Code != 200 {
+		t.Errorf("с __Host- cookie: %d", w.Code)
+	}
+	if w := do(s, "GET", "/api/status", "127.0.0.1", "", nil, &http.Cookie{Name: "ssg_session", Value: sess.Value}); w.Code != 401 {
+		t.Errorf("cookie без префикса при TLS принята: %d", w.Code)
+	}
+}
+
 // fastHash — хеш с малым числом итераций, чтобы тесты входа шли быстро,
 // но проверка пароля всё ещё занимала заметное время.
 func fastHash(t *testing.T, password string, iter int) string {

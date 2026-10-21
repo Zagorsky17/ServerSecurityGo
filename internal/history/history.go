@@ -460,7 +460,11 @@ func (s *Store) EventsFor(key string) []model.Event {
 	return out
 }
 
-// Track возвращает копию трека.
+// Track возвращает копию трека. Срезы копируются тоже: Record
+// переписывает Findings того же трека на месте (t.Findings[:0] + append),
+// а копию веб-обработчик кодирует в JSON уже без блокировки — общий
+// массив дал бы гонку данных (в Go гонка на строках может закончиться
+// чтением «разорванной» строки и паникой).
 func (s *Store) Track(key string) (Track, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -468,7 +472,10 @@ func (s *Store) Track(key string) (Track, bool) {
 	if !ok {
 		return Track{}, false
 	}
-	return *t, true
+	c := *t
+	c.Findings = slices.Clone(t.Findings)
+	c.Listen = slices.Clone(t.Listen)
+	return c, true
 }
 
 func truncate(s string, n int) string {

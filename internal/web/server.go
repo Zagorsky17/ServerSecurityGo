@@ -16,6 +16,7 @@ package web
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"io/fs"
@@ -37,6 +38,16 @@ import (
 var staticFS embed.FS
 
 const cookieName = "ssg_session"
+
+// cookie — имя cookie сессии. При TLS — с префиксом __Host-: браузер
+// примет её только с Secure, Path=/ и без Domain, поэтому соседний
+// поддомен или страница по HTTP не подменят и не перехватят сессию.
+func (s *Server) cookie() string {
+	if s.opt.SecureCookie {
+		return "__Host-" + cookieName
+	}
+	return cookieName
+}
 
 // Options — параметры веб-сервера.
 type Options struct {
@@ -212,7 +223,7 @@ func (s *Server) session(r *http.Request) (session, bool) {
 	if !s.authEnabled() || trusted(r) {
 		return session{csrf: s.noAuthCSRF}, true
 	}
-	c, err := r.Cookie(cookieName)
+	c, err := r.Cookie(s.cookie())
 	if err != nil {
 		return session{}, false
 	}
@@ -249,12 +260,19 @@ func (s *Server) api(h func(w http.ResponseWriter, r *http.Request, sess session
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "требуется вход"})
 			return
 		}
-		if r.Method != http.MethodGet && !trusted(r) && r.Header.Get("X-CSRF-Token") != sess.csrf {
+		if r.Method != http.MethodGet && !trusted(r) && !tokenEqual(r.Header.Get("X-CSRF-Token"), sess.csrf) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "неверный CSRF-токен, обновите страницу"})
 			return
 		}
 		h(w, r, sess)
 	}
+}
+
+// tokenEqual сравнивает CSRF-токены за постоянное время: обычное
+// сравнение строк выходит на первом несовпавшем байте, и по времени
+// ответа токен можно было бы подбирать посимвольно.
+func tokenEqual(got, want string) bool {
+	return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -340,7 +358,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.limiter.reset(key)
 	tok, _ := s.sessions.create(now)
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: tok, Path: "/", HttpOnly: true, Secure: s.opt.SecureCookie,
+	http.SetCookie(w, &http.Cookie{Name: s.cookie(), Value: tok, Path: "/", HttpOnly: true, Secure: s.opt.SecureCookie,
 		SameSite: http.SameSiteStrictMode, MaxAge: int(s.opt.SessionTTL.Seconds())})
 	s.opt.Logger.Info("успешный вход", "ip", ip)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -348,12 +366,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.session(r)
-	if ok && s.authEnabled() && r.Header.Get("X-CSRF-Token") == sess.csrf {
-		if c, err := r.Cookie(cookieName); err == nil {
+	if ok && s.authEnabled() && tokenEqual(r.Header.Get("X-CSRF-Token"), sess.csrf) {
+		if c, err := r.Cookie(s.cookie()); err == nil {
 			s.sessions.delete(c.Value)
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.opt.SecureCookie, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: s.cookie(), Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.opt.SecureCookie, SameSite: http.SameSiteStrictMode})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

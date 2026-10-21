@@ -1,6 +1,8 @@
 package history
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -156,5 +158,35 @@ func TestRetention(t *testing.T) {
 	s.Record(now.Add(2*time.Hour), nil, nil) // прошло больше retention
 	if _, ok := s.Track("old"); ok {
 		t.Error("старый трек не удалён")
+	}
+}
+
+// TestTrackCopyRace: копия трека не делит срезы с хранилищем. Раньше
+// Record переписывал Findings на месте, а копию в это время кодировали в
+// JSON — детектор гонок (go test -race) ловил это.
+func TestTrackCopyRace(t *testing.T) {
+	s, _ := Open(Options{})
+	now := time.Now()
+	p := proc(1, "k", now, 0)
+	p.Findings = []model.Finding{{ID: "a", Category: model.CatLocation}, {ID: "b", Category: model.CatLocation}}
+	s.Observe(now, []*model.Process{p})
+	s.Record(now, []*model.Process{p}, nil)
+	tr, _ := s.Track("k")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 200 {
+			p.Findings = []model.Finding{{ID: fmt.Sprintf("c%d", i), Category: model.CatLocation}, {ID: "d", Category: model.CatLocation}}
+			s.Record(now.Add(time.Duration(i)*time.Second), []*model.Process{p}, nil)
+		}
+	}()
+	for range 200 {
+		if _, err := json.Marshal(tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+	if tr.Findings[0] != "a" || tr.Findings[1] != "b" {
+		t.Errorf("копия изменилась вместе с хранилищем: %v", tr.Findings)
 	}
 }
