@@ -382,6 +382,21 @@ func TestAddrSegs(t *testing.T) {
 	}
 }
 
+// TestInvisibleInScreen: символы направления текста и нулевой ширины из
+// имени процесса не попадают в терминал.
+func TestInvisibleInScreen(t *testing.T) {
+	s := newScreen(40, 1)
+	s.Text(0, 0, 40, "ss​hd ‮txt.exe", stNormal)
+	var out bytes.Buffer
+	_ = s.Flush(&out)
+	if strings.ContainsAny(out.String(), "​‮") {
+		t.Errorf("невидимый символ прошёл в терминал: %q", out.String())
+	}
+	if got := sanitize("ss​hd"); got != "ss�hd" {
+		t.Errorf("sanitize: %q", got)
+	}
+}
+
 // TestAddrMask: IP-адреса в свободном тексте (события, заголовки) красятся
 // без порта, а похожие на них время, версии и MAC — нет.
 func TestAddrMask(t *testing.T) {

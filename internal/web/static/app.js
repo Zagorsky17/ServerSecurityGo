@@ -9,6 +9,12 @@
 // Утилиты
 // ---------------------------------------------------------------------
 
+// Невидимые символы форматирования (см. model.InvisibleRune): «справа
+// налево» U+202E и символы нулевой ширины позволили бы процессу показать в
+// панели не ту команду, что он выполняет. Заменяются видимым «�».
+const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u061C]/g;
+const vis = (s) => String(s).replace(INVISIBLE, '\uFFFD');
+
 /** Создаёт DOM-элемент. attrs: class, title, data-*, обработчики on*. */
 function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
@@ -17,12 +23,12 @@ function h(tag, attrs, ...children) {
       if (v === undefined || v === null || v === false) continue;
       if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
       else if (k === 'class') el.className = v;
-      else el.setAttribute(k, v === true ? '' : String(v));
+      else el.setAttribute(k, v === true ? '' : vis(v));
     }
   }
   for (const c of children.flat()) {
     if (c === undefined || c === null || c === false) continue;
-    el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    el.append(c instanceof Node ? c : document.createTextNode(vis(c)));
   }
   return el;
 }

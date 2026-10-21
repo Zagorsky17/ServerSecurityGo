@@ -77,6 +77,7 @@ var Rules = []Rule{
 	ruleUnusualName,
 	ruleEmptyCmdline,
 	ruleCmdlineTruncated,
+	ruleUnicodeControl,
 	ruleWebShellChain,
 	ruleSchedulerChain,
 	ruleStdioSocket,
@@ -300,6 +301,14 @@ func (cfg Config) allowed(p *model.Process, ruleID string) bool {
 		if a.Name != "" && !globMatch(a.Name, p.Name) {
 			continue
 		}
+		// Имя (comm) процесс меняет сам (prctl, exec -a): правило только по
+		// имени подавило бы признаки майнера, назвавшегося «node». Поэтому
+		// без exe имя должно совпасть и с именем исполняемого файла (comm
+		// обрезается до 15 байт — сравниваем и с обрезанным); exe не
+		// прочитан — правило не срабатывает.
+		if a.Exe == "" && a.Name != "" && !nameMatchesExe(a.Name, p.Exe) {
+			continue
+		}
 		if a.User != "" && a.User != p.User {
 			continue
 		}
@@ -309,6 +318,35 @@ func (cfg Config) allowed(p *model.Process, ruleID string) bool {
 		return true
 	}
 	return false
+}
+
+func nameMatchesExe(pattern, exe string) bool {
+	if exe == "" {
+		return false
+	}
+	base := filepath.Base(exe)
+	return globMatch(pattern, base) || (len(base) > 15 && globMatch(pattern, base[:15]))
+}
+
+// WeakAllowRules описывает правила allowlist, которые легко обойти: без
+// exe (имя и пользователь не привязаны к исполняемому файлу). Служба
+// пишет их в журнал при запуске.
+func WeakAllowRules(rules []AllowRule) []string {
+	var out []string
+	for i, a := range rules {
+		if a.Exe != "" || (a.Name == "" && a.User == "") {
+			continue
+		}
+		what := fmt.Sprintf("№%d (name=%q user=%q)", i+1, a.Name, a.User)
+		switch {
+		case a.Name == "":
+			what += ": только пользователь — подавляет признаки всего, что он запустит"
+		default:
+			what += ": без exe — сработает, только если имя совпадёт и с именем исполняемого файла; надёжнее указать exe"
+		}
+		out = append(out, what)
+	}
+	return out
 }
 
 func globMatch(pattern, s string) bool {

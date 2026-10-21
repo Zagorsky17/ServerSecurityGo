@@ -7,7 +7,9 @@ import (
 	"net/netip"
 	"strings"
 	"unicode"
-	"unicode/utf8"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
 
 // Style — оформление символа. Цвета — номера палитры xterm-256
@@ -305,7 +307,7 @@ func (s *Screen) String() string {
 // латиница — 1.
 func runeWidth(r rune) int {
 	switch {
-	case r == 0 || r < 32 || (r >= 0x7f && r < 0xa0):
+	case r == 0 || r < 32 || (r >= 0x7f && r < 0xa0) || model.InvisibleRune(r):
 		return 0
 	case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
 		return 0
@@ -407,23 +409,8 @@ func splitWidth(s string, w int) (string, string) {
 	return s, ""
 }
 
-// sanitize убирает управляющие символы из строк, пришедших из системы:
-// имя процесса или cmdline могут содержать ESC-последовательности,
-// которые иначе выполнил бы терминал.
-func sanitize(s string) string {
-	if !strings.ContainsFunc(s, func(r rune) bool { return r < 32 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == utf8.RuneError }) {
-		return s
-	}
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == '\t' || r == '\n':
-			b.WriteRune(' ')
-		case r < 32 || r == 0x7f || (r >= 0x80 && r < 0xa0):
-			b.WriteRune('�')
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
+// sanitize убирает управляющие и невидимые символы из строк, пришедших из
+// системы: имя процесса или cmdline могут содержать ESC-последовательности,
+// которые иначе выполнил бы терминал, и символы направления текста,
+// меняющие вид строки (см. view.Printable).
+func sanitize(s string) string { return view.Printable(s) }
