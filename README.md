@@ -316,6 +316,7 @@ How updates are protected against failures:
 - before updating, the history, `.env` and `allowlist.json` are archived to `/var/backups/serversecuritygo`, keeping the last 5 archives;
 - the new binary is checked (`version`), and the old one is kept as `bin/serversecuritygo.prev`;
 - after restart `/healthz` is checked; if the service does not come up, the previous version is restored automatically.
+- once the sources are switched, the update is finished by the script from the new version, so its new steps take effect right away. The exception is updating from v0.1.x: the new script did not run there yet, so create the link `/usr/local/bin/serversecuritygo` manually (`ln -sfn /opt/serversecuritygo/bin/serversecuritygo /usr/local/bin/serversecuritygo`) or run `update.sh` again.
 
 Backups are not deleted, even with `--purge`.
 

@@ -9,6 +9,14 @@
 # проверка нового бинарника → замена с сохранением предыдущего (.prev) →
 # перезапуск → проверка /healthz. Если служба не поднялась, предыдущая
 # версия возвращается автоматически.
+#
+# Работа идёт в два этапа. Первый (этот файл старой версии) делает резервную
+# копию и переключает исходники на новую версию. Второй выполняется уже
+# скриптом новой версии: после git checkout скрипт перезапускает себя через
+# exec с внутренним флагом --apply. Без этого bash дочитывал бы старую копию
+# файла, и шаги, добавленные в новой версии (например, ссылка в
+# /usr/local/bin), срабатывали бы только при следующем обновлении.
+# Признак поддержки второго этапа (ищется в файле новой версии): SSG_UPDATE_APPLY_STAGE
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=lib.sh
@@ -17,26 +25,41 @@ require_root
 require_systemd
 [ -d .git ] || die "$(pwd) — не git-репозиторий; переустановите по README"
 
-TARGET="${1:-}"
-git fetch -q --tags origin
-if [ -z "$TARGET" ]; then
-  TARGET="$(latest_tag)"
-  [ -n "$TARGET" ] || TARGET="main"
-fi
-
-PREV_REF="$(git rev-parse HEAD)"
-CURRENT="$(bin/serversecuritygo version 2>/dev/null || echo 'нет')"
-log "Текущая версия: $CURRENT; обновление до: $TARGET"
-
-backup_state
-
-if [ "$TARGET" = "main" ]; then
-  git checkout -q main
-  git pull -q --ff-only origin main
-  TAG=""
+if [ "${1:-}" = "--apply" ]; then
+  # Второй этап: исходники уже переключены первым этапом.
+  # $2 — тег релиза (пусто для main), $3 — коммит до обновления для отката.
+  TAG="${2:-}"
+  PREV_REF="${3:-}"
+  [ -n "$PREV_REF" ] || die "--apply — внутренний флаг update.sh, запускайте скрипт без него"
 else
-  git -c advice.detachedHead=false checkout -q "refs/tags/$TARGET" || die "версия $TARGET не найдена"
-  TAG="$TARGET"
+  TARGET="${1:-}"
+  git fetch -q --tags origin
+  if [ -z "$TARGET" ]; then
+    TARGET="$(latest_tag)"
+    [ -n "$TARGET" ] || TARGET="main"
+  fi
+
+  PREV_REF="$(git rev-parse HEAD)"
+  CURRENT="$(bin/serversecuritygo version 2>/dev/null || echo 'нет')"
+  log "Текущая версия: $CURRENT; обновление до: $TARGET"
+
+  backup_state
+
+  if [ "$TARGET" = "main" ]; then
+    git checkout -q main
+    git pull -q --ff-only origin main
+    TAG=""
+  else
+    git -c advice.detachedHead=false checkout -q "refs/tags/$TARGET" || die "версия $TARGET не найдена"
+    TAG="$TARGET"
+  fi
+
+  # Продолжаем скриптом новой версии. Версии без признака SSG_UPDATE_APPLY_STAGE
+  # (v0.2.0 и старше) флага --apply не знают — при переходе на них
+  # доделываем обновление этим файлом с уже подключённым lib.sh.
+  if grep -q 'SSG_UPDATE_APPLY_STAGE' scripts/update.sh; then
+    exec bash ./scripts/update.sh --apply "$TAG" "$PREV_REF"
+  fi
 fi
 
 obtain_binary bin/serversecuritygo.new "$TAG"
