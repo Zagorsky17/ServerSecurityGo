@@ -396,3 +396,73 @@ func TestInvisibleInScreen(t *testing.T) {
 		t.Errorf("sanitize: %q", got)
 	}
 }
+
+// TestAddrMask: IP-адреса в свободном тексте (события, заголовки) красятся
+// без порта, а похожие на них время, версии и MAC — нет.
+func TestAddrMask(t *testing.T) {
+	cases := []struct{ text, want string }{
+		{"соединение с 198.51.100.77:3333.", "198.51.100.77"},
+		{"Сокет 0.0.0.0:80", "0.0.0.0"},
+		{"порт :::22 и ::1", "::|::1"},
+		{"[2001:db8::1]:443", "2001:db8::1"},
+		{"адрес 10.0.0.1, далее", "10.0.0.1"},
+		{"12:32:08 02.01 15:04:05", ""},
+		{"go1.24.13 v0.2.2 Ubuntu 24.04", ""},
+		{"aa:bb:cc:dd:ee:ff net:[4026531840]", ""},
+		{"ver1.2.3.4", ""},
+		// Формат события listen из history.listenList.
+		{"Начал слушать tcp 127.0.0.1:8090", "127.0.0.1"},
+		{"Начал слушать tcp6 :::2222", "::"},
+	}
+	for _, c := range cases {
+		rs := []rune(c.text)
+		m := addrMask(rs)
+		var got []string
+		cur := ""
+		for i, r := range rs {
+			if m != nil && m[i] {
+				cur += string(r)
+			} else if cur != "" {
+				got = append(got, cur)
+				cur = ""
+			}
+		}
+		if cur != "" {
+			got = append(got, cur)
+		}
+		if g := strings.Join(got, "|"); g != c.want {
+			t.Errorf("%q: адреса %q, ожидалось %q", c.text, g, c.want)
+		}
+	}
+}
+
+// TestAddrInTitle: адрес в заголовке панели подробностей тоже цвета stAddr.
+func TestAddrInTitle(t *testing.T) {
+	a, _ := newTestApp(t, 160, 45)
+	press(a, r('4'))
+	a.render()
+	sk := a.socks[0]
+	cs := cellsAt(a, fmt.Sprintf("Сокет %s:%d", sk.LocalAddr, sk.LocalPort))
+	if cs == nil {
+		t.Fatal("заголовок сокета не найден")
+	}
+	off := len([]rune("Сокет "))
+	if cs[off].st.FG != stAddr.FG || cs[0].st.FG == stAddr.FG {
+		t.Errorf("цвета заголовка: «С» %d, адрес %d", cs[0].st.FG, cs[off].st.FG)
+	}
+}
+
+// TestAddrInHistory: адрес в тексте события в панели «История».
+func TestAddrInHistory(t *testing.T) {
+	a, _ := newTestApp(t, 160, 45)
+	press(a, r('5'))
+	a.events[0].Details = "Начал слушать tcp 203.0.113.5:8443"
+	a.render()
+	cs := cellsAt(a, "203.0.113.5:8443")
+	if cs == nil {
+		t.Fatal("событие не найдено на экране")
+	}
+	if cs[0].st.FG != stAddr.FG || cs[len("203.0.113.5")].st.FG == stAddr.FG {
+		t.Errorf("цвета: адрес %d, порт %d", cs[0].st.FG, cs[len("203.0.113.5")].st.FG)
+	}
+}

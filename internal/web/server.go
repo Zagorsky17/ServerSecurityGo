@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,9 +46,18 @@ type Options struct {
 	ListenAddr   string
 	PasswordHash string // пусто — без авторизации (только для loopback)
 	SessionTTL   time.Duration
-	SecureCookie bool     // TLS включён (свой или на прокси)
+	SecureCookie bool // TLS включён (свой или на прокси)
+	// TrustProxy — панель за reverse proxy (SSG_TRUST_PROXY_TLS): адрес
+	// клиента для ограничения попыток входа берётся из X-Forwarded-For.
+	TrustProxy   bool
 	AllowedHosts []string // дополнительные допустимые значения Host
 	Demo         bool
+	// CheckPeer — без пароля пускать только пользователей LocalUIDs: UID
+	// владельца клиентского сокета кладёт в контекст PeerContext. Иначе
+	// любой локальный пользователь (например, взломанный www-data) читал
+	// бы через 127.0.0.1 данные, которые служба собирает от root.
+	CheckPeer bool
+	LocalUIDs []int
 }
 
 // Server — HTTP-обработчик приложения.
@@ -124,7 +134,48 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "недопустимый заголовок Host (см. SSG_ALLOWED_HOSTS)", http.StatusMisdirectedRequest)
 		return
 	}
+	// /healthz открыт всем: он не раскрывает данных, а по нему скрипты
+	// проверяют запуск службы.
+	if s.opt.CheckPeer && !s.authEnabled() && !trusted(r) && r.URL.Path != "/healthz" {
+		if uid, ok := peerUID(r.Context()); !ok || !slices.Contains(s.opt.LocalUIDs, uid) {
+			who := "неизвестен"
+			if ok {
+				who = strconv.Itoa(uid)
+			}
+			s.opt.Logger.Warn("отклонён доступ к панели без пароля: пользователь не в SSG_LOCAL_UIDS", "uid", who, "remote", r.RemoteAddr)
+			http.Error(w, "без пароля панель доступна только root (SSG_LOCAL_UIDS); задайте пароль или подключитесь через SSH-туннель под root", http.StatusForbidden)
+			return
+		}
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// peerKey — UID владельца клиентского сокета в контексте соединения.
+type peerKey struct{}
+
+type peerInfo struct {
+	uid int
+	ok  bool
+}
+
+// PeerContext возвращает функцию для http.Server.ConnContext: при
+// подключении она определяет UID владельца клиентского сокета через
+// owner (procfs.FS.SocketOwner) и кладёт его в контекст соединения.
+func PeerContext(owner func(local, remote netip.AddrPort) (int, bool)) func(context.Context, net.Conn) context.Context {
+	return func(ctx context.Context, c net.Conn) context.Context {
+		var info peerInfo
+		client, err1 := netip.ParseAddrPort(c.RemoteAddr().String())
+		server, err2 := netip.ParseAddrPort(c.LocalAddr().String())
+		if err1 == nil && err2 == nil {
+			info.uid, info.ok = owner(client, server)
+		}
+		return context.WithValue(ctx, peerKey{}, info)
+	}
+}
+
+func peerUID(ctx context.Context) (int, bool) {
+	info, _ := ctx.Value(peerKey{}).(peerInfo)
+	return info.uid, info.ok
 }
 
 // trustedKey помечает запросы, пришедшие через локальный Unix-сокет.
@@ -215,11 +266,43 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = enc.Encode(v)
 }
 
-func clientIP(r *http.Request) string {
+// clientIP — адрес клиента для ограничения попыток входа. За reverse
+// proxy все запросы приходят с его адреса, и общий счётчик позволял
+// любому заблокировать вход администратору пятью неверными паролями.
+// Поэтому при trustProxy и подключении с loopback берётся крайний правый
+// адрес X-Forwarded-For — его дописывает сам прокси, подделать его
+// клиент не может. Без прокси заголовок игнорируется.
+func clientIP(r *http.Request, trustProxy bool) string {
+	host := r.RemoteAddr
 	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return h
+		host = h
 	}
-	return r.RemoteAddr
+	if ip, err := netip.ParseAddr(host); trustProxy && err == nil && ip.IsLoopback() {
+		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+			parts := strings.Split(xff[len(xff)-1], ",")
+			if fwd, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil {
+				host = fwd.String()
+			}
+		}
+	}
+	return host
+}
+
+// limitKey — ключ счётчика попыток: IPv4 целиком, IPv6 — сеть /64
+// (провайдер выдаёт клиенту целую /64, и смена адреса внутри неё не
+// должна сбрасывать лимит).
+func limitKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	a = a.Unmap()
+	if a.Is6() {
+		if p, err := a.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
+	return a.String()
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -227,13 +310,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	ip := clientIP(r)
+	ip := clientIP(r, s.opt.TrustProxy)
+	key := limitKey(ip)
 	now := time.Now()
-	if s.limiter.blocked(ip, now) {
-		s.opt.Logger.Warn("вход заблокирован: слишком много попыток", "ip", ip)
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "слишком много неудачных попыток, повторите через 15 минут"})
-		return
-	}
 	var req struct {
 		Password string `json:"password"`
 	}
@@ -242,14 +321,24 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный запрос"})
 		return
 	}
-	if !VerifyPassword(s.opt.PasswordHash, req.Password) {
-		s.limiter.fail(ip, now)
+	if !s.limiter.begin(key, now) {
+		s.opt.Logger.Warn("вход заблокирован: слишком много попыток", "ip", ip)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "слишком много неудачных попыток, повторите через 15 минут"})
+		return
+	}
+	if !s.limiter.acquire(3 * time.Second) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "сервер занят проверкой других попыток входа, повторите через несколько секунд"})
+		return
+	}
+	ok := VerifyPassword(s.opt.PasswordHash, req.Password)
+	s.limiter.release()
+	if !ok {
 		// Пароль в журнал не пишем никогда — только факт и адрес.
 		s.opt.Logger.Warn("неудачная попытка входа", "ip", ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "неверный пароль"})
 		return
 	}
-	s.limiter.reset(ip)
+	s.limiter.reset(key)
 	tok, _ := s.sessions.create(now)
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: tok, Path: "/", HttpOnly: true, Secure: s.opt.SecureCookie,
 		SameSite: http.SameSiteStrictMode, MaxAge: int(s.opt.SessionTTL.Seconds())})

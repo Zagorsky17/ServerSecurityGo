@@ -146,6 +146,8 @@ ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>
 
 Если вы подключаетесь по отдельному ключу, добавьте `-i ~/.ssh/<ключ> -o IdentitiesOnly=yes`.
 
+Пока пароль не задан, служба пускает в панель только root: для каждого подключения к `127.0.0.1` она смотрит владельца сокета в `/proc/net/tcp`. Туннель под root работает, а другие пользователи сервера (например, взломанный `www-data`) получат ошибку 403. Если вы заходите по SSH под своим пользователем, добавьте его UID в `SSG_LOCAL_UIDS` (например, `0,1000`) или задайте пароль.
+
 ## Возможности
 
 **Сбор данных** идёт из `/proc` и связанных источников:
@@ -214,7 +216,7 @@ ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>
 | Недавно изменён `authorized_keys` | недавнее изменение ключей SSH | LOW (системная) |
 
 Полный список правил с идентификаторами для allowlist:
-`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. Системные проверки: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`.
+`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. Системные проверки: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`.
 
 ## Ограничения обнаружения
 
@@ -288,11 +290,14 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8090;
         proxy_set_header Host 127.0.0.1;
+        # Адрес клиента для ограничения попыток входа: без него все
+        # клиенты выглядят как 127.0.0.1 и делят один счётчик.
+        proxy_set_header X-Forwarded-For $remote_addr;
     }
 }
 ```
 
-Пароль хранится только в виде хеша PBKDF2-SHA256 (600 000 итераций). После пяти неудачных попыток вход с этого адреса блокируется на 15 минут. Сессии живут в памяти, cookie помечены `HttpOnly`, `SameSite=Strict` и `Secure`.
+Пароль хранится только в виде хеша PBKDF2-SHA256 (600 000 итераций). После пяти неудачных попыток вход с этого адреса (для IPv6 — с сети /64) блокируется на 15 минут. Попытка учитывается до проверки пароля, поэтому параллельные запросы лимит не обходят, а одновременно проверяется не больше двух паролей. За reverse proxy адрес клиента берётся из `X-Forwarded-For`, который выставляет прокси (см. пример выше). Сессии живут в памяти, cookie помечены `HttpOnly`, `SameSite=Strict` и `Secure`.
 
 Дополнительно можно ограничить доступ файрволом по IP, например `ufw allow from <ваш IP> to any port 443`.
 
@@ -410,6 +415,7 @@ API (JSON, для автоматизации): `GET /api/status`, `/api/processe
 - Только чтение: в коде нет kill, удаления файлов или изменения сетевых правил.
 - Терминальный интерфейс получает данные через Unix-сокет с правами `600` в каталоге `700`. Права файла и есть авторизация, поэтому подключиться может только root. Управляющие символы из имён процессов и командных строк в терминал не выводятся, так что имя процесса не может выполнить ESC-последовательность в вашем терминале.
 - Веб-панель по умолчанию слушает только `127.0.0.1`. Сетевой адрес без пароля, `SSG_ALLOWED_HOSTS` и HTTPS не запустится.
+- Без пароля панель доступна только пользователям из `SSG_LOCAL_UIDS` (по умолчанию root): владелец каждого подключения к loopback определяется по `/proc/net/tcp`, остальные получают 403. Иначе любой локальный пользователь мог бы читать то, что служба собирает от root: пути, открытые файлы и сокеты чужих процессов, результаты проверок.
 - Проверка заголовка `Host` защищает от DNS rebinding, CSRF-токен защищает все POST-запросы, CSP запрещает inline-скрипты. Имена и командные строки процессов выводятся только как текст, поэтому злоумышленник не может внедрить HTML через имя своего процесса.
 - Секреты в командных строках (`--password=…`, `-pПАРОЛЬ` у mysql, `user:pass@` в URL, `*_TOKEN=…`, ключи AWS и GitHub, JWT, токены Telegram) маскируются **до** анализа, сохранения и вывода. Значения переменных окружения не читаются в историю вообще. В журнал не пишутся пароли, cookie и командные строки.
 - Служба работает от root, потому что без этого нельзя увидеть процессы других пользователей, но с урезанными возможностями: `CAP_SYS_PTRACE` и `CAP_DAC_READ_SEARCH`. Файловая система для службы только на чтение, кроме `/var/lib/serversecuritygo`; включены `NoNewPrivileges`, фильтр системных вызовов, лимиты `MemoryMax=256M` и `CPUQuota=50%`.
