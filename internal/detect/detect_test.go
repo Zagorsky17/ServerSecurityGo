@@ -331,3 +331,30 @@ func keys(m map[string]model.SystemFinding) []string {
 	slices.Sort(out)
 	return out
 }
+
+// findingByID анализирует процесс и возвращает признак с этим ID.
+func findingByID(p *model.Process, id string) *model.Finding {
+	analyze(p)
+	for i := range p.Findings {
+		if p.Findings[i].ID == id {
+			return &p.Findings[i]
+		}
+	}
+	return nil
+}
+
+func TestCmdlineTruncated(t *testing.T) {
+	p := &model.Process{PID: 42, Name: "bash", Exe: "/usr/bin/bash", Args: []string{"bash", "-c", "x"}, Cmdline: "bash -c x", CmdlineTruncated: true}
+	f := findingByID(p, "cmdline_truncated")
+	if f == nil || f.Weight != 8 {
+		t.Fatalf("признак: %+v", f)
+	}
+	j := &model.Process{PID: 43, Name: "java", Exe: "/usr/bin/java", Args: []string{"java", "-cp", "a.jar"}, Cmdline: "java -cp a.jar", CmdlineTruncated: true}
+	if f := findingByID(j, "cmdline_truncated"); f == nil || f.Weight != 2 {
+		t.Fatalf("java: %+v", f)
+	}
+	p.CmdlineTruncated = false
+	if findingByID(p, "cmdline_truncated") != nil {
+		t.Error("признак без обрезки")
+	}
+}

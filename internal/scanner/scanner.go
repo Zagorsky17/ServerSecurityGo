@@ -148,6 +148,21 @@ func pidMap(procs []*model.Process) map[int]*model.Process {
 	return m
 }
 
+// Бюджет одного сканирования на данные, которые задают сами процессы.
+// Лимиты одного процесса (procfs.Limits) не спасают от тысяч процессов:
+// когда общий бюджет исчерпан, остальные читаются с минимальными
+// лимитами. Обрезка командной строки видна как признак cmdline_truncated.
+// Переменные, а не константы — чтобы тест мог уменьшить бюджет.
+var (
+	// Обычному серверу хватает десятков КБ; 2 МБ — запас для Java и
+	// контейнеров. Правила и маскирование секретов проходят по строке
+	// регулярными выражениями, и бюджет ограничивает ещё и время
+	// сканирования (≈1 с на 2 МБ).
+	scanCmdlineBudget = 2 << 20 // байт командных строк на сканирование
+	minCmdline        = 512     // столько читается и после исчерпания бюджета
+	scanFilesBudget   = 50_000  // записей Process.Files на сканирование
+)
+
 // collect читает все процессы и сокеты.
 func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 	fs := s.opt.FS
@@ -167,8 +182,13 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 
 	raws := make([]*procfs.Raw, 0, len(pids))
 	readErrors := 0
+	cmdBudget, filesBudget := scanCmdlineBudget, scanFilesBudget
 	for _, pid := range pids {
-		raw, err := fs.ReadProcess(pid, boot)
+		lim := procfs.Limits{Cmdline: min(fs.MaxCmdline, max(cmdBudget, minCmdline)), Files: min(fs.MaxFiles, filesBudget)}
+		if fs.MaxCmdline <= 0 {
+			lim.Cmdline = min(procfs.DefaultMaxCmdline, max(cmdBudget, minCmdline))
+		}
+		raw, err := fs.ReadProcessLimits(pid, boot, lim)
 		if err != nil {
 			if !errors.Is(err, procfs.ErrGone) {
 				readErrors++
@@ -176,6 +196,10 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 			continue
 		}
 		p := raw.Proc
+		for _, a := range raw.RawArgs {
+			cmdBudget -= len(a) + 1
+		}
+		filesBudget -= len(p.Files)
 		if name, ok := users[p.UID]; ok {
 			p.User = name
 		} else {
