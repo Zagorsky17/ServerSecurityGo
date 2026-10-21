@@ -179,7 +179,7 @@ func cmdServe(args []string) error {
 	// определяет по /proc/net/tcp (см. web.Options.CheckPeer).
 	noAuth := cfg.AuthPasswordHash == ""
 	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version, ListenAddr: cfg.ListenAddr, PasswordHash: cfg.AuthPasswordHash,
-		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts,
+		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, TrustProxy: cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts,
 		CheckPeer: noAuth, LocalUIDs: cfg.LocalUIDs})
 	var connCtx func(context.Context, net.Conn) context.Context
 	if noAuth {
