@@ -214,7 +214,7 @@ ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>
 | Недавно изменён `authorized_keys` | недавнее изменение ключей SSH | LOW (системная) |
 
 Полный список правил с идентификаторами для allowlist:
-`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. Системные проверки: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`.
+`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. Системные проверки: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`.
 
 ## Ограничения обнаружения
 
@@ -261,7 +261,7 @@ ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>
 
 После изменения `.env` выполните `systemctl restart serversecuritygo`.
 
-**Allowlist.** Скопируйте [`allowlist.example.json`](allowlist.example.json) в `/opt/serversecuritygo/allowlist.json`. В правиле задаются `exe` и `name` (шаблоны `*` и `?`), `user` и список `rules` (идентификаторы признаков). Правило без условий игнорируется, чтобы случайно не подавить всё.
+**Allowlist.** Скопируйте [`allowlist.example.json`](allowlist.example.json) в `/opt/serversecuritygo/allowlist.json`. В правиле задаются `exe` и `name` (шаблоны `*` и `?`), `user` и список `rules` (идентификаторы признаков). Правило без условий игнорируется, чтобы случайно не подавить всё. Имя процесса (`comm`) процесс задаёт сам, поэтому правило без `exe` срабатывает, только если имя совпадает и с именем исполняемого файла: майнер, назвавшийся `node`, под правило `{"name": "node"}` не попадёт. Для программ на интерпретаторах (например, `gunicorn` на Python) указывайте `exe`. О правилах без `exe` служба предупреждает в журнале при запуске.
 
 ## Удалённый доступ
 

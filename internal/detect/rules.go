@@ -366,6 +366,41 @@ func ruleEmptyCmdline(p *model.Process, _ *Context) []model.Finding {
 	})
 }
 
+// ruleUnicodeControl: в имени, пути или аргументах есть невидимые символы
+// форматирования (model.InvisibleRune). Штатным программам они не нужны,
+// а символ «справа налево» или нулевой ширины меняет вид строки в ps и в
+// панели. Сами символы интерфейсы показывают как «�».
+func ruleUnicodeControl(p *model.Process, _ *Context) []model.Finding {
+	if p.Kernel {
+		return nil
+	}
+	var ev []string
+	check := func(field, s string) {
+		for _, r := range s {
+			if model.InvisibleRune(r) {
+				ev = append(ev, fmt.Sprintf("%s: символ U+%04X", field, r))
+				return
+			}
+		}
+	}
+	check("имя", p.Name)
+	check("путь", p.Exe)
+	for i, a := range p.Args {
+		if len(ev) >= 5 {
+			break
+		}
+		check(fmt.Sprintf("argv[%d]", i), a)
+	}
+	if len(ev) == 0 {
+		return nil
+	}
+	return one(model.Finding{
+		ID: "unicode_control", Title: "Невидимые символы Unicode в имени или командной строке", Category: model.CatMasquerade, Weight: 15,
+		Evidence:       ev,
+		Recommendation: fmt.Sprintf("Так маскируют настоящую команду. Посмотрите байты: od -c /proc/%d/comm; tr '\\0' ' ' < /proc/%d/cmdline | od -c | head.", p.PID, p.PID),
+	})
+}
+
 // ---------------------------------------------------------------------
 // Цепочки запуска
 // ---------------------------------------------------------------------

@@ -331,3 +331,59 @@ func keys(m map[string]model.SystemFinding) []string {
 	slices.Sort(out)
 	return out
 }
+
+// TestAllowlistNameOnly: правило без exe не подавляет признаки процесса,
+// который лишь назвался разрешённым именем.
+func TestAllowlistNameOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Allow = []AllowRule{{Name: "runner", Rules: []string{"exe_in_temp"}}, {Name: "systemd-journal", Rules: []string{"exe_in_temp"}}}
+	run := func(name, exe string) bool {
+		p := &model.Process{PID: 1000, PPID: 1, Name: name, Exe: exe, Args: []string{name}, UID: 1000, EUID: 1000}
+		Analyze([]*model.Process{p}, &Context{Cfg: cfg})
+		for _, f := range p.Findings {
+			if f.ID == "exe_in_temp" {
+				return f.Suppressed
+			}
+		}
+		t.Fatalf("%s: нет exe_in_temp", exe)
+		return false
+	}
+	if !run("runner", "/tmp/build-1/runner") {
+		t.Error("законный runner не подавлен")
+	}
+	if run("runner", "/tmp/.x/xmrig") {
+		t.Error("xmrig с именем runner подавлен правилом только по имени")
+	}
+	if nameMatchesExe("runner", "") {
+		t.Error("процесс без прочитанного exe совпал с правилом по имени")
+	}
+	// comm обрезается до 15 байт: systemd-journald → «systemd-journal».
+	if !run("systemd-journal", "/tmp/x/systemd-journald") {
+		t.Error("обрезанный comm не совпал с exe")
+	}
+	weak := WeakAllowRules([]AllowRule{{Name: "node"}, {User: "deploy"}, {Exe: "/opt/a"}, {}})
+	if len(weak) != 2 || !strings.Contains(weak[0], "без exe") || !strings.Contains(weak[1], "только пользователь") {
+		t.Errorf("WeakAllowRules: %q", weak)
+	}
+}
+
+func TestUnicodeControl(t *testing.T) {
+	p := &model.Process{PID: 50, PPID: 1, Name: "ss​hd", Exe: "/usr/sbin/sshd", Args: []string{"sshd", "‮txt.exe"}}
+	f := findingByIDLocal(p, "unicode_control")
+	if f == nil || len(f.Evidence) != 2 || !strings.Contains(f.Evidence[0], "U+200B") || !strings.Contains(f.Evidence[1], "U+202E") {
+		t.Fatalf("признак: %+v", f)
+	}
+	if findingByIDLocal(&model.Process{PID: 51, PPID: 1, Name: "nginx", Exe: "/usr/sbin/nginx", Args: []string{"nginx: кириллица"}}, "unicode_control") != nil {
+		t.Error("ложное срабатывание на обычной строке")
+	}
+}
+
+func findingByIDLocal(p *model.Process, id string) *model.Finding {
+	analyze(p)
+	for i := range p.Findings {
+		if p.Findings[i].ID == id {
+			return &p.Findings[i]
+		}
+	}
+	return nil
+}
