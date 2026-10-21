@@ -290,11 +290,14 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8090;
         proxy_set_header Host 127.0.0.1;
+        # Client address for login rate limiting: without it every
+        # client looks like 127.0.0.1 and shares one counter.
+        proxy_set_header X-Forwarded-For $remote_addr;
     }
 }
 ```
 
-The password is stored only as a PBKDF2-SHA256 hash (600,000 iterations). After five failed attempts, login from that address is blocked for 15 minutes. Sessions live in memory, and cookies are marked `HttpOnly`, `SameSite=Strict` and `Secure`.
+The password is stored only as a PBKDF2-SHA256 hash (600,000 iterations). After five failed attempts, login from that address (for IPv6, from that /64 network) is blocked for 15 minutes. An attempt is counted before the password is checked, so parallel requests cannot bypass the limit, and no more than two passwords are checked at once. Behind a reverse proxy, the client address is taken from `X-Forwarded-For` set by the proxy (see the example above). Sessions live in memory, and cookies are marked `HttpOnly`, `SameSite=Strict` and `Secure`.
 
 You can also restrict access by IP with a firewall, for example `ufw allow from <your IP> to any port 443`.
 
