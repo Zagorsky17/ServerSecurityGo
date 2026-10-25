@@ -68,7 +68,7 @@ func r(c rune) Key { return Key{Kind: KeyRune, Rune: c} }
 func TestRenderPanels(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
 	s := screen(a)
-	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] История", "[6] Система",
+	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] История", "[7] Система",
 		"demo-host", "CRIT 4", "kworkerds", "CRITICAL", "Оценка риска", "q выход"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q\n%s", want, s)
@@ -163,13 +163,18 @@ func TestPanelsDetails(t *testing.T) {
 	if s := screen(a); !strings.Contains(s, "Сокет") || !strings.Contains(s, "LISTEN") {
 		t.Errorf("панель сети:\n%s", s)
 	}
-	press(a, r('6'))
+	press(a, r('7'))
 	if s := screen(a); !strings.Contains(s, "ld.so.preload") {
 		t.Errorf("панель системы:\n%s", s)
 	}
-	press(a, r('5'))
+	press(a, r('6'))
 	if s := screen(a); !strings.Contains(s, "Начало") && !strings.Contains(s, "Признак") {
 		t.Errorf("панель истории:\n%s", s)
+	}
+	// Порты: самый опасный — MongoDB, опубликованный Docker в обход ufw.
+	press(a, r('5'))
+	if s := screen(a); !strings.Contains(s, "Порт 0.0.0.0:27017") || !strings.Contains(s, "MongoDB") || !strings.Contains(s, "в обход ufw") {
+		t.Errorf("панель портов:\n%s", s)
 	}
 	press(a, r('1'))
 	if s := screen(a); !strings.Contains(s, "Обзор") || !strings.Contains(s, "Быстрый старт") {
@@ -272,6 +277,53 @@ func TestTextHelpers(t *testing.T) {
 	}
 }
 
+// TestRemoteSourceOldService: терминал новее службы — у службы нет
+// /api/exposure (404). Остальные данные загружаются, панель портов пуста.
+func TestRemoteSourceOldService(t *testing.T) {
+	sc := demoScanner(t)
+	if _, err := sc.ScanOnce(); err != nil {
+		t.Fatal(err)
+	}
+	srv := web.New(web.Options{Scanner: sc, Version: "old", ListenAddr: "127.0.0.1:8090", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	local := srv.LocalHandler()
+	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/exposure" {
+			http.NotFound(w, r)
+			return
+		}
+		local.ServeHTTP(w, r)
+	})
+	dir, err := makeShortTempDir(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "o.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := &http.Server{Handler: old}
+	go hs.Serve(ln)
+	t.Cleanup(func() { hs.Close() })
+
+	rs, err := DialSocket(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rs.Close)
+	d, err := rs.Fetch()
+	if err != nil || d.Exposure != nil || len(d.Procs) == 0 {
+		t.Fatalf("Fetch у старой службы: %v %+v", err, d.Exposure)
+	}
+	a := New(Options{Source: rs, Out: io.Discard, Lang: i18n.RU})
+	a.w, a.h = 160, 45
+	a.load()
+	press(a, r('5'))
+	if s := screen(a); !strings.Contains(s, "[5] Порты (0)") {
+		t.Errorf("панель портов:\n%s", s)
+	}
+}
+
 // TestRemoteSource проверяет работу через Unix-сокет службы: тот же
 // обработчик, что у serve (LocalHandler), без пароля и проверки Host.
 func TestRemoteSource(t *testing.T) {
@@ -306,6 +358,13 @@ func TestRemoteSource(t *testing.T) {
 	}
 	if len(d.Procs) == 0 || len(d.Sockets) == 0 || len(d.System) == 0 || !d.Status.Ready {
 		t.Errorf("неполные данные: %d процессов, %d сокетов, %d системных", len(d.Procs), len(d.Sockets), len(d.System))
+	}
+	if d.Exposure == nil || len(d.Exposure.Entries) == 0 || d.Exposure.Firewall.UFW != "active" {
+		t.Errorf("открытые порты: %+v", d.Exposure)
+	}
+	// Несуществующий процесс — понятная ошибка службы, а не «not found».
+	if _, err := rs.Detail("нет-такого"); err == nil || err == errNotFound {
+		t.Errorf("Detail несуществующего: %v", err)
 	}
 	det, err := rs.Detail(d.Procs[0].Key)
 	if err != nil || det.Process == nil {
@@ -460,7 +519,7 @@ func TestAddrInTitle(t *testing.T) {
 // TestAddrInHistory: адрес в тексте события в панели «История».
 func TestAddrInHistory(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
-	press(a, r('5'))
+	press(a, r('6'))
 	a.events[0].Details = i18n.T("hist.listen", "tcp 203.0.113.5:8443")
 	a.render()
 	cs := cellsAt(a, "203.0.113.5:8443")
@@ -537,5 +596,42 @@ func TestLangToggle(t *testing.T) {
 	press(a, r('L'))
 	if a.lang != i18n.RU {
 		t.Errorf("повторное L должно вернуть русский: %s", a.lang)
+	}
+}
+
+// TestLayoutHeights: при любой высоте окна панели слева не налезают друг
+// на друга и не выходят за экран, а у развёрнутой есть строки списка.
+func TestLayoutHeights(t *testing.T) {
+	a, _ := newTestApp(t, 100, 24)
+	for _, exp := range []panelID{pSusp, pPorts, pSys} {
+		a.focusPanel(exp)
+		for h := minHeight; h <= 80; h++ {
+			a.w, a.h = 100, h
+			a.render()
+			y := 0
+			for p := pStatus; p < nPanels; p++ {
+				r := a.rects[p]
+				if r.h == 0 && p == pStatus {
+					continue
+				}
+				if r.y != y || r.h < 2 {
+					t.Fatalf("h=%d, развёрнута %d: панель %d %+v (ожидалось y=%d)", h, exp, p, r, y)
+				}
+				y += r.h
+			}
+			if y != h-1 {
+				t.Fatalf("h=%d: панели занимают %d строк из %d", h, y, h-1)
+			}
+			if ih := a.rects[exp].h - 2; ih < 1 {
+				t.Fatalf("h=%d: у развёрнутой панели %d строк", h, ih)
+			}
+		}
+	}
+	// 80×24 — привычный размер терминала: в развёрнутой панели видны строки.
+	a.w, a.h = 80, 24
+	a.focusPanel(pSusp)
+	a.render()
+	if a.rects[pSusp].h < 6 {
+		t.Errorf("80×24: высота развёрнутой панели %d", a.rects[pSusp].h)
 	}
 }

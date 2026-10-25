@@ -69,14 +69,29 @@ type Store struct {
 	baseline  bool // треки уже были (после рестарта не пишем «started» для всех)
 	dirty     bool
 	lastSave  time.Time
-	systemSet map[string]bool // ключи уже виденных системных находок
+	systemSet map[string]*sysSeen // системные находки по ключу «ID|Path»
 }
+
+// sysSeen — что известно о системной находке между сканированиями.
+type sysSeen struct {
+	risk model.Risk // последний уровень
+	miss int        // сколько сканирований подряд находки не было
+}
+
+// systemForget — через сколько сканирований без находки она забывается.
+// Небольшой запас нужен, чтобы перезапуск службы (порт пропал на одно
+// сканирование) не давал повторного события, а память не росла: ключи
+// пропавших находок удаляются.
+const systemForget = 3
 
 type stateFile struct {
 	Version int               `json:"version"`
 	Saved   time.Time         `json:"saved"`
 	Tracks  map[string]*Track `json:"tracks"`
 	System  []string          `json:"system"`
+	// SystemRisk — уровень системных находок (с версии с открытыми
+	// портами). В старом state.json его нет.
+	SystemRisk map[string]model.Risk `json:"systemRisk,omitempty"`
 }
 
 // Open открывает (или создаёт) хранилище.
@@ -90,7 +105,7 @@ func Open(opt Options) (*Store, error) {
 	if opt.MemoryEvents <= 0 {
 		opt.MemoryEvents = 5000
 	}
-	s := &Store{opt: opt, tracks: map[string]*Track{}, systemSet: map[string]bool{}}
+	s := &Store{opt: opt, tracks: map[string]*Track{}, systemSet: map[string]*sysSeen{}}
 	if opt.Dir == "" {
 		return s, nil
 	}
@@ -108,7 +123,14 @@ func Open(opt Options) (*Store, error) {
 				s.tracks = st.Tracks
 			}
 			for _, k := range st.System {
-				s.systemSet[k] = true
+				// Уровень неизвестен (старый state.json) — считаем
+				// наивысшим, чтобы после обновления не было ложного
+				// события о росте уровня.
+				r, ok := st.SystemRisk[k]
+				if !ok {
+					r = model.RiskCritical
+				}
+				s.systemSet[k] = &sysSeen{risk: r}
 			}
 			s.baseline = len(s.tracks) > 0
 		}
@@ -305,14 +327,35 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 		}
 	}
 
-	// Системные находки: событие при первом появлении.
+	// Системные находки: событие при появлении и при росте уровня (Redis
+	// был закрыт ufw — LOW, ufw выключили — CRITICAL с тем же ключом).
+	// Находка, которой нет systemForget сканирований подряд, забывается:
+	// иначе ключи копились бы всё время работы службы (порты приходят и
+	// уходят), а вернувшаяся находка — новое событие.
+	present := make(map[string]bool, len(system))
 	for _, sf := range system {
 		k := sf.ID + "|" + sf.Path
-		if !s.systemSet[k] {
-			s.systemSet[k] = true
-			if sf.Risk >= model.RiskLow {
-				evs = append(evs, model.Event{Time: now, Type: model.EvSystem, Exe: sf.Path, Risk: sf.Risk, Details: i18n.T("hist.system", sf.Title, sf.Path)})
-			}
+		present[k] = true
+		seen := s.systemSet[k]
+		if (seen == nil || sf.Risk > seen.risk) && sf.Risk >= model.RiskLow {
+			evs = append(evs, model.Event{Time: now, Type: model.EvSystem, Exe: sf.Path, Risk: sf.Risk, Details: i18n.T("hist.system", sf.Title, sf.Path)})
+		}
+		if seen == nil {
+			seen = &sysSeen{}
+			s.systemSet[k] = seen
+		}
+		if seen.risk != sf.Risk {
+			s.dirty = true
+		}
+		seen.risk, seen.miss = sf.Risk, 0
+	}
+	for k, seen := range s.systemSet {
+		if present[k] {
+			continue
+		}
+		if seen.miss++; seen.miss >= systemForget {
+			delete(s.systemSet, k)
+			s.dirty = true
 		}
 	}
 
@@ -400,8 +443,10 @@ func (s *Store) rotateIfNeeded() {
 // save атомарно записывает state.json.
 func (s *Store) save(now time.Time) error {
 	st := stateFile{Version: 1, Saved: now, Tracks: s.tracks}
-	for k := range s.systemSet {
+	st.SystemRisk = make(map[string]model.Risk, len(s.systemSet))
+	for k, seen := range s.systemSet {
 		st.System = append(st.System, k)
+		st.SystemRisk[k] = seen.risk
 	}
 	sort.Strings(st.System)
 	data, err := json.Marshal(st)

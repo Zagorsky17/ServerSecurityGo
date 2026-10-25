@@ -40,6 +40,7 @@ import (
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/config"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
@@ -437,7 +438,8 @@ func cmdScan(args []string) error {
 		enc.SetIndent("", "  ")
 		// Сообщения выводятся готовым текстом на языке процесса: скриптам
 		// не нужен каталог переводов.
-		v, err := i18n.RenderJSON(map[string]any{"time": snap.Time, "host": snap.Host, "stats": snap.Stats, "warnings": snap.Warnings, "processes": procs, "system": sys}, i18n.Default())
+		v, err := i18n.RenderJSON(map[string]any{"time": snap.Time, "host": snap.Host, "stats": snap.Stats, "warnings": snap.Warnings, "processes": procs, "system": sys,
+			"exposure": view.Exposure(snap)}, i18n.Default())
 		if err != nil {
 			return err
 		}
@@ -484,8 +486,54 @@ func cmdScan(args []string) error {
 			}
 		}
 	}
+	printPublicPorts(snap)
 	fmt.Println("\n" + i18n.S("cli.scan.footer"))
 	return nil
+}
+
+// printPublicPorts выводит таблицу публичных портов. Имена процессов,
+// контейнеров и образов задаёт сам процесс или владелец контейнера,
+// поэтому всё проходит через view.Printable.
+func printPublicPorts(snap *model.Snapshot) {
+	var pub []model.Exposure
+	for _, e := range view.Exposure(snap).Entries {
+		if e.Scope == model.ScopePublic {
+			pub = append(pub, e)
+		}
+	}
+	if len(pub) == 0 {
+		return
+	}
+	pr := view.Printable
+	fmt.Println("\n" + i18n.S("cli.scan.ports"))
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "  "+i18n.S("cli.scan.ports_header"))
+	for _, e := range pub {
+		svc, owner, fw := "—", "—", "—"
+		if e.Service != nil {
+			svc = e.Service.Name
+		}
+		switch {
+		case e.PID != 0:
+			owner = fmt.Sprintf("%s (%d)", e.ProcName, e.PID)
+		case e.Container != "":
+			owner = "docker " + e.Container
+		}
+		switch e.Firewall {
+		case model.FwOpen:
+			fw = i18n.S("tui.fw.open")
+		case model.FwFiltered:
+			fw = i18n.S("tui.fw.filtered")
+		case model.FwBypassed:
+			fw = i18n.S("tui.fw.bypassed")
+		}
+		risk := e.Risk.String()
+		if e.Suppressed {
+			risk += "*"
+		}
+		fmt.Fprintf(tw, "  %s\t%s %s\t%s\t%s\t%s\n", risk, e.Proto, pr(exposure.Endpoint(e.Addr, e.Port)), pr(svc), pr(owner), fw)
+	}
+	tw.Flush()
 }
 
 func sortByRisk(procs []*model.Process) {

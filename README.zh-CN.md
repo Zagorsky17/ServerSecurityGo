@@ -21,6 +21,7 @@
 - [终端界面](#终端界面)
 - [可选的 Web 面板](#可选的-web-面板)
 - [功能](#功能)
+  - [开放端口](#开放端口)
 - [风险评分方式](#风险评分方式)
 - [可检测的异常示例](#可检测的异常示例)
 - [检测局限](#检测局限)
@@ -104,16 +105,17 @@ serversecuritygo
 ╰──────────────────────────────────────────╯│   ● Command line contains a reverse shell construct  │
 ╭ [3] Processes (47) · risk ───────────────╮│ Command line  (y — copy, secrets are masked)         │
 ╭ [4] Network (17) ────────────────────────╮│   bash -i                                            │
-╭ [5] History (25) ────────────────────────╮│ Launch chain                                         │
-╭ [6] System (2) ──────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
-↑↓ select  1-6/Tab panels  Enter details  / filter  r scan  y copy  L русский  ? help  q quit
+╭ [5] Ports (9) ───────────────────────────╮│                                                      │
+╭ [6] History (25) ────────────────────────╮│ Launch chain                                         │
+╭ [7] System (2) ──────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
+↑↓ select  1-7/Tab panels  Enter details  / filter  r scan  y copy  L русский  ? help  q quit
 ```
 
-左侧有六个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、历史和系统检查。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
+左侧有七个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、历史和系统检查。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
 
 | 按键 | 作用 |
 |---|---|
-| `1`…`6`、`Tab` / `Shift+Tab` | 切换面板 |
+| `1`…`7`、`Tab` / `Shift+Tab` | 切换面板 |
 | `↑` `↓` / `j` `k`、`PgUp` `PgDn`、`g` `G` | 选择行；在详情中滚动 |
 | `Enter` / `→`、`Esc` / `←` | 进入详情并返回 |
 | `/` | 按名称、PID、路径、用户、指标或风险等级过滤面板 |
@@ -166,6 +168,9 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 | 命名空间和容器（docker、containerd、kubernetes、podman、lxc） | `/proc/PID/ns/*`、`/proc/PID/cgroup` |
 | 是否存在 `LD_PRELOAD`/`LD_AUDIT`（只记录名称，从不保存值） | `/proc/PID/environ` |
 | 用户 | `/etc/passwd` |
+| 服务器地址（用于区分公网端口和内网端口） | `/proc/net/fib_trie`、`/proc/net/if_inet6` |
+| ufw 状态和规则 | `/etc/ufw/ufw.conf`、`/etc/default/ufw`、`/etc/ufw/user.rules`、`/etc/ufw/user6.rules` |
+| Docker 发布的端口、容器名称和镜像 | `docker-proxy` 的参数、`<data-root>/containers/*/config.v2.json`（环境变量不会读入内存结构，也从不显示） |
 | 启动时间、内存、内核 | `/proc/stat`、`/proc/meminfo`、`/proc/sys/kernel/osrelease` |
 
 系统持久化检查覆盖 `/etc/ld.so.preload`、cron（`/etc/crontab`、`/etc/cron.*`、`/var/spool/cron`）、`/etc/systemd/system` 中的 systemd 单元、`/etc/rc.local`、`/etc/init.d`、`/etc/profile.d`、`.bashrc`、`update-motd.d` 和 `authorized_keys`。
@@ -176,11 +181,27 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 2. **所有进程** —— 搜索、按任意列排序，可按 PID/PPID、用户、名称、路径和最低风险等级过滤。
 3. **进程树** —— 父子关系，可折叠分支，高亮匹配项。
 4. **网络** —— 套接字及其所属进程，可按协议、状态和外部地址过滤。
-5. **历史** —— 进程启动和退出，exe、cmdline 或用户的变化，风险升高和降低，新指标，新的监听端口，系统发现。
-6. **系统** —— 服务器信息、扫描限制（权限、容器）和持久化检查。
-7. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
+5. **开放端口** —— 服务器监听了什么，以及从哪里可以访问；见[开放端口](#开放端口)。
+6. **历史** —— 进程启动和退出，exe、cmdline 或用户的变化，风险升高和降低，新指标，新的监听端口，系统发现。
+7. **系统** —— 服务器信息、扫描限制（权限、容器）、持久化检查和危险的开放端口。
+8. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
 
 面板每 5 到 60 秒自动刷新一次，也可以关闭自动刷新。打开进程卡片时自动刷新会暂停。
+
+### 开放端口
+
+VPS 被入侵最常见的真实原因，是某个服务意外监听在 `0.0.0.0` 上：没有密码的 Redis、MongoDB、Docker API、管理面板。**开放端口**标签页（终端界面中的面板 `5`、`GET /api/exposure`、`serversecuritygo scan` 输出末尾的表格）列出每个监听的 TCP 套接字和已绑定的 UDP 套接字：
+
+- **可达范围**：*公网*（下列范围以外的任何地址，包括 `0.0.0.0` 和 `::`，即所有接口，旁边会列出服务器的公网地址）、*内网*（`10/8`、`172.16/12`、`192.168/16`、`100.64/10`、`fc00::/7`、链路本地地址）、*仅本机*（`127.0.0.0/8`、`::1`）或*容器内*（套接字位于自己的网络命名空间中，外部只能通过已发布的端口访问）；
+- 所属进程、用户和容器；对于 Docker，还有容器名称、镜像和端口映射；
+- 从内置表中**识别出的服务**：Redis、Docker API、MongoDB、Elasticsearch/OpenSearch、etcd、kubelet、Jupyter、memcached、PostgreSQL、MySQL/MariaDB、RabbitMQ、CouchDB、SMB、RDP、VNC、Telnet、FTP、rpcbind、NFS、SNMP、Prometheus exporter。服务根据端口和进程名（或容器镜像）识别；仅凭端口号匹配时等级降低一级，因为该端口上可能是别的程序；
+- 该端口的 **ufw** 状态：*开放*（有允许任意地址的规则）、*已阻止*（ufw 已启用，且未对所有人开放该端口）或*绕过 ufw*。
+
+等级表示服务可被访问的危险程度，而不是被入侵的迹象：可从互联网访问的 Redis 为 CRITICAL，PostgreSQL 为 HIGH，Prometheus exporter 为 LOW。如果 ufw 阻止了该端口，等级降为 LOW，并注明只有防火墙在保护该服务。每个危险的公网端口都会成为带有该等级的系统发现（显示在“系统”标签页、历史和日志中），并在占用该端口的进程卡片中成为 `exposure` 类别的指标。该指标不是“强”指标：单独出现时，合法进程的等级最高为 LOW。
+
+**Docker 绕过 ufw。** Docker 会把自己的 iptables 规则插在 ufw 规则之前，所以 `ufw deny 6379` 无法关闭以 `-p 6379:6379` 发布的端口。如果 ufw 已启用，而某个容器端口在所有接口上发布、且没有允许它的 ufw 规则，面板会报告 `fw_docker_bypass`（HIGH），并建议以 `127.0.0.1:端口:端口` 的形式发布，或在 `DOCKER-USER` 链中加以限制。已发布的端口从 `docker-proxy` 的参数和容器的 `config.v2.json` 中读取，因此在 `userland-proxy: false` 时也能看到。不使用 Docker API：它的套接字等同于 root 权限，而观察者不需要它。
+
+如果某个端口是有意开放的，可以为该进程添加带指标 ID 的白名单规则（例如 `{"exe": "/usr/lib/postgresql/16/bin/postgres", "rules": ["exposed_database"]}`）：进程指标和系统发现都会显示为已抑制，不再计入。没有监听进程、由 Docker 发布的端口（`userland-proxy: false`）无法用这种方式抑制。
 
 ## 风险评分方式
 
@@ -220,7 +241,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | 最近修改过的 `authorized_keys` | SSH 密钥最近被修改 | LOW（系统） |
 
 可用于白名单的完整规则 ID 列表：
-`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`。
+`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`，以及上面针对危险公网端口的 `exposed_*` ID。
 
 ## 检测局限
 
@@ -234,6 +255,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 - **误报**可能出现在开发工具（从 `/tmp` 执行 `go run`、CI 构建）、位于非标准目录的自定义服务、合法挖矿以及 `curl | sh` 安装脚本上。白名单就是为这些情况准备的。
 - **CPU%** 根据两次扫描之间 `utime+stime` 的差值计算，`CLK_TCK=100`，这是 Ubuntu 和 Debian 在 x86_64 和 arm64 上的取值。首次观察时显示的是自进程启动以来的平均值（以 `*` 标记）。
 - 所有者未知的**套接字**（TIME_WAIT、内核套接字、权限不足）显示为“unknown”。如果一个套接字被多个进程共享（systemd 套接字激活、nginx 主进程和工作进程），“网络”表只显示找到的第一个所有者，而每张进程卡片会完整显示该套接字。
+- **开放端口**仅根据套接字监听的地址和 ufw 判断。绑定在服务器自身内网地址上的服务（例如 AWS 或 GCP 上的 `172.31.5.10`）显示为*内网*，但在云服务商的 1:1 NAT 下，它可能仍可通过公网 IP 从互联网访问；请检查云服务商的安全组。直接通过 `iptables`/`nftables` 添加的规则、firewalld 和云防火墙都不会被读取。
 - 旧内核缺少的字段（例如 4.1 之前没有 `NSpid`）不会导致错误，只是不显示相应信息。
 
 ## 测试环境
@@ -415,6 +437,8 @@ cmd/serversecuritygo/     入口：tui（默认）、serve、scan、demo、hash-
 internal/
   procfs/                 读取 /proc：stat、status、cmdline、exe、fd、ns、cgroup、net
   detect/                 规则、风险评分、解释、白名单、系统检查
+  exposure/               开放端口：可达范围、危险服务、ufw、Docker 发布的端口
+  safefile/               安全读取攻击者可能控制的文件（不跟随符号链接、拒绝 FIFO、限制大小）
   redact/                 遮蔽命令行中的密钥
   history/                进程历史和事件日志（state.json、events.jsonl）
   scanner/                周期性扫描：收集 → 分析 → 历史
@@ -432,7 +456,7 @@ allowlist.example.json    白名单示例
 .github/workflows/        CI 和发布
 ```
 
-API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
+API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
 
 ## 安全
 

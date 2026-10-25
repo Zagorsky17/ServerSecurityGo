@@ -2,7 +2,6 @@ package detect
 
 import (
 	"errors"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/redact"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
 
 // Системные проверки ищут признаки закрепления (persistence): места,
@@ -33,49 +33,9 @@ var tempPattern = regexp.MustCompile(`(^|[\s;'"=])/(var/)?tmp/[^\s;'"]+`)
 // crontab, профили и authorized_keys намного меньше.
 const maxSystemFile = 1 << 20
 
-var (
-	errNotRegular = errors.New("не обычный файл")
-	errTooLarge   = errors.New("файл больше 1 МБ")
-)
-
-// readRegular безопасно читает файл проверки: только обычный файл и не
-// больше max байт. Сканер работает от root, а файлы в домашних каталогах
-// (authorized_keys) создаёт пользователь: FIFO на их месте повесил бы
-// сканирование навсегда, а симлинк на /dev/zero или огромный файл
-// исчерпал бы память службы. follow = false — симлинк не открывается
-// (для файлов, которыми управляет пользователь). Тип и размер берутся из
-// уже открытого дескриптора, поэтому подмена файла между проверкой и
-// чтением ничего не даёт.
+// readRegular безопасно читает файл проверки (см. safefile.ReadRegular).
 func readRegular(path string, max int64, follow bool) ([]byte, fs.FileInfo, error) {
-	f, err := openForRead(path, follow)
-	if err != nil {
-		// Открыть не удалось из-за типа (симлинк при follow = false):
-		// сообщаем об этом отдельно от «файла нет».
-		if fi, lerr := os.Lstat(path); lerr == nil && !fi.Mode().IsRegular() {
-			return nil, fi, errNotRegular
-		}
-		return nil, nil, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, nil, err
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, fi, errNotRegular
-	}
-	if fi.Size() > max {
-		return nil, fi, errTooLarge
-	}
-	// Файл мог вырасти после Stat — читаем не больше max+1 байт.
-	data, err := io.ReadAll(io.LimitReader(f, max+1))
-	if err != nil {
-		return nil, fi, err
-	}
-	if int64(len(data)) > max {
-		return nil, fi, errTooLarge
-	}
-	return data, fi, nil
+	return safefile.ReadRegular(path, max, follow)
 }
 
 // SystemChecks выполняет проверки относительно корня хоста hostRoot.
@@ -171,7 +131,7 @@ func SystemChecks(hostRoot string, now time.Time, cfg Config) []model.SystemFind
 		// Файл в домашнем каталоге контролирует его владелец: по симлинку
 		// не идём, FIFO и устройства не открываем, размер ограничен.
 		data, fi, err := readRegular(f, maxSystemFile, false)
-		if errors.Is(err, errNotRegular) || errors.Is(err, errTooLarge) {
+		if errors.Is(err, safefile.ErrNotRegular) || errors.Is(err, safefile.ErrTooLarge) {
 			out = append(out, sys(model.Finding{
 				ID: "ssh_keys_not_regular", Title: i18n.T("rule.ssh_keys_not_regular.title"), Category: model.CatPersistence, Weight: 10,
 				Evidence:       []i18n.Msg{describeUnusual(f, fi, err)},
@@ -214,7 +174,7 @@ func sys(f model.Finding, path string, r model.Risk, mt time.Time) model.SystemF
 // describeUnusual — пояснение, почему файл проверки не прочитан.
 func describeUnusual(path string, fi fs.FileInfo, err error) i18n.Msg {
 	switch {
-	case errors.Is(err, errTooLarge):
+	case errors.Is(err, safefile.ErrTooLarge):
 		return i18n.T("ev.file_too_large", fi.Size())
 	case fi.Mode()&fs.ModeSymlink != 0:
 		target, _ := os.Readlink(path)

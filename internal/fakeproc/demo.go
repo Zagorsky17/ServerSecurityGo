@@ -26,6 +26,7 @@ func Demo(now time.Time) *Tree {
 				"daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n" +
 				"www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n" +
 				"postgres:x:113:120:PostgreSQL:/var/lib/postgresql:/bin/bash\n" +
+				"redis:x:114:121:Redis:/var/lib/redis:/usr/sbin/nologin\n" +
 				"deploy:x:1000:1000:Deploy:/home/deploy:/bin/bash\n",
 			"etc/os-release": "PRETTY_NAME=\"Ubuntu 24.04 LTS (demo)\"\nID=ubuntu\n",
 			// Закрепление: задание cron, скачивающее и запускающее скрипт.
@@ -33,7 +34,23 @@ func Demo(now time.Time) *Tree {
 			// Штатное задание — не должно давать признаков.
 			"etc/cron.d/logrotate": "0 3 * * * root /usr/sbin/logrotate /etc/logrotate.conf\n",
 			"etc/ld.so.preload":    "/usr/local/lib/libprocesshider.so\n",
+			// ufw включён и открывает только SSH и веб: Redis на 0.0.0.0
+			// закрыт им, а порты Docker — нет (Docker обходит ufw).
+			"etc/ufw/ufw.conf":   "ENABLED=yes\nLOGLEVEL=low\n",
+			"etc/default/ufw":    "IPV6=yes\nDEFAULT_INPUT_POLICY=\"DROP\"\n",
+			"etc/ufw/user.rules": ufwDemoRules,
+			// Контейнер приложения: порт 3000 опубликован через docker-proxy.
+			"var/lib/docker/containers/" + webappID + "/config.v2.json": `{"ID":"` + webappID + `","Name":"/webapp","Config":{"Image":"node:20-alpine","Env":["SECRET=demo"]},` +
+				`"State":{"Running":true},"NetworkSettings":{"Ports":{"3000/tcp":[{"HostIp":"0.0.0.0","HostPort":"3000"}]}}}`,
+			// Контейнер MongoDB без docker-proxy (userland-proxy=false):
+			// слушающего сокета на хосте нет, порт виден только по config.v2.json.
+			"var/lib/docker/containers/" + mongoID + "/config.v2.json": `{"ID":"` + mongoID + `","Name":"/db","Config":{"Image":"mongo:7"},` +
+				`"State":{"Running":true},"NetworkSettings":{"Ports":{"27017/tcp":[{"HostIp":"","HostPort":"27017"}]}}}`,
+			// Остановленный контейнер: его порты не учитываются.
+			"var/lib/docker/containers/" + stoppedID + "/config.v2.json": `{"ID":"` + stoppedID + `","Name":"/old","Config":{"Image":"redis:6"},` +
+				`"State":{"Running":false},"NetworkSettings":{"Ports":{"6379/tcp":[{"HostIp":"0.0.0.0","HostPort":"6380"}]}}}`,
 		},
+		Addrs: []string{"127.0.0.1", "192.0.2.10", "10.0.0.5", "172.17.0.1", "::1", "2001:db8::10"},
 	}
 
 	t.Procs = []*Proc{
@@ -59,6 +76,12 @@ func Demo(now time.Time) *Tree {
 		{PID: 1200, PPID: 1, Comm: "node", UID: 1000, Args: []string{"node", "/app/server.js"}, Exe: "/usr/local/bin/node", StartTicks: 5000, UTime: 9000, RSSKB: 180000,
 			Cgroup: "0::/system.slice/docker-3f4e5d6c7b8a9f0e1d2c3b4a5f6e7d8c9b0a1f2e3d4c5b6a7f8e9d0c1b2a3f4e.scope\n", NetNS: "net:[4026532300]", PidNS: "pid:[4026532298]",
 			FDs: map[int]string{20: sock(1005)}},
+		// Redis слушает все интерфейсы (частая ошибка настройки).
+		{PID: 860, PPID: 1, Comm: "redis-server", UID: 114, Args: []string{"/usr/bin/redis-server 0.0.0.0:6379"}, Exe: "/usr/bin/redis-server", StartTicks: 1150, RSSKB: 15000,
+			FDs: map[int]string{6: sock(1006)}},
+		// docker-proxy публикует порт контейнера приложения.
+		{PID: 1190, PPID: 1, Comm: "docker-proxy", Args: []string{"/usr/bin/docker-proxy", "-proto", "tcp", "-host-ip", "0.0.0.0", "-host-port", "3000",
+			"-container-ip", "172.17.0.2", "-container-port", "3000"}, Exe: "/usr/bin/docker-proxy", StartTicks: 4990, RSSKB: 4000, FDs: map[int]string{4: sock(1007)}},
 		// Обновлённая служба: бинарник заменён пакетным менеджером.
 		{PID: 1300, PPID: 1, Comm: "unattended-upgr", Args: []string{"/usr/bin/python3", "/usr/share/unattended-upgrades/unattended-upgrade-shutdown"},
 			Exe: "/usr/bin/python3.12 (deleted)", StartTicks: 1500, RSSKB: 25000},
@@ -94,6 +117,8 @@ func Demo(now time.Time) *Tree {
 		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 443, State: "0A", Inode: 1003, UID: 0},
 		{Proto: "tcp", Local: "127.0.0.1", LocalPort: 5432, State: "0A", Inode: 1004, UID: 113},
 		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 3000, State: "0A", Inode: 1005, UID: 1000, NetNS: "net:[4026532300]"},
+		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 6379, State: "0A", Inode: 1006, UID: 114},
+		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 3000, State: "0A", Inode: 1007},
 		{Proto: "tcp", Local: "192.0.2.10", LocalPort: 41822, Remote: "198.51.100.77", RemotePort: 3333, State: "01", Inode: 2001},
 		{Proto: "tcp", Local: "192.0.2.10", LocalPort: 52344, Remote: "198.51.100.23", RemotePort: 4444, State: "01", Inode: 2002, UID: 33},
 		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 31337, State: "0A", Inode: 2003},
@@ -102,6 +127,32 @@ func Demo(now time.Time) *Tree {
 	}
 	return t
 }
+
+// Идентификаторы демо-контейнеров. webappID совпадает с контейнером из
+// cgroup процесса node (PID 1200).
+const (
+	webappID  = "3f4e5d6c7b8a9f0e1d2c3b4a5f6e7d8c9b0a1f2e3d4c5b6a7f8e9d0c1b2a3f4e"
+	mongoID   = "8a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"
+	stoppedID = "0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c"
+)
+
+// ufwDemoRules — правила ufw в формате /etc/ufw/user.rules: открыты SSH
+// (с ограничением частоты), HTTP и HTTPS.
+const ufwDemoRules = `*filter
+### RULES ###
+
+### tuple ### limit tcp 22 0.0.0.0/0 any 0.0.0.0/0 in
+-A ufw-user-input -p tcp --dport 22 -j ufw-user-limit-accept
+
+### tuple ### allow tcp 80,443 0.0.0.0/0 any 0.0.0.0/0 Nginx%20Full - in
+-A ufw-user-input -p tcp -m multiport --dports 80,443 -j ACCEPT
+
+### tuple ### allow tcp 5432 0.0.0.0/0 any 10.0.0.0/8 in comment=696e7465726e616c
+-A ufw-user-input -p tcp --dport 5432 -s 10.0.0.0/8 -j ACCEPT
+
+### END RULES ###
+COMMIT
+`
 
 // Animator «оживляет» демо-дерево между сканированиями: майнер и
 // компилятор набирают процессорное время, периодически появляется и

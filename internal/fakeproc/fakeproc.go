@@ -12,6 +12,7 @@ package fakeproc
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -64,6 +65,9 @@ type Tree struct {
 	Socks      []Sock
 	HostFiles  map[string]string // путь относительно корня хоста → содержимое
 	Kernel     string
+	// Addrs — локальные адреса сервера: IPv4 пишутся в /proc/net/fib_trie,
+	// IPv6 — в /proc/net/if_inet6 (интерфейс lo для ::1, иначе eth0).
+	Addrs []string
 }
 
 // Write записывает дерево в dir и возвращает корни /proc и хоста.
@@ -101,7 +105,37 @@ func (t *Tree) Write(dir string) (procRoot, hostRoot string, err error) {
 	if err := t.writeNet(filepath.Join(procRoot, "net"), ""); err != nil {
 		return "", "", err
 	}
+	if err := t.writeAddrs(filepath.Join(procRoot, "net")); err != nil {
+		return "", "", err
+	}
 	return procRoot, hostRoot, nil
+}
+
+// writeAddrs пишет локальные адреса в формате ядра: fib_trie (лист
+// «|-- адрес» и строка «/32 host LOCAL») и if_inet6.
+func (t *Tree) writeAddrs(dir string) error {
+	var trie, inet6 strings.Builder
+	trie.WriteString("Main:\n  +-- 0.0.0.0/0 3 0 5\n     |-- 0.0.0.0\n        /0 universe UNICAST\n")
+	for _, a := range t.Addrs {
+		ip, err := netip.ParseAddr(a)
+		if err != nil {
+			return err
+		}
+		if ip.Is4() {
+			fmt.Fprintf(&trie, "     |-- %s\n        /32 host LOCAL\n", ip)
+			continue
+		}
+		b := ip.As16()
+		iface := "eth0"
+		if ip.IsLoopback() {
+			iface = "lo"
+		}
+		fmt.Fprintf(&inet6, "%x 02 40 00 80 %8s\n", b[:], iface)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fib_trie"), []byte(trie.String()), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "if_inet6"), []byte(inet6.String()), 0o644)
 }
 
 // UpdateStat перезаписывает только stat процесса (для «оживления» демо).

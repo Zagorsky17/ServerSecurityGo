@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
@@ -525,4 +526,75 @@ func hasSystem(res []model.SystemFinding, id string) bool {
 		}
 	}
 	return false
+}
+
+// exposedFor строит оценку открытых портов для процессов и возвращает
+// карту для Context.Exposed (как в scanner).
+func exposedFor(t *testing.T, procs ...*model.Process) map[uint64]*model.Exposure {
+	t.Helper()
+	var socks []model.Socket
+	for _, p := range procs {
+		socks = append(socks, p.Sockets...)
+	}
+	rep := exposure.Build(exposure.Input{Procs: procs, Sockets: socks, HostRoot: t.TempDir(), Addrs: []model.IfaceAddr{{Addr: "192.0.2.10"}}})
+	m := map[uint64]*model.Exposure{}
+	for i := range rep.Entries {
+		if e := &rep.Entries[i]; e.Inode != 0 && e.FindingID != "" {
+			m[e.Inode] = e
+		}
+	}
+	return m
+}
+
+func TestExposureRule(t *testing.T) {
+	listen := func(p *model.Process, proto, addr string, port int, inode uint64) {
+		p.Sockets = append(p.Sockets, model.Socket{Proto: proto, LocalAddr: addr, LocalPort: port, State: "LISTEN", Inode: inode, PID: p.PID, ProcKey: p.Key, ProcName: p.Name, User: p.User})
+	}
+	redis := &model.Process{Key: "800-1", PID: 800, PPID: 1, Name: "redis-server", User: "redis", Exe: "/usr/bin/redis-server", Args: []string{"/usr/bin/redis-server", "*:6379"}}
+	listen(redis, "tcp", "0.0.0.0", 6379, 1)
+	listen(redis, "tcp6", "::", 6379, 2)
+	ctx := &Context{Cfg: DefaultConfig(), Exposed: exposedFor(t, redis)}
+	Analyze([]*model.Process{redis}, ctx)
+	if got := ids(redis); !slices.Equal(got, []string{"exposed_database"}) {
+		t.Fatalf("признаки redis: %v", got)
+	}
+	f := redis.Findings[slices.IndexFunc(redis.Findings, func(f model.Finding) bool { return f.ID == "exposed_database" })]
+	ev := i18n.Join("\n", f.Evidence...).String()
+	if f.Category != model.CatExposure || f.Weight != 25 || f.Strong || !strings.Contains(ev, "0.0.0.0:6379") || !strings.Contains(ev, "[::]:6379") {
+		t.Errorf("признак: %+v\n%s", f, ev)
+	}
+	// Открытый порт — ошибка настройки, а не взлом: легитимный Redis сам
+	// по себе не выше LOW.
+	if redis.Risk != model.RiskLow {
+		t.Errorf("риск redis: %s", redis.Risk)
+	}
+
+	// Тот же сервис из /tmp: две независимые категории поднимают оценку.
+	tmp := &model.Process{Key: "900-1", PID: 900, PPID: 1, Name: "redis-server", User: "nobody", UID: 65534, Exe: "/tmp/.x/redis-server", Args: []string{"/tmp/.x/redis-server"}}
+	listen(tmp, "tcp", "0.0.0.0", 6379, 3)
+	Analyze([]*model.Process{tmp}, &Context{Cfg: DefaultConfig(), Exposed: exposedFor(t, tmp)})
+	if !slices.Contains(ids(tmp), "exposed_database") || tmp.Risk < model.RiskMedium {
+		t.Errorf("redis из /tmp: %s %v", tmp.Risk, ids(tmp))
+	}
+
+	// allowlist подавляет признак, но оставляет его видимым.
+	cfg := DefaultConfig()
+	cfg.Allow = []AllowRule{{Exe: "/usr/bin/redis-server", Rules: []string{"exposed_database"}}}
+	Analyze([]*model.Process{redis}, &Context{Cfg: cfg, Exposed: exposedFor(t, redis)})
+	if redis.Risk != model.RiskInfo || !redis.Findings[0].Suppressed {
+		t.Errorf("allowlist: %s %+v", redis.Risk, redis.Findings)
+	}
+
+	// Сокет, который держит другой процесс (общий inode после fork), не
+	// приписывается этому процессу.
+	other := &model.Process{Key: "801-1", PID: 801, Name: "redis-server", Exe: "/usr/bin/redis-server", Sockets: redis.Sockets}
+	Analyze([]*model.Process{other}, &Context{Cfg: DefaultConfig(), Exposed: exposedFor(t, redis)})
+	if slices.Contains(ids(other), "exposed_database") {
+		t.Errorf("чужой сокет: %v", ids(other))
+	}
+	// Без оценки портов правило молчит.
+	Analyze([]*model.Process{redis}, &Context{Cfg: DefaultConfig()})
+	if len(ids(redis)) != 0 {
+		t.Errorf("без Exposed: %v", ids(redis))
+	}
 }

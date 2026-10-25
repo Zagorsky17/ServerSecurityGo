@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
@@ -749,6 +750,45 @@ func ruleRootFromWritable(p *model.Process, _ *Context) []model.Finding {
 		Evidence:       []i18n.Msg{i18n.L("EUID = 0, " + exeRef(p).Lit)},
 		Recommendation: i18n.T("rule.root_from_writable.rec"),
 	})
+}
+
+// ---------------------------------------------------------------------
+// Доступность из сети
+// ---------------------------------------------------------------------
+
+// ruleExposure — процесс держит публичный порт известного опасного
+// сервиса (Redis, Docker API, базы данных...). Оценку доступности делает
+// пакет exposure: по ней же строятся системные находки с собственным
+// уровнем, а здесь признак попадает в карточку процесса. Вес не «сильный»:
+// открытый порт — ошибка настройки, а не признак взлома.
+func ruleExposure(p *model.Process, c *Context) []model.Finding {
+	if len(c.Exposed) == 0 {
+		return nil
+	}
+	var out []model.Finding
+	byID := map[string]int{} // ID признака → индекс в out
+	for _, s := range p.Sockets {
+		e := c.Exposed[s.Inode]
+		if e == nil || s.Inode == 0 || e.FindingID == "" || e.Service == nil || e.ProcKey != p.Key {
+			continue
+		}
+		w := exposure.Weight(e.Risk)
+		i, ok := byID[e.FindingID]
+		if !ok {
+			byID[e.FindingID] = len(out)
+			out = append(out, model.Finding{ID: e.FindingID, Title: exposure.Title(e), Category: model.CatExposure, Weight: w,
+				Evidence: slices.Clone(e.Evidence), Recommendation: e.Recommendation})
+			continue
+		}
+		f := &out[i]
+		if len(e.Evidence) > 0 { // первая строка — сокет и его владелец
+			f.Evidence = append(f.Evidence, e.Evidence[0])
+		}
+		if w > f.Weight {
+			f.Weight, f.Title, f.Recommendation = w, exposure.Title(e), e.Recommendation
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
@@ -24,6 +25,9 @@ type Data struct {
 	Sockets []model.Socket
 	Events  []model.Event // новые первыми
 	System  []model.SystemFinding
+	// Exposure — открытые порты; nil, если служба старой версии без
+	// /api/exposure.
+	Exposure *model.ExposureReport
 }
 
 // Source — откуда интерфейс берёт данные: из запущенной службы (через
@@ -79,7 +83,7 @@ func (l *LocalSource) Fetch() (*Data, error) {
 	st := view.BuildStatus(view.Status{Version: l.version, Demo: l.demo, Interval: l.sc.Interval().Seconds()}, snap)
 	ev := l.sc.History().Events(2000)
 	slices.Reverse(ev)
-	return &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap)}, nil
+	return &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap), Exposure: view.Exposure(snap)}, nil
 }
 
 func (l *LocalSource) Detail(key string) (*view.Detail, error) {
@@ -133,6 +137,9 @@ func DialSocket(path string) (*RemoteSource, error) {
 	return r, nil
 }
 
+// errNotFound — у службы нет такого метода API (старая версия).
+var errNotFound = errors.New("not found")
+
 // get выполняет GET и декодирует JSON. Хост в URL условный: соединение
 // всё равно идёт в Unix-сокет.
 func (r *RemoteSource) get(path string, v any) error {
@@ -141,6 +148,9 @@ func (r *RemoteSource) get(path string, v any) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound && !strings.HasPrefix(path, "/api/process/") {
+		return errNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		var e struct {
 			Error string `json:"error"`
@@ -183,6 +193,15 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 		}
 	}
 	d.Procs, d.Sockets, d.Events, d.System = procs.Processes, conns.Sockets, evs.Events, sys.Findings
+	// Открытые порты появились в новой версии: служба, обновлённая
+	// позже терминала, отвечает 404 — тогда панель просто пустая.
+	var exp struct {
+		Exposure *model.ExposureReport `json:"exposure"`
+	}
+	if err := r.get("/api/exposure", &exp); err != nil && !errors.Is(err, errNotFound) {
+		return nil, fmt.Errorf("/api/exposure: %w", err)
+	}
+	d.Exposure = exp.Exposure
 	return d, nil
 }
 

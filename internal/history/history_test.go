@@ -191,3 +191,88 @@ func TestTrackCopyRace(t *testing.T) {
 		t.Errorf("копия изменилась вместе с хранилищем: %v", tr.Findings)
 	}
 }
+
+// TestSystemFindingsBounded: событие системной находки — при появлении и
+// при росте уровня; кратковременное исчезновение (перезапуск службы)
+// события не даёт, а долго отсутствующая находка забывается, так что
+// ключи не накапливаются.
+func TestSystemFindingsBounded(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(Options{Dir: dir})
+	now := time.Now()
+	tick := 0
+	record := func(f ...model.SystemFinding) int {
+		tick++
+		n := 0
+		for _, e := range s.Record(now.Add(time.Duration(tick)*time.Second), nil, f) {
+			if e.Type == model.EvSystem {
+				n++
+			}
+		}
+		return n
+	}
+	sf := func(port int, r model.Risk) model.SystemFinding {
+		return model.SystemFinding{Finding: model.Finding{ID: "exposed_database", Title: i18n.L("Redis")}, Path: fmt.Sprintf("%d/tcp", port), Risk: r}
+	}
+	if n := record(sf(6379, model.RiskLow)); n != 1 {
+		t.Errorf("новая находка: %d событий", n)
+	}
+	if n := record(sf(6379, model.RiskLow)); n != 0 {
+		t.Errorf("та же находка: %d событий", n)
+	}
+	// ufw выключили: тот же ключ, уровень вырос — событие.
+	if n := record(sf(6379, model.RiskCritical)); n != 1 {
+		t.Errorf("рост уровня: %d событий", n)
+	}
+	// Снижение уровня — без события.
+	if n := record(sf(6379, model.RiskLow)); n != 0 {
+		t.Errorf("снижение уровня: %d событий", n)
+	}
+	// Перезапуск службы: порт пропал на одно сканирование — без события.
+	record()
+	if n := record(sf(6379, model.RiskLow)); n != 0 {
+		t.Errorf("после перезапуска: %d событий", n)
+	}
+	// Порт закрыли надолго, потом снова открыли — новое событие.
+	for range systemForget {
+		record()
+	}
+	if n := record(sf(6379, model.RiskLow)); n != 1 {
+		t.Errorf("вернувшаяся находка: %d событий", n)
+	}
+	// Уровень переживает перезапуск службы.
+	s2, _ := Open(Options{Dir: dir})
+	if seen := s2.systemSet["exposed_database|6379/tcp"]; seen == nil || seen.risk != model.RiskLow {
+		t.Errorf("после Open: %+v", seen)
+	}
+	// Тысяча разных портов по очереди: в памяти остаются лишь последние.
+	for i := range 1000 {
+		record(sf(10000+i, model.RiskHigh))
+	}
+	s.mu.RLock()
+	n := len(s.systemSet)
+	s.mu.RUnlock()
+	if n > systemForget {
+		t.Errorf("в systemSet %d ключей", n)
+	}
+}
+
+// TestOldStateSystemRisk: state.json прошлой версии без systemRisk — после
+// обновления известные находки не дают ложного события о росте уровня.
+func TestOldStateSystemRisk(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"version":1,"tracks":{"1-1":{"key":"1-1","pid":1,"lastSeen":"2026-10-01T00:00:00Z"}},"system":["ld_so_preload|/etc/ld.so.preload"]}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := s.Record(time.Now(), nil, []model.SystemFinding{{Finding: model.Finding{ID: "ld_so_preload"}, Path: "/etc/ld.so.preload", Risk: model.RiskHigh}})
+	for _, e := range evs {
+		if e.Type == model.EvSystem {
+			t.Errorf("ложное событие: %+v", e)
+		}
+	}
+}

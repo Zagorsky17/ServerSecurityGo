@@ -22,6 +22,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
@@ -526,5 +527,47 @@ func TestStaticKeysAndSafety(t *testing.T) {
 		if !strings.Contains(string(data), htmlLangAttr) {
 			t.Errorf("%s: нет %s — сервер не сможет выставить язык", page, htmlLangAttr)
 		}
+	}
+}
+
+// TestExposureAPI: GET /api/exposure отдаёт порты демо-системы, требует
+// входа при заданном пароле и не раскрывает окружение контейнеров.
+func TestExposureAPI(t *testing.T) {
+	s := newTestServer(t, "")
+	w := do(s, "GET", "/api/exposure", "127.0.0.1:8090", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("код %d: %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Exposure model.ExposureReport `json:"exposure"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	x := resp.Exposure
+	if len(x.Entries) == 0 || x.Firewall.UFW != "active" || len(x.Addrs) == 0 || len(x.Bindings) != 2 {
+		t.Errorf("ответ: %+v", x)
+	}
+	if strings.Contains(w.Body.String(), "SECRET=demo") {
+		t.Error("окружение контейнера в ответе API")
+	}
+	// Счётчики для заголовка — в /api/status.
+	w = do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil)
+	var st view.Status
+	if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil || st.Stats.PublicPorts == 0 || st.Stats.DangerousPorts == 0 {
+		t.Errorf("статус: %v %+v", err, st.Stats)
+	}
+	// Только GET.
+	if w := do(s, "POST", "/api/exposure", "127.0.0.1:8090", "", map[string]string{"X-CSRF-Token": s.noAuthCSRF}); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST: %d", w.Code)
+	}
+	// С паролем — без входа 401, чужой Host — отказ.
+	hash, _ := HashPassword("correct horse battery")
+	sa := newTestServer(t, hash)
+	if w := do(sa, "GET", "/api/exposure", "127.0.0.1:8090", "", nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("без входа: %d", w.Code)
+	}
+	if w := do(s, "GET", "/api/exposure", "evil.example", "", nil); w.Code == 200 {
+		t.Error("чужой Host пропущен")
 	}
 }
