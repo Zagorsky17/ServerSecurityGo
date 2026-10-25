@@ -949,3 +949,50 @@ func TestPlainModeEscapes(t *testing.T) {
 		t.Errorf("управляющие символы в текстовом режиме: %q", body)
 	}
 }
+
+// TestLegacyMouse: мышь в форматах X10 (Terminal.app) и urxvt 1015
+// разбирается как мышь, а байты координат не превращаются в клавиши.
+func TestLegacyMouse(t *testing.T) {
+	// X10: щелчок левой кнопкой в столбце 10, строке 5; отпускание;
+	// колесо вниз; затем обычная клавиша q.
+	in := []byte{0x1b, '[', 'M', 32 + 0, 32 + 10, 32 + 5, 0x1b, '[', 'M', 32 + 3, 32 + 10, 32 + 5, 0x1b, '[', 'M', 32 + 65, 32 + 3, 32 + 4, 'q'}
+	ks := parseKeys(in)
+	if len(ks) != 4 {
+		t.Fatalf("событий %d: %+v", len(ks), ks)
+	}
+	if k := ks[0]; k.Kind != KeyMouse || k.Button != 0 || k.X != 9 || k.Y != 4 || !k.Press {
+		t.Errorf("щелчок: %+v", k)
+	}
+	if k := ks[1]; k.Kind != KeyMouse || k.Press {
+		t.Errorf("отпускание: %+v", k)
+	}
+	if k := ks[2]; k.Kind != KeyMouse || k.Button != 65 || !k.Press {
+		t.Errorf("колесо: %+v", k)
+	}
+	if k := ks[3]; k.Kind != KeyRune || k.Rune != 'q' {
+		t.Errorf("клавиша после мыши: %+v", k)
+	}
+	// Щелчок с Shift (модификатор 4) — та же кнопка.
+	if k := parseKeys([]byte{0x1b, '[', 'M', 32 + 4, 33, 33})[0]; k.Kind != KeyMouse || k.Button != 0 || !k.Press {
+		t.Errorf("Shift+щелчок: %+v", k)
+	}
+	// urxvt 1015.
+	ks = parseKeys([]byte("\x1b[32;10;5M\x1b[35;10;5M\x1b[97;3;4M"))
+	if len(ks) != 3 || ks[0].Kind != KeyMouse || ks[0].X != 9 || ks[0].Y != 4 || !ks[0].Press || ks[1].Press || ks[2].Button != 65 {
+		t.Errorf("urxvt: %+v", ks)
+	}
+	// Обрезанная последовательность не порождает клавиш.
+	if k := parseKeys([]byte{0x1b, '[', 'M', 32}); len(k) != 1 || k[0].Kind != KeyUnknown {
+		t.Errorf("обрезанная: %+v", k)
+	}
+	// Щелчок в X10 действительно выбирает панель.
+	a, _ := newTestApp(t, 160, 45)
+	screen(a) // координаты панелей появляются при отрисовке
+	pr := a.rects[pProcs]
+	for _, k := range parseKeys([]byte{0x1b, '[', 'M', 32, byte(32 + pr.x + 4), byte(32 + pr.y + 1)}) {
+		a.handleKey(k)
+	}
+	if a.focus != pProcs {
+		t.Errorf("щелчок X10 не выбрал панель: %d", a.focus)
+	}
+}
