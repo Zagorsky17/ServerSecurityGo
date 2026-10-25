@@ -443,6 +443,38 @@ ls -d /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecurit
 /opt/serversecuritygo/bin/serversecuritygo audit --format json > audit.json
 ```
 
+**报告格式。** `scan` 和 `audit` 接受 `--format`：
+
+| 格式 | 用途 |
+|---|---|
+| `text`（默认） | 终端 |
+| `json` | 脚本和 Ansible：带 `schema_version`、`verdict`、`incomplete` 的稳定结构 |
+| `html` | 服务器所有者：单个自包含文件（内置 CSS、无脚本、亮色和暗色主题），包含结论、概要、发现和建议 |
+| `md` | 工单、GitLab 或 Telegram：Markdown 表格，所有来自系统的内容都已转义 |
+
+`--output 文件` 把报告写入权限为 600 的文件（报告中包含命令行和路径），而不是输出到屏幕。文件以原子方式替换；拒绝写入符号链接，而对 `/dev/null` 这类设备则直接写入：
+
+```bash
+serversecuritygo audit --format html --output /root/audit.html
+serversecuritygo scan --format md --output /root/scan.md
+```
+
+**退出码**便于从 cron、CI、Ansible 或监控系统运行检查：
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 没有 `--fail-on` 级别及以上的发现 |
+| `1` | 有 `--fail-on` 级别及以上的发现（默认 `HIGH`） |
+| `2` | 错误：完全无法读取 `/proc`、配置损坏、参数错误 |
+| `3` | 没有这样的发现，但检查不完整：部分数据无法读取（请以 root 运行） |
+
+`--fail-on` 接受 `LOW`、`MEDIUM`、`HIGH`、`CRITICAL` 或 `none`。发现优先于不完整：即使部分数据没有读取，也返回退出码 1。`--fail-on none` 使退出码与发现无关（只剩 2 和 3）。**对现有脚本的提示：** 以前 `scan` 总是以 0 退出；现在有 HIGH 或 CRITICAL 发现时以 1 退出——需要旧行为时请加上 `--fail-on none`。对 `scan` 来说，级别是进程或系统发现的最高风险（`--min-risk` 只过滤输出）；对 `audit` 来说，是状态为“危险”或“警告”的检查的最高严重程度。
+
+```bash
+# 每天 6:00：把审计报告写入文件，有问题时由 cron 发邮件
+0 6 * * * /opt/serversecuritygo/bin/serversecuritygo audit --fail-on HIGH --format md --output /root/audit.md || echo "安全设置需要注意：/root/audit.md"
+```
+
 使用虚构数据的演示模式可在 Linux 和 macOS 上运行：
 
 ```bash
@@ -472,6 +504,7 @@ internal/
   detect/                 规则、风险评分、解释、白名单、系统检查
   exposure/               开放端口：可达范围、危险服务、ufw、Docker 发布的端口
   audit/                  安全设置审计：sshd_config、账户、sudoers；后台运行
+  report/                 scan 和 audit 报告：文本、JSON、HTML、Markdown；退出码
   safefile/               安全读取攻击者可能控制的文件（不跟随符号链接、拒绝 FIFO、限制大小）
   redact/                 遮蔽命令行中的密钥
   history/                进程历史和事件日志（state.json、events.jsonl）

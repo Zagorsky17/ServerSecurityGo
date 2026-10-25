@@ -18,7 +18,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -31,23 +30,21 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/config"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
-	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/report"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/tui"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
@@ -101,7 +98,16 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
+		var st exitStatus
+		if errors.As(err, &st) {
+			os.Exit(int(st)) // итог проверки, а не ошибка: сообщение не нужно
+		}
 		fmt.Fprintln(os.Stderr, i18n.S("cli.error", err))
+		// scan и audit возвращают ошибку с кодом 2: у них 1 — «есть находки».
+		var ce *report.CodeError
+		if errors.As(err, &ce) {
+			os.Exit(ce.Code)
+		}
 		os.Exit(1)
 	}
 }
@@ -429,25 +435,46 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	return tui.NewLocalSource(sc, ar, version, false, note)
 }
 
+// cmdScan — разовое сканирование процессов с отчётом в консоль или файл.
+// Код выхода зависит от находок (--fail-on), см. report.ExitCode; ошибки
+// возвращаются с кодом 2 (report.AsRunError).
 func cmdScan(args []string) error {
+	code, err := runScan(args)
+	if err != nil {
+		return report.AsRunError(err)
+	}
+	return exitCode(code)
+}
+
+func runScan(args []string) (int, error) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	envFile := fs.String("env-file", "", i18n.S("cli.flag.env_file"))
-	format := fs.String("format", "table", i18n.S("cli.flag.format"))
+	format := fs.String("format", "text", i18n.S("cli.flag.format"))
+	output := fs.String("output", "", i18n.S("cli.flag.output"))
+	failOn := fs.String("fail-on", "HIGH", i18n.S("cli.flag.fail_on"))
 	minRisk := fs.String("min-risk", "LOW", i18n.S("cli.flag.min_risk"))
 	sample := fs.Duration("sample", 0, i18n.S("cli.flag.sample"))
 	_ = fs.Parse(args)
 
 	min, ok := model.ParseRisk(*minRisk)
 	if !ok {
-		return i18n.Errorf("err.unknown_level", strconv.Quote(*minRisk))
+		return 0, i18n.Errorf("err.unknown_level", strconv.Quote(*minRisk))
+	}
+	f, err := report.ParseFormat(*format)
+	if err != nil {
+		return 0, err
+	}
+	fail, err := report.ParseFailOn(*failOn)
+	if err != nil {
+		return 0, err
 	}
 	cfg, err := loadConfig(*envFile)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	detCfg, err := cfg.DetectConfig()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	// Разовый запуск не трогает историю службы — только память.
 	hist, _ := history.Open(history.Options{CPUThreshold: cfg.CPUThreshold, MemThreshold: cfg.MemThreshold})
@@ -456,188 +483,73 @@ func cmdScan(args []string) error {
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error")})
 	snap, err := sc.ScanOnce()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if *sample > 0 {
 		time.Sleep(*sample)
 		if snap, err = sc.ScanOnce(); err != nil {
-			return err
+			return 0, err
 		}
 	}
-
-	var procs []*model.Process
-	for _, p := range snap.Processes {
-		if p.Risk >= min {
-			procs = append(procs, p)
-		}
+	rep := report.NewScan(snap, min, version)
+	if err := report.Write(*output, func(w io.Writer) error { return rep.Render(w, f, i18n.Default()) }); err != nil {
+		return 0, err
 	}
-	// Сортировка: сначала самые рискованные.
-	sortByRisk(procs)
-	var sys []model.SystemFinding
-	for _, f := range snap.System {
-		if f.Risk >= min {
-			sys = append(sys, f)
-		}
-	}
-
-	if *format == "json" {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		// Сообщения выводятся готовым текстом на языке процесса: скриптам
-		// не нужен каталог переводов.
-		v, err := i18n.RenderJSON(map[string]any{"time": snap.Time, "host": snap.Host, "stats": snap.Stats, "warnings": snap.Warnings, "processes": procs, "system": sys,
-			"exposure": view.Exposure(snap)}, i18n.Default())
-		if err != nil {
-			return err
-		}
-		return enc.Encode(v)
-	}
-
-	// Таблица уходит прямо в терминал администратора, а имя процесса
-	// (comm), путь и командную строку задаёт сам процесс: ESC-последовательности
-	// в них сменили бы заголовок окна или записали бы буфер обмена (OSC 52).
-	// Поэтому всё из системы выводится через view.Printable. JSON
-	// экранирует управляющие символы сам.
-	pr := view.Printable
-	fmt.Println(i18n.S("cli.scan.host", pr(snap.Host.Hostname), pr(snap.Host.OS), pr(snap.Host.Kernel), snap.Stats.Total, snap.Stats.Sockets, snap.Duration.Round(time.Millisecond)))
-	for _, w := range snap.Warnings {
-		fmt.Println("! " + pr(w.String()))
-	}
-	fmt.Println(i18n.S("cli.scan.levels", snap.Stats.ByRisk["CRITICAL"], snap.Stats.ByRisk["HIGH"], snap.Stats.ByRisk["MEDIUM"], snap.Stats.ByRisk["LOW"], snap.Stats.ByRisk["INFO"]))
-	fmt.Println()
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, i18n.S("cli.scan.header"))
-	for _, p := range procs {
-		var titles []string
-		for _, f := range p.Findings {
-			if f.Category != model.CatInfo && !f.Suppressed {
-				titles = append(titles, f.Title.String())
-			}
-		}
-		exe := p.Exe
-		if p.ExeDeleted {
-			exe += " " + i18n.S("tui.deleted")
-		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\n", p.Risk, p.Score, p.PID, pr(p.User), pr(p.Name), pr(exe), pr(strings.Join(titles, "; ")))
-	}
-	tw.Flush()
-	if len(procs) == 0 {
-		fmt.Println(i18n.S("cli.scan.none", min))
-	}
-	if len(sys) > 0 {
-		fmt.Println("\n" + i18n.S("cli.scan.system"))
-		for _, f := range sys {
-			fmt.Printf("  [%s] %s — %s\n", f.Risk, pr(f.Title.String()), pr(f.Path))
-			for _, e := range f.Evidence {
-				fmt.Println("      " + pr(e.String()))
-			}
-		}
-	}
-	printPublicPorts(snap)
-	fmt.Println("\n" + i18n.S("cli.scan.footer"))
-	return nil
-}
-
-// printPublicPorts выводит таблицу публичных портов. Имена процессов,
-// контейнеров и образов задаёт сам процесс или владелец контейнера,
-// поэтому всё проходит через view.Printable.
-func printPublicPorts(snap *model.Snapshot) {
-	var pub []model.Exposure
-	for _, e := range view.Exposure(snap).Entries {
-		if e.Scope == model.ScopePublic {
-			pub = append(pub, e)
-		}
-	}
-	if len(pub) == 0 {
-		return
-	}
-	pr := view.Printable
-	fmt.Println("\n" + i18n.S("cli.scan.ports"))
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "  "+i18n.S("cli.scan.ports_header"))
-	for _, e := range pub {
-		svc, owner, fw := "—", "—", "—"
-		if e.Service != nil {
-			svc = e.Service.Name
-		}
-		switch {
-		case e.PID != 0:
-			owner = fmt.Sprintf("%s (%d)", e.ProcName, e.PID)
-		case e.Container != "":
-			owner = "docker " + e.Container
-		}
-		switch e.Firewall {
-		case model.FwOpen:
-			fw = i18n.S("tui.fw.open")
-		case model.FwFiltered:
-			fw = i18n.S("tui.fw.filtered")
-		case model.FwBypassed:
-			fw = i18n.S("tui.fw.bypassed")
-		}
-		risk := e.Risk.String()
-		if e.Suppressed {
-			risk += "*"
-		}
-		fmt.Fprintf(tw, "  %s\t%s %s\t%s\t%s\t%s\n", risk, e.Proto, pr(exposure.Endpoint(e.Addr, e.Port)), pr(svc), pr(owner), fw)
-	}
-	tw.Flush()
+	return rep.ExitCode(fail), nil
 }
 
 // cmdAudit — разовая проверка настроек безопасности (SSH, учётные
-// записи, sudo) с выводом в консоль. Без службы проверки изменений
-// (новые пользователи, правка sudoers) недоступны — сравнивать не с чем.
+// записи, sudo). Без службы проверки изменений (новые пользователи,
+// правка sudoers) недоступны — сравнивать не с чем.
 func cmdAudit(args []string) error {
-	fs := flag.NewFlagSet("audit", flag.ExitOnError)
-	envFile := fs.String("env-file", "", i18n.S("cli.flag.env_file"))
-	format := fs.String("format", "table", i18n.S("cli.flag.format"))
-	all := fs.Bool("all", false, i18n.S("cli.flag.all_checks"))
-	_ = fs.Parse(args)
-	cfg, err := loadConfig(*envFile)
+	code, err := runAudit(args)
 	if err != nil {
-		return err
+		return report.AsRunError(err)
 	}
-	checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot})
-	v := view.BuildAudit(true, false, 0, &model.AuditReport{Time: time.Now(), Checks: checks})
-	if *format == "json" {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		out, err := i18n.RenderJSON(v, i18n.Default())
-		if err != nil {
-			return err
-		}
-		return enc.Encode(out)
-	}
-	// Факты — строки конфигурационных файлов: печатаются через
-	// view.Printable, как и в scan.
-	pr := view.Printable
-	s := v.Summary
-	fmt.Println(i18n.S("cli.audit.header", v.Passed, v.Total, s.Fail, s.Warn, s.Info))
-	for _, c := range v.Checks {
-		if !*all && (c.Status == model.AuditPass || c.Status == model.AuditNA) {
-			continue
-		}
-		fmt.Printf("\n[%s] %s · %s · %s\n", strings.ToUpper(c.Status), c.Severity, c.Group, pr(c.Title.String()))
-		for _, e := range c.Evidence {
-			fmt.Println("    " + pr(e.String()))
-		}
-		if !c.Recommendation.IsZero() {
-			fmt.Println("  → " + pr(c.Recommendation.String()))
-		}
-		if c.FixCommand != "" {
-			fmt.Println("  $ " + c.FixCommand)
-		}
-	}
-	fmt.Println("\n" + i18n.S("cli.audit.footer"))
-	return nil
+	return exitCode(code)
 }
 
-func sortByRisk(procs []*model.Process) {
-	sort.SliceStable(procs, func(i, j int) bool {
-		if procs[i].Risk != procs[j].Risk {
-			return procs[i].Risk > procs[j].Risk
-		}
-		return procs[i].Score > procs[j].Score
-	})
+func runAudit(args []string) (int, error) {
+	fs := flag.NewFlagSet("audit", flag.ExitOnError)
+	envFile := fs.String("env-file", "", i18n.S("cli.flag.env_file"))
+	format := fs.String("format", "text", i18n.S("cli.flag.format"))
+	output := fs.String("output", "", i18n.S("cli.flag.output"))
+	failOn := fs.String("fail-on", "HIGH", i18n.S("cli.flag.fail_on"))
+	all := fs.Bool("all", false, i18n.S("cli.flag.all_checks"))
+	_ = fs.Parse(args)
+	f, err := report.ParseFormat(*format)
+	if err != nil {
+		return 0, err
+	}
+	fail, err := report.ParseFailOn(*failOn)
+	if err != nil {
+		return 0, err
+	}
+	cfg, err := loadConfig(*envFile)
+	if err != nil {
+		return 0, err
+	}
+	checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot})
+	host, _ := os.Hostname()
+	rep := &report.Audit{View: view.BuildAudit(true, false, 0, &model.AuditReport{Time: time.Now(), Checks: checks}), Hostname: host, Version: version, All: *all}
+	if err := report.Write(*output, func(w io.Writer) error { return rep.Render(w, f, i18n.Default()) }); err != nil {
+		return 0, err
+	}
+	return rep.ExitCode(fail), nil
+}
+
+// exitStatus — команда завершилась успешно, но с особым кодом выхода
+// (scan и audit: 1 — есть находки, 3 — проверка неполная).
+type exitStatus int
+
+func (e exitStatus) Error() string { return "exit status " + strconv.Itoa(int(e)) }
+
+// exitCode — nil для кода 0, иначе exitStatus.
+func exitCode(code int) error {
+	if code == 0 {
+		return nil
+	}
+	return exitStatus(code)
 }
 
 func cmdDemo(args []string) error {

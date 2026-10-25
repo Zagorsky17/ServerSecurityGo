@@ -348,3 +348,33 @@ func BuildAuditBrief(enabled, running bool, rep *model.AuditReport) AuditBrief {
 	}
 	return b
 }
+
+// AuditStatusText — подпись статуса проверки аудита (для TUI и отчётов).
+func AuditStatusText(s string) i18n.Msg {
+	switch s {
+	case model.AuditPass:
+		return i18n.T("audit.status.pass")
+	case model.AuditFail:
+		return i18n.T("audit.status.fail")
+	case model.AuditWarn:
+		return i18n.T("audit.status.warn")
+	case model.AuditInfo:
+		return i18n.T("audit.status.info")
+	case model.AuditNA:
+		return i18n.T("audit.status.na")
+	}
+	return i18n.T("audit.status.unknown")
+}
+
+// AuditGroupText — подпись группы проверок аудита.
+func AuditGroupText(g string) i18n.Msg {
+	switch g {
+	case model.AuditGroupSSH:
+		return i18n.T("audit.group.ssh")
+	case model.AuditGroupAccounts:
+		return i18n.T("audit.group.accounts")
+	case model.AuditGroupSudo:
+		return i18n.T("audit.group.sudo")
+	}
+	return i18n.L(g)
+}
