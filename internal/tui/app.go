@@ -39,13 +39,14 @@ const (
 	pProcs
 	pNet
 	pPorts
+	pAudit
 	pHist
 	pSys
 	nPanels
 )
 
 // panelKeys — ключи каталога для названий панелей.
-var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports", "tui.panel.hist", "tui.panel.sys"}
+var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports", "tui.panel.audit", "tui.panel.hist", "tui.panel.sys"}
 
 // sortKeys — режимы сортировки списка процессов (ключи каталога).
 var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
@@ -92,6 +93,7 @@ type App struct {
 	procPrefix []string // префиксы дерева («├─ ») в режиме дерева
 	socks      []model.Socket
 	ports      []model.Exposure
+	checks     []model.AuditCheck
 	events     []model.Event
 	system     []model.SystemFinding
 	byKey      map[string]view.Summary
@@ -318,6 +320,14 @@ func (a *App) rebuild() {
 			}
 		}
 	}
+	a.checks = a.checks[:0]
+	if av := a.data.Audit; av != nil {
+		for _, c := range av.Checks {
+			if matches(a.lists[pAudit].filter, c.ID, c.Group, c.Status, a.txt(c.Title), c.Severity.String(), i18n.Join(" ", c.Evidence...).In(a.lang)) {
+				a.checks = append(a.checks, c)
+			}
+		}
+	}
 	a.events = a.events[:0]
 	for _, e := range a.data.Events {
 		if matches(a.lists[pHist].filter, e.Type, eventName(a.lang, e.Type), strconv.Itoa(e.PID), e.Name, e.User, a.txt(e.Details), e.Risk.String()) {
@@ -409,6 +419,8 @@ func (a *App) count(p panelID) int {
 		return len(a.socks)
 	case pPorts:
 		return len(a.ports)
+	case pAudit:
+		return len(a.checks)
 	case pHist:
 		return len(a.events)
 	case pSys:
@@ -512,7 +524,7 @@ func (a *App) runeKey(r rune, list panelID) bool {
 		a.focusPanel((a.focus + 1) % nPanels)
 	case '[':
 		a.focusPanel((a.focus + nPanels - 1) % nPanels)
-	case '1', '2', '3', '4', '5', '6', '7':
+	case '1', '2', '3', '4', '5', '6', '7', '8':
 		a.focusPanel(panelID(r - '1'))
 	case '/':
 		if a.focus >= pSusp {
@@ -544,6 +556,17 @@ func (a *App) runeKey(r rune, list panelID) bool {
 			a.flash(a.tr("tui.flash.kernel_hidden"), false)
 		}
 	case 'r':
+		if a.focus == pAudit {
+			// На панели настроек r — «Проверить сейчас».
+			if err := a.src.RunAudit(); err != nil {
+				a.flash(a.tr("tui.error", err.Error()), true)
+			} else {
+				a.flash(a.tr("tui.flash.audit_started"), false)
+				time.Sleep(300 * time.Millisecond)
+				a.load()
+			}
+			return false
+		}
 		if err := a.src.Rescan(); err != nil {
 			a.flash(a.tr("tui.error", err.Error()), true)
 		} else {
@@ -678,6 +701,16 @@ func (a *App) mouse(k Key) {
 // copyCmdline копирует командную строку выбранного процесса через
 // OSC 52 — работает и в SSH-сессии, если терминал это поддерживает.
 func (a *App) copyCmdline() {
+	if a.focus == pAudit {
+		// На панели настроек y копирует команду исправления.
+		if c, ok := a.selCheck(); ok && c.FixCommand != "" {
+			a.osc52(c.FixCommand)
+			a.flash(a.tr("tui.flash.fix_copied"), false)
+		} else {
+			a.flash(a.tr("tui.flash.nothing"), true)
+		}
+		return
+	}
 	if p, ok := a.selectedProc(); ok {
 		a.osc52(p.Cmdline)
 		a.flash(a.tr("tui.flash.cmd_copied"), false)
@@ -696,6 +729,10 @@ func (a *App) copyJSON() {
 	case pPorts:
 		if e, ok := a.selPort(); ok {
 			v = e
+		}
+	case pAudit:
+		if c, ok := a.selCheck(); ok {
+			v = c
 		}
 	case pHist:
 		if e, ok := a.selEvent(); ok {
@@ -750,6 +787,13 @@ func (a *App) portMatches(e model.Exposure) bool {
 	}
 	return matches(a.lists[pPorts].filter, e.Proto, e.Addr, strconv.Itoa(e.Port), e.Scope, a.scopeName(e.Scope), svc,
 		e.ProcName, strconv.Itoa(e.PID), e.User, e.Container, e.Risk.String())
+}
+
+func (a *App) selCheck() (model.AuditCheck, bool) {
+	if c := a.lists[pAudit].cursor; c < len(a.checks) {
+		return a.checks[c], true
+	}
+	return model.AuditCheck{}, false
 }
 
 func (a *App) selEvent() (model.Event, bool) {
@@ -810,7 +854,7 @@ func (a *App) expandedOrFocus() panelID {
 func eventName(l i18n.Lang, t string) string {
 	switch t {
 	case model.EvBaseline, model.EvStarted, model.EvExited, model.EvChanged, model.EvRiskUp,
-		model.EvRiskDown, model.EvFinding, model.EvListen, model.EvSystem:
+		model.EvRiskDown, model.EvFinding, model.EvListen, model.EvSystem, model.EvAudit:
 		return i18n.T("tui.event." + t).In(l)
 	}
 	return t

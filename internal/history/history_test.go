@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,5 +275,75 @@ func TestOldStateSystemRisk(t *testing.T) {
 		if e.Type == model.EvSystem {
 			t.Errorf("ложное событие: %+v", e)
 		}
+	}
+}
+
+// TestRecordAudit: событие — когда проверка стала опасной (или хуже) и
+// когда её исправили; советы и повторы событий не дают; статусы
+// переживают перезапуск службы.
+func TestRecordAudit(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(Options{Dir: dir})
+	now := time.Now()
+	chk := func(id, st string, sev model.Risk) model.AuditCheck {
+		return model.AuditCheck{ID: id, Title: i18n.L(id), Status: st, Severity: sev}
+	}
+	types := func(evs []model.Event) []string {
+		var out []string
+		for _, e := range evs {
+			out = append(out, e.Name+":"+e.Risk.String())
+		}
+		return out
+	}
+	evs := s.RecordAudit(now, []model.AuditCheck{
+		chk("ssh_password_auth", model.AuditFail, model.RiskHigh),
+		chk("ssh_port", model.AuditInfo, model.RiskInfo),
+		chk("ssh_x11", model.AuditWarn, model.RiskLow),
+		chk("ssh_root", model.AuditPass, model.RiskHigh),
+	})
+	if got := types(evs); len(got) != 2 || got[0] != "ssh_password_auth:HIGH" || got[1] != "ssh_x11:LOW" {
+		t.Errorf("первый запуск: %v", got)
+	}
+	if evs[0].Type != model.EvAudit || !strings.Contains(evs[0].Details.String(), "опасно") {
+		t.Errorf("событие: %+v", evs[0])
+	}
+	// Без изменений — тишина; warn → fail — событие; fail → pass — «исправлено».
+	if evs := s.RecordAudit(now, []model.AuditCheck{chk("ssh_password_auth", model.AuditFail, model.RiskHigh), chk("ssh_x11", model.AuditWarn, model.RiskLow)}); len(evs) != 0 {
+		t.Errorf("повтор: %v", types(evs))
+	}
+	evs = s.RecordAudit(now, []model.AuditCheck{chk("ssh_password_auth", model.AuditPass, model.RiskHigh), chk("ssh_x11", model.AuditFail, model.RiskLow)})
+	if got := types(evs); len(got) != 2 || got[0] != "ssh_password_auth:INFO" || got[1] != "ssh_x11:LOW" {
+		t.Errorf("исправлено/хуже: %v", got)
+	}
+	if !strings.Contains(evs[0].Details.String(), "исправлено") {
+		t.Errorf("текст: %s", evs[0].Details)
+	}
+	// После перезапуска состояние восстанавливается — повторных событий нет.
+	s2, _ := Open(Options{Dir: dir})
+	if evs := s2.RecordAudit(now, []model.AuditCheck{chk("ssh_password_auth", model.AuditPass, model.RiskHigh), chk("ssh_x11", model.AuditFail, model.RiskLow)}); len(evs) != 0 {
+		t.Errorf("после перезапуска: %v", types(evs))
+	}
+	// Пропавшие проверки забываются.
+	s2.RecordAudit(now, []model.AuditCheck{chk("ssh_x11", model.AuditFail, model.RiskLow)})
+	s2.mu.RLock()
+	n := len(s2.auditSet)
+	s2.mu.RUnlock()
+	if n != 1 {
+		t.Errorf("auditSet: %d", n)
+	}
+}
+
+// TestRecordAuditChangeCheck: проверка изменений, вернувшаяся в pass
+// (изменение устарело), не даёт события «исправлено».
+func TestRecordAuditChangeCheck(t *testing.T) {
+	s, _ := Open(Options{})
+	now := time.Now()
+	c := model.AuditCheck{ID: "acct_new", Title: i18n.L("new"), Status: model.AuditFail, Severity: model.RiskHigh, Change: true}
+	if evs := s.RecordAudit(now, []model.AuditCheck{c}); len(evs) != 1 {
+		t.Fatalf("событие о новом пользователе: %d", len(evs))
+	}
+	c.Status = model.AuditPass
+	if evs := s.RecordAudit(now, []model.AuditCheck{c}); len(evs) != 0 {
+		t.Errorf("«исправлено» для устаревшего изменения: %+v", evs)
 	}
 }

@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
@@ -22,6 +24,12 @@ import (
 
 // demoScanner создаёт сканер над демонстрационным деревом.
 func demoScanner(t *testing.T) *scanner.Scanner {
+	sc, _ := demoEnv(t)
+	return sc
+}
+
+// demoEnv — сканер и аудит над одним демо-деревом.
+func demoEnv(t *testing.T) (*scanner.Scanner, *audit.Runner) {
 	t.Helper()
 	tree := fakeproc.Demo(time.Now())
 	procRoot, hostRoot, err := tree.Write(t.TempDir())
@@ -29,8 +37,11 @@ func demoScanner(t *testing.T) *scanner.Scanner {
 		t.Fatal(err)
 	}
 	hist, _ := history.Open(history.Options{})
-	return scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist,
-		Interval: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Hostname: "demo-host", Demo: true})
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist,
+		Interval: time.Hour, Logger: quiet, Hostname: "demo-host", Demo: true})
+	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, RootUID: os.Getuid(), Interval: time.Hour, Record: hist.RecordAudit, Logger: quiet})
+	return sc, ar
 }
 
 // newTestApp — интерфейс на демо-данных без настоящего терминала.
@@ -40,7 +51,8 @@ func newTestApp(t *testing.T, w, h int) (*App, *bytes.Buffer) {
 
 func newTestAppLang(t *testing.T, w, h int, lang i18n.Lang) (*App, *bytes.Buffer) {
 	t.Helper()
-	src, err := NewLocalSource(demoScanner(t), "test", true, i18n.T("tui.source_demo"))
+	sc, ar := demoEnv(t)
+	src, err := NewLocalSource(sc, ar, "test", true, i18n.T("tui.source_demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +80,7 @@ func r(c rune) Key { return Key{Kind: KeyRune, Rune: c} }
 func TestRenderPanels(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
 	s := screen(a)
-	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] История", "[7] Система",
+	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] Настройки", "[7] История", "[8] Система",
 		"demo-host", "CRIT 4", "kworkerds", "CRITICAL", "Оценка риска", "q выход"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q\n%s", want, s)
@@ -163,12 +175,12 @@ func TestPanelsDetails(t *testing.T) {
 	if s := screen(a); !strings.Contains(s, "Сокет") || !strings.Contains(s, "LISTEN") {
 		t.Errorf("панель сети:\n%s", s)
 	}
-	press(a, r('7'))
+	press(a, r('8'))
 	if s := screen(a); !strings.Contains(s, "ld.so.preload") {
 		t.Errorf("панель системы:\n%s", s)
 	}
-	press(a, r('6'))
-	if s := screen(a); !strings.Contains(s, "Начало") && !strings.Contains(s, "Признак") {
+	press(a, r('7'))
+	if s := screen(a); !strings.Contains(s, "Начало") && !strings.Contains(s, "Признак") && !strings.Contains(s, "Настройки безопасности: «") {
 		t.Errorf("панель истории:\n%s", s)
 	}
 	// Порты: самый опасный — MongoDB, опубликованный Docker в обход ufw.
@@ -287,7 +299,7 @@ func TestRemoteSourceOldService(t *testing.T) {
 	srv := web.New(web.Options{Scanner: sc, Version: "old", ListenAddr: "127.0.0.1:8090", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	local := srv.LocalHandler()
 	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/exposure" {
+		if r.URL.Path == "/api/exposure" || r.URL.Path == "/api/audit" {
 			http.NotFound(w, r)
 			return
 		}
@@ -312,8 +324,8 @@ func TestRemoteSourceOldService(t *testing.T) {
 	}
 	t.Cleanup(rs.Close)
 	d, err := rs.Fetch()
-	if err != nil || d.Exposure != nil || len(d.Procs) == 0 {
-		t.Fatalf("Fetch у старой службы: %v %+v", err, d.Exposure)
+	if err != nil || d.Exposure != nil || d.Audit != nil || len(d.Procs) == 0 {
+		t.Fatalf("Fetch у старой службы: %v %+v %+v", err, d.Exposure, d.Audit)
 	}
 	a := New(Options{Source: rs, Out: io.Discard, Lang: i18n.RU})
 	a.w, a.h = 160, 45
@@ -361,6 +373,13 @@ func TestRemoteSource(t *testing.T) {
 	}
 	if d.Exposure == nil || len(d.Exposure.Entries) == 0 || d.Exposure.Firewall.UFW != "active" {
 		t.Errorf("открытые порты: %+v", d.Exposure)
+	}
+	// Аудит в этой службе выключен: панель это показывает, запуск — ошибка.
+	if d.Audit == nil || d.Audit.Enabled {
+		t.Errorf("аудит: %+v", d.Audit)
+	}
+	if err := rs.RunAudit(); err == nil {
+		t.Error("RunAudit при выключенном аудите")
 	}
 	// Несуществующий процесс — понятная ошибка службы, а не «not found».
 	if _, err := rs.Detail("нет-такого"); err == nil || err == errNotFound {
@@ -519,7 +538,7 @@ func TestAddrInTitle(t *testing.T) {
 // TestAddrInHistory: адрес в тексте события в панели «История».
 func TestAddrInHistory(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
-	press(a, r('6'))
+	press(a, r('7'))
 	a.events[0].Details = i18n.T("hist.listen", "tcp 203.0.113.5:8443")
 	a.render()
 	cs := cellsAt(a, "203.0.113.5:8443")
@@ -633,5 +652,55 @@ func TestLayoutHeights(t *testing.T) {
 	a.render()
 	if a.rects[pSusp].h < 6 {
 		t.Errorf("80×24: высота развёрнутой панели %d", a.rects[pSusp].h)
+	}
+}
+
+// TestAuditPanel: панель «Настройки» показывает итоги, r запускает
+// проверку заново, y копирует команду исправления.
+func TestAuditPanel(t *testing.T) {
+	a, out := newTestApp(t, 150, 40)
+	press(a, r('6'))
+	s := screen(a)
+	for _, want := range []string{"[6] Настройки", "Пройдено", "UID 0 только у root", "FAIL", "/etc/passwd:"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("нет %q:\n%s", want, s)
+		}
+	}
+	// Фильтр по тексту фактов.
+	press(a, r('/'))
+	for _, c := range "cloud-init" {
+		press(a, Key{Kind: KeyRune, Rune: c})
+	}
+	press(a, Key{Kind: KeyEnter})
+	if len(a.checks) == 0 {
+		t.Fatal("фильтр ничего не нашёл")
+	}
+	for _, c := range a.checks {
+		if !strings.Contains(i18n.Join(" ", c.Evidence...).String()+c.ID, "cloud-init") {
+			t.Errorf("лишняя проверка в фильтре: %s", c.ID)
+		}
+	}
+	// Вход по паролю (50-cloud-init.conf) — есть команда исправления.
+	idx := -1
+	for i, c := range a.checks {
+		if c.ID == "ssh_password_auth" {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		t.Fatal("нет ssh_password_auth")
+	}
+	a.lists[pAudit].cursor = idx
+	out.Reset()
+	press(a, r('y'))
+	if !strings.Contains(out.String(), "\x1b]52;c;") || a.msgErr {
+		t.Errorf("копирование команды: %q %q", out.String(), a.msg)
+	}
+	// r на панели настроек — повторная проверка, не пересканирование.
+	before := a.data.Audit.Time
+	time.Sleep(5 * time.Millisecond)
+	press(a, r('r'))
+	if a.msgErr || !a.data.Audit.Time.After(before) {
+		t.Errorf("повторная проверка: %q, время %v → %v", a.msg, before, a.data.Audit.Time)
 	}
 }

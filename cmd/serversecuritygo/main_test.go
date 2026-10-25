@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -53,4 +54,51 @@ func captureStdout(t *testing.T, f func()) string {
 	w.Close()
 	os.Stdout = old
 	return <-done
+}
+
+// TestAuditCommand: serversecuritygo audit в таблице и JSON на демо-дереве;
+// ESC-последовательности из конфигов не попадают в терминал, хеши паролей
+// не выводятся.
+func TestAuditCommand(t *testing.T) {
+	tree := fakeproc.Demo(time.Now())
+	tree.HostFiles["etc/sudoers.d/evil"] = "Defaults env_keep += \"LD_PRELOAD\" \x1b]0;pwned\x07\n"
+	procRoot, hostRoot, err := tree.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSG_PROC_ROOT", procRoot)
+	t.Setenv("SSG_HOST_ROOT", hostRoot)
+	t.Setenv("SSG_ALLOWLIST_FILE", "")
+	out := captureStdout(t, func() {
+		if err := cmdAudit(nil); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, want := range []string{"[FAIL]", "PasswordAuthentication", "sysadm"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("нет %q в выводе:\n%s", want, out)
+		}
+	}
+	if strings.ContainsAny(out, "\x1b\x07") || strings.Contains(out, "demohash") {
+		t.Errorf("управляющие символы или хеш в выводе audit: %q", out)
+	}
+	js := captureStdout(t, func() {
+		if err := cmdAudit([]string{"--format", "json"}); err != nil {
+			t.Error(err)
+		}
+	})
+	var v struct {
+		Passed int `json:"passed"`
+		Checks []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Title  string `json:"title"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(js), &v); err != nil || len(v.Checks) == 0 || v.Checks[0].Title == "" {
+		t.Fatalf("JSON: %v\n%s", err, js)
+	}
+	if strings.Contains(js, "demohash") {
+		t.Error("хеш в JSON")
+	}
 }

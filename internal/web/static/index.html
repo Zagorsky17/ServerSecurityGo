@@ -44,6 +44,7 @@
   <button role="tab" data-tab="tree" data-i18n="web.tab.tree">Дерево</button>
   <button role="tab" data-tab="net"><span data-i18n="web.tab.net">Сеть</span> <span class="badge" id="cnt-net">0</span></button>
   <button role="tab" data-tab="ports"><span data-i18n="web.tab.ports">Открытые порты</span> <span class="badge" id="cnt-ports">0</span></button>
+  <button role="tab" data-tab="audit"><span data-i18n="web.tab.audit">Настройки безопасности</span> <span class="badge" id="cnt-audit">0</span></button>
   <button role="tab" data-tab="history" data-i18n="web.tab.history">История</button>
   <button role="tab" data-tab="system"><span data-i18n="web.tab.system">Система</span> <span class="badge" id="cnt-system">0</span></button>
 </nav>
@@ -118,6 +119,34 @@
     <div class="table-wrap"><table id="t-ports"></table></div>
   </section>
 
+  <section id="tab-audit" class="tab">
+    <p class="hint" data-i18n="web.audit.hint">Проверка настроек SSH, учётных записей и sudo. Это причины взлома, а не его признаки: исправив их, вы закрываете дыру заранее. Приложение ничего не меняет — команды исправления выполняете вы.</p>
+    <div class="audit-head">
+      <span id="audit-when" class="muted"></span>
+      <b id="audit-score"></b>
+      <button type="button" id="btn-audit-run" data-i18n="web.audit.run">Проверить сейчас</button>
+    </div>
+    <form class="filters" id="audit-filters" autocomplete="off">
+      <input type="search" id="a-q" placeholder="Проверка, файл, пользователь" data-i18n-placeholder="web.audit.q">
+      <select id="a-status">
+        <option value="" data-i18n="web.audit.all_statuses">Все результаты</option>
+        <option value="problems" data-i18n="web.audit.problems">Только проблемы</option>
+        <option value="fail" data-i18n="audit.status.fail">опасно</option>
+        <option value="warn" data-i18n="audit.status.warn">требует внимания</option>
+        <option value="info" data-i18n="audit.status.info">совет</option>
+        <option value="pass" data-i18n="audit.status.pass">в порядке</option>
+      </select>
+      <select id="a-group">
+        <option value="" data-i18n="web.audit.all_groups">Все группы</option>
+        <option value="ssh" data-i18n="audit.group.ssh">SSH</option>
+        <option value="accounts" data-i18n="audit.group.accounts">Учётные записи</option>
+        <option value="sudo" data-i18n="audit.group.sudo">sudo</option>
+      </select>
+      <button type="reset" class="secondary" data-i18n="web.btn.reset">Сбросить</button>
+    </form>
+    <div class="table-wrap"><table id="t-audit"></table></div>
+  </section>
+
   <section id="tab-history" class="tab">
     <form class="filters" id="hist-filters" autocomplete="off">
       <input type="search" id="h-q" placeholder="PID, имя, подробности" data-i18n-placeholder="web.hist.q">
@@ -131,6 +160,7 @@
         <option value="finding" data-i18n="event.finding">Новый признак</option>
         <option value="listen" data-i18n="event.listen">Новый порт</option>
         <option value="system" data-i18n="event.system">Система</option>
+        <option value="audit" data-i18n="event.audit">Настройки безопасности</option>
         <option value="baseline" data-i18n="event.baseline">Начало наблюдения</option>
       </select>
       <select id="h-risk"><option value="" data-i18n="web.f.any_risk">Любой риск</option><option value="LOW" data-i18n="web.f.low_up">LOW и выше</option><option value="MEDIUM" data-i18n="web.f.medium_up">MEDIUM и выше</option><option value="HIGH" data-i18n="web.f.high_up">HIGH и выше</option></select>

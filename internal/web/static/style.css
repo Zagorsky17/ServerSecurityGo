@@ -77,6 +77,15 @@ td.nowrap { white-space: nowrap; }
 .risk-MEDIUM { color: var(--medium); background: var(--medium-bg); }
 .risk-HIGH { color: var(--high); background: var(--high-bg); }
 .risk-CRITICAL { color: var(--critical); background: var(--critical-bg); }
+/* Статусы проверок аудита: опасно — цвет CRITICAL, внимание — MEDIUM, в порядке — LOW. */
+.st { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.st-fail { color: var(--critical); background: var(--critical-bg); }
+.st-warn { color: var(--medium); background: var(--medium-bg); }
+.st-pass { color: var(--low); background: var(--low-bg); }
+.st-info, .st-na, .st-unknown { color: var(--info); background: var(--info-bg); }
+.audit-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 4px 0 10px; }
+.fix { display: flex; gap: 6px; align-items: flex-start; margin-top: 6px; }
+.fix pre { flex: 1; margin: 0; }
 .tag { display: inline-block; padding: 0 6px; margin: 1px 3px 1px 0; border-radius: 4px; background: var(--info-bg); font-size: 12px; }
 .tag.strong { background: var(--high-bg); }
 .tag.supp { text-decoration: line-through; opacity: .6; }

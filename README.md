@@ -22,6 +22,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
 - [Web dashboard (optional)](#web-dashboard-optional)
 - [Features](#features)
   - [Open ports](#open-ports)
+  - [Security settings](#security-settings)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
 - [Detection limitations](#detection-limitations)
@@ -106,22 +107,23 @@ serversecuritygo
 ╭ [3] Процессы (47) · риск ────────────────╮│ Командная строка  (y — копировать)                   │
 ╭ [4] Сеть (17) ───────────────────────────╮│   bash -i                                            │
 ╭ [5] Порты (9) ───────────────────────────╮│                                                      │
-╭ [6] История (25) ────────────────────────╮│ Цепочка запуска                                      │
-╭ [7] Система (2) ─────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
-↑↓ выбор  1-7/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
+╭ [6] Настройки (32) ──────────────────────╮│                                                      │
+╭ [7] История (25) ────────────────────────╮│ Цепочка запуска                                      │
+╭ [8] Система (2) ─────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
+↑↓ выбор  1-8/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
 ```
 
-On the left are seven panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, history and system checks. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
+On the left are eight panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, security settings, history and system checks. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
 
 | Keys | Action |
 |---|---|
-| `1`…`7`, `Tab` / `Shift+Tab` | switch panel |
+| `1`…`8`, `Tab` / `Shift+Tab` | switch panel |
 | `↑` `↓` / `j` `k`, `PgUp` `PgDn`, `g` `G` | select a row; scroll in the details |
 | `Enter` / `→`, `Esc` / `←` | go to the details and back |
 | `/` | filter the panel by name, PID, path, user, indicator or risk level |
 | `s`, `t`, `K` | sort processes (risk, CPU, memory, PID, name), tree view, kernel threads |
-| `r`, `p` | scan now, pause auto-refresh |
-| `y`, `Y` | copy the command line or JSON to your computer's clipboard (OSC 52, works over SSH) |
+| `r`, `p` | scan now (on the Settings panel — check settings now), pause auto-refresh |
+| `y`, `Y` | copy the command line (on the Settings panel — the fix command) or JSON to your computer's clipboard (OSC 52, works over SSH) |
 | `+` | expand the active side to full screen |
 | `L` | interface language: English / Russian |
 | `?`, `q` | help, quit |
@@ -170,6 +172,9 @@ While no password is set, the service lets only root into the dashboard: for eve
 | Users | `/etc/passwd` |
 | Server addresses (to tell public ports from private ones) | `/proc/net/fib_trie`, `/proc/net/if_inet6` |
 | ufw state and rules | `/etc/ufw/ufw.conf`, `/etc/default/ufw`, `/etc/ufw/user.rules`, `/etc/ufw/user6.rules` |
+| SSH settings | `/etc/ssh/sshd_config` with `Include` and `Match`, `/etc/ssh/ssh_host_*_key` permissions |
+| Accounts (password hashes are never shown or stored — only the algorithm type) | `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/login.defs`, `/etc/environment`, root's `.profile` and `.bashrc` |
+| sudo rules | `/etc/sudoers` with `@include`/`@includedir`, aliases and `Defaults` |
 | Published Docker ports, container name and image | `docker-proxy` arguments, `<data-root>/containers/*/config.v2.json` (environment variables are not read into memory structures and never shown) |
 | Boot time, memory, kernel | `/proc/stat`, `/proc/meminfo`, `/proc/sys/kernel/osrelease` |
 
@@ -182,9 +187,10 @@ The **terminal UI** is described [above](#terminal-ui). **Web dashboard** (light
 3. **Tree** — parent and child relationships, collapsible branches, highlighting of matches.
 4. **Network** — sockets with their owning processes, filters by protocol, state and external addresses.
 5. **Open ports** — what the server listens on and where it is reachable from; see [Open ports](#open-ports).
-6. **History** — process start and exit, changes of exe, cmdline or user, risk increases and decreases, new indicators, new listening ports, system findings.
-7. **System** — server details, scanning limitations (privileges, container), persistence checks and dangerous open ports.
-8. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
+6. **Security settings** — the SSH, account and sudo audit; see [Security settings](#security-settings).
+7. **History** — process start and exit, changes of exe, cmdline or user, risk increases and decreases, new indicators, new listening ports, system findings, security setting changes.
+8. **System** — server details, scanning limitations (privileges, container), persistence checks and dangerous open ports.
+9. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
 
 The dashboard refreshes automatically every 5 to 60 seconds, or not at all. Auto-refresh pauses while a process card is open.
 
@@ -202,6 +208,24 @@ The level is the danger of the service being reachable, not a sign of compromise
 **Docker bypasses ufw.** Docker inserts its iptables rules before ufw's, so `ufw deny 6379` does not close a port published as `-p 6379:6379`. If ufw is active and a container port is published on all interfaces without a ufw rule allowing it, the dashboard reports `fw_docker_bypass` (HIGH) and suggests publishing the port as `127.0.0.1:PORT:PORT` or restricting it in the `DOCKER-USER` chain. Published ports are read from `docker-proxy` arguments and from the containers' `config.v2.json`, so they are visible with `userland-proxy: false` as well. The Docker API is not used: its socket grants root, and an observer does not need it.
 
 To silence a deliberately open port, add an allowlist rule for the process with the indicator ID (for example, `{"exe": "/usr/lib/postgresql/16/bin/postgres", "rules": ["exposed_database"]}`): the process indicator and the system finding are both shown as suppressed and no longer count. Ports published by Docker without a listening process (`userland-proxy: false`) cannot be suppressed this way.
+
+### Security settings
+
+Most VPS break-ins come not from zero-day exploits but from password logins, a stray `NOPASSWD: ALL` or a forgotten user. The **Security settings** tab (panel `6` in the terminal UI, `GET /api/audit`, the `serversecuritygo audit` command) checks the configuration — the causes of a break-in rather than its traces.
+
+The service runs the audit right at startup and then every `SSG_AUDIT_INTERVAL` (1 hour by default). The **Check now** button (`r` on the panel in the terminal UI) runs it immediately, for example after you have fixed something; a new check does not start while one is running. The tab shows when the last check ran and how many checks passed: "N of M passed" counts only checks with a pass, fail or warning result (tips, n/a and unknown are not counted).
+
+Every check has a result (*pass*, *fail*, *warning*, *tip*, *n/a* — for example, sshd is not installed, *unknown* — no permission to read), its severity, facts with a file and line (`/etc/ssh/sshd_config.d/50-cloud-init.conf:1 PasswordAuthentication yes`), a recommendation and often a ready-made fix command. The application never runs the command: you run it yourself. For SSH changes, first check key login in a separate session.
+
+| Group | Checks |
+|---|---|
+| SSH | `ssh_root_login`, `ssh_password_auth`, `ssh_empty_passwords`, `ssh_kbd_interactive` (password via PAM even with `PasswordAuthentication no`), `ssh_max_auth_tries`, `ssh_x11_forwarding`, `ssh_tcp_forwarding` (`GatewayPorts`), `ssh_weak_crypto` (CBC, 3DES, RC4, MD5, SHA-1, DSA), `ssh_authkeys_file` (non-standard key file or `AuthorizedKeysCommand`), `ssh_host_keys_perms`, `ssh_config_perms`, tips `ssh_allow_users`, `ssh_banner_version`, `ssh_port` |
+| Accounts | `acct_uid0_extra`, `acct_empty_password`, `acct_service_shell`, `acct_weak_hash` (MD5, DES), `acct_new`, `acct_priv_groups` (`sudo`, `admin`, `wheel`, `docker`, `lxd`, `disk`, `adm`, `shadow`), `acct_duplicate_ids`, `acct_passwd_perms`, `acct_home_perms`, `acct_root_path` |
+| sudo | `sudo_nopasswd_all` (MEDIUM for the default cloud users `ubuntu`, `debian`, `admin`…), `sudo_no_auth`, `sudo_gtfobins` (`vim`, `less`, `find`, `systemctl` and others that drop to a root shell), `sudo_wildcard`, `sudo_writable_cmd`, `sudo_env_keep` (`LD_PRELOAD`, `PYTHONPATH`, `!env_reset`), `sudo_files_perms`, `sudo_changed` |
+
+The sshd configuration is parsed the way sshd reads it: `Include` is expanded in place, the first value of a key wins, `Match` blocks are shown separately ("password login is allowed for user X"), and missing keys take OpenSSH defaults. The parser for sudoers handles `@include`/`@includedir` (skipping files with a dot in the name, like sudo), aliases, line continuation and `Defaults`.
+
+**Changes.** The service remembers user names and UIDs, privileged group members and SHA-256 checksums of sudoers files in `/var/lib/serversecuritygo/audit-baseline.json` (mode 600, no passwords or file contents). A new user, a new member of a privileged group or a sudoers change makes `acct_new`, `acct_priv_groups` or `sudo_changed` fail for 24 hours, so the next run does not quietly clear the alert. If a file cannot be read during a run, its part of the baseline is kept, so nothing is reported as new afterwards. Every change of a result ("was pass, now fail", "fixed") is recorded in the History tab and in the log. A one-off `serversecuritygo audit` has nothing to compare with, so change checks are n/a there.
 
 ## How risk is scored
 
@@ -287,6 +311,8 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 | `SSG_HISTORY_RETENTION` | `168h` | how long to keep data about exited processes |
 | `SSG_ALLOWLIST_FILE` | `/opt/serversecuritygo/allowlist.json` | allowlist |
 | `SSG_LANG` | — (auto) | default language: `ru` or `en` |
+| `SSG_AUDIT_ENABLED` | `true` | security settings audit in the service |
+| `SSG_AUDIT_INTERVAL` | `1h` | how often to repeat the audit (minimum `1m`) |
 
 After editing `.env`, run `systemctl restart serversecuritygo`.
 
@@ -410,6 +436,13 @@ A one-off scan that does not touch the service history:
 /opt/serversecuritygo/bin/serversecuritygo scan --format json --min-risk INFO > scan.json
 ```
 
+A one-off check of the security settings (SSH, accounts, sudo); `--all` also shows passed checks:
+
+```bash
+/opt/serversecuritygo/bin/serversecuritygo audit
+/opt/serversecuritygo/bin/serversecuritygo audit --format json > audit.json
+```
+
 Demo mode with fictional data runs on Linux and macOS:
 
 ```bash
@@ -438,6 +471,7 @@ internal/
   procfs/                 reading /proc: stat, status, cmdline, exe, fd, ns, cgroup, net
   detect/                 rules, risk scoring, explanations, allowlist, system checks
   exposure/               open ports: reachability, dangerous services, ufw, published Docker ports
+  audit/                  security settings audit: sshd_config, accounts, sudoers; background runner
   safefile/               safe reading of files an attacker may control (no symlinks, FIFOs, size limit)
   redact/                 masking secrets in command lines
   history/                process history and event log (state.json, events.jsonl)
@@ -456,7 +490,7 @@ allowlist.example.json    allowlist example
 .github/workflows/        CI and releases
 ```
 
-API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
+API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/audit`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` and `POST /api/audit/run` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
 
 ## Security
 

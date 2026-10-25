@@ -77,6 +77,17 @@ type Options struct {
 	// Accept-Language браузера. Пользователь может переключить язык в
 	// панели, выбор хранится в его браузере.
 	Lang i18n.Lang
+	// Audit — аудит настроек безопасности (audit.Runner); nil — выключен
+	// (SSG_AUDIT_ENABLED=false).
+	Audit AuditRunner
+}
+
+// AuditRunner — то, что панели нужно от аудита конфигурации.
+type AuditRunner interface {
+	Report() *model.AuditReport
+	Running() bool
+	RunNow() bool
+	Interval() time.Duration
 }
 
 // Server — HTTP-обработчик приложения.
@@ -192,6 +203,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	s.mux.HandleFunc("GET /api/system", s.api(s.handleSystem))
 	s.mux.HandleFunc("POST /api/rescan", s.api(s.handleRescan))
+	s.mux.HandleFunc("GET /api/audit", s.api(s.handleAudit))
+	s.mux.HandleFunc("POST /api/audit/run", s.api(s.handleAuditRun))
 }
 
 // ServeHTTP применяет общие проверки и заголовки безопасности.
@@ -458,7 +471,11 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) *model.Snapsho
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, sess session) {
 	st := view.Status{Version: s.opt.Version, Auth: s.authEnabled(), CSRF: sess.csrf, Demo: s.opt.Demo, Interval: s.opt.Scanner.Interval().Seconds()}
-	writeJSON(w, http.StatusOK, view.BuildStatus(st, s.opt.Scanner.Snapshot()))
+	st = view.BuildStatus(st, s.opt.Scanner.Snapshot())
+	if a := s.opt.Audit; a != nil {
+		st.Audit = view.BuildAuditBrief(true, a.Running(), a.Report())
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request, _ session) {
@@ -524,6 +541,29 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request, _ session)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"findings": view.SortedSystem(snap), "host": snap.Host, "warnings": snap.Warnings})
+}
+
+// auditView — текущее состояние аудита конфигурации.
+func (s *Server) auditView() view.AuditView {
+	if s.opt.Audit == nil {
+		return view.BuildAudit(false, false, 0, nil)
+	}
+	a := s.opt.Audit
+	return view.BuildAudit(true, a.Running(), a.Interval(), a.Report())
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, _ session) {
+	writeJSON(w, http.StatusOK, s.auditView())
+}
+
+// handleAuditRun — «Проверить сейчас». Если проверка уже идёт, новая не
+// запускается (started: false).
+func (s *Server) handleAuditRun(w http.ResponseWriter, r *http.Request, _ session) {
+	if s.opt.Audit == nil {
+		s.errJSON(w, r, http.StatusConflict, "web.err.audit_disabled")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"started": s.opt.Audit.RunNow()})
 }
 
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request, _ session) {

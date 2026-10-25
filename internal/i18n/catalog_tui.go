@@ -28,6 +28,7 @@ func init() {
 		"tui.event.finding":   {"Признак", "Indicator"},
 		"tui.event.listen":    {"Порт", "Port"},
 		"tui.event.system":    {"Система", "System"},
+		"tui.event.audit":     {"Настройки", "Settings"},
 
 		"tui.cols.susp":    {"РИСК    PID ПОЛЬЗ.   ИМЯ", "RISK    PID USER     NAME"},
 		"tui.cols.procs":   {"   PID ПОЛЬЗ.     CPU%    RAM РИСК ИМЯ", "   PID USER       CPU%    RAM RISK NAME"},

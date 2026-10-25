@@ -571,3 +571,72 @@ func TestExposureAPI(t *testing.T) {
 		t.Error("чужой Host пропущен")
 	}
 }
+
+// fakeAudit — аудит для тестов панели.
+type fakeAudit struct {
+	rep     *model.AuditReport
+	running bool
+	runs    int
+}
+
+func (f *fakeAudit) Report() *model.AuditReport { return f.rep }
+func (f *fakeAudit) Running() bool              { return f.running }
+func (f *fakeAudit) Interval() time.Duration    { return time.Hour }
+func (f *fakeAudit) RunNow() bool {
+	if f.running {
+		return false
+	}
+	f.runs++
+	return true
+}
+
+func TestAuditAPI(t *testing.T) {
+	// Аудит выключен: вкладка сообщает об этом, запуск — 409.
+	s := newTestServer(t, "")
+	w := do(s, "GET", "/api/audit", "127.0.0.1:8090", "", nil)
+	var v view.AuditView
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || w.Code != 200 || v.Enabled || v.Checks == nil {
+		t.Fatalf("выключенный аудит: %d %v %+v", w.Code, err, v)
+	}
+	if w := do(s, "POST", "/api/audit/run", "127.0.0.1:8090", "", map[string]string{"X-CSRF-Token": s.noAuthCSRF}); w.Code != http.StatusConflict {
+		t.Errorf("запуск выключенного аудита: %d", w.Code)
+	}
+
+	fa := &fakeAudit{rep: &model.AuditReport{Time: time.Now(), Checks: []model.AuditCheck{
+		{ID: "ssh_password_auth", Group: "ssh", Title: i18n.L("x"), Status: model.AuditFail, Severity: model.RiskHigh},
+		{ID: "ssh_port", Group: "ssh", Title: i18n.L("y"), Status: model.AuditInfo},
+		{ID: "ssh_root_login", Group: "ssh", Title: i18n.L("z"), Status: model.AuditPass, Severity: model.RiskHigh},
+	}}}
+	s.opt.Audit = fa
+	w = do(s, "GET", "/api/audit", "127.0.0.1:8090", "", nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || !v.Enabled || !v.Ready || v.Passed != 1 || v.Total != 2 || v.Checks[0].Status != model.AuditFail {
+		t.Fatalf("аудит: %v %+v", err, v)
+	}
+	// Счётчики в /api/status.
+	var st view.Status
+	_ = json.Unmarshal(do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil).Body.Bytes(), &st)
+	if !st.Audit.Ready || st.Audit.Fail != 1 || st.Audit.Warn != 0 {
+		t.Errorf("статус: %+v", st.Audit)
+	}
+	// Запуск требует CSRF.
+	if w := do(s, "POST", "/api/audit/run", "127.0.0.1:8090", "", nil); w.Code != http.StatusForbidden || fa.runs != 0 {
+		t.Errorf("без CSRF: %d, запусков %d", w.Code, fa.runs)
+	}
+	w = do(s, "POST", "/api/audit/run", "127.0.0.1:8090", "", map[string]string{"X-CSRF-Token": s.noAuthCSRF})
+	if w.Code != http.StatusAccepted || fa.runs != 1 || !strings.Contains(w.Body.String(), `"started":true`) {
+		t.Errorf("запуск: %d %s", w.Code, w.Body)
+	}
+	// Во время проверки новая не запускается.
+	fa.running = true
+	w = do(s, "POST", "/api/audit/run", "127.0.0.1:8090", "", map[string]string{"X-CSRF-Token": s.noAuthCSRF})
+	if !strings.Contains(w.Body.String(), `"started":false`) || fa.runs != 1 {
+		t.Errorf("повторный запуск: %s", w.Body)
+	}
+	// С паролем — без входа 401.
+	hash, _ := HashPassword("correct horse battery")
+	sa := newTestServer(t, hash)
+	sa.opt.Audit = fa
+	if w := do(sa, "GET", "/api/audit", "127.0.0.1:8090", "", nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("без входа: %d", w.Code)
+	}
+}

@@ -70,6 +70,7 @@ type Store struct {
 	dirty     bool
 	lastSave  time.Time
 	systemSet map[string]*sysSeen // системные находки по ключу «ID|Path»
+	auditSet  map[string]string   // последний статус проверки аудита по ID
 }
 
 // sysSeen — что известно о системной находке между сканированиями.
@@ -92,6 +93,8 @@ type stateFile struct {
 	// SystemRisk — уровень системных находок (с версии с открытыми
 	// портами). В старом state.json его нет.
 	SystemRisk map[string]model.Risk `json:"systemRisk,omitempty"`
+	// Audit — последний статус каждой проверки аудита (ID → статус).
+	Audit map[string]string `json:"audit,omitempty"`
 }
 
 // Open открывает (или создаёт) хранилище.
@@ -105,7 +108,7 @@ func Open(opt Options) (*Store, error) {
 	if opt.MemoryEvents <= 0 {
 		opt.MemoryEvents = 5000
 	}
-	s := &Store{opt: opt, tracks: map[string]*Track{}, systemSet: map[string]*sysSeen{}}
+	s := &Store{opt: opt, tracks: map[string]*Track{}, systemSet: map[string]*sysSeen{}, auditSet: map[string]string{}}
 	if opt.Dir == "" {
 		return s, nil
 	}
@@ -131,6 +134,9 @@ func Open(opt Options) (*Store, error) {
 					r = model.RiskCritical
 				}
 				s.systemSet[k] = &sysSeen{risk: r}
+			}
+			for id, st := range st.Audit {
+				s.auditSet[id] = st
 			}
 			s.baseline = len(s.tracks) > 0
 		}
@@ -443,6 +449,7 @@ func (s *Store) rotateIfNeeded() {
 // save атомарно записывает state.json.
 func (s *Store) save(now time.Time) error {
 	st := stateFile{Version: 1, Saved: now, Tracks: s.tracks}
+	st.Audit = s.auditSet
 	st.SystemRisk = make(map[string]model.Risk, len(s.systemSet))
 	for k, seen := range s.systemSet {
 		st.System = append(st.System, k)
@@ -473,6 +480,61 @@ func (s *Store) save(now time.Time) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), s.statePath())
+}
+
+// RecordAudit записывает изменения результатов аудита конфигурации:
+// событие, когда проверка стала fail или warn (или хуже прежнего), и
+// событие «исправлено», когда она вернулась в pass. Советы (info), n/a
+// и проверки с важностью INFO событий не дают. Возвращает события.
+func (s *Store) RecordAudit(now time.Time, checks []model.AuditCheck) []model.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bad := func(c model.AuditCheck, st string) bool {
+		return (st == model.AuditFail || st == model.AuditWarn) && c.Severity >= model.RiskLow
+	}
+	var evs []model.Event
+	present := make(map[string]bool, len(checks))
+	for _, c := range checks {
+		present[c.ID] = true
+		prev, had := s.auditSet[c.ID]
+		switch {
+		case bad(c, c.Status) && (!had || !bad(c, prev) || (prev == model.AuditWarn && c.Status == model.AuditFail)):
+			evs = append(evs, model.Event{Time: now, Type: model.EvAudit, Name: c.ID, Risk: c.Severity,
+				Details: i18n.T("hist.audit_bad", c.Title, auditStatus(c.Status))})
+		case had && bad(c, prev) && c.Status == model.AuditPass && !c.Change:
+			evs = append(evs, model.Event{Time: now, Type: model.EvAudit, Name: c.ID, Risk: model.RiskInfo,
+				Details: i18n.T("hist.audit_fixed", c.Title)})
+		}
+		if prev != c.Status {
+			s.dirty = true
+		}
+		s.auditSet[c.ID] = c.Status
+	}
+	// Проверки, которых больше нет (другая версия), забываются.
+	for id := range s.auditSet {
+		if !present[id] {
+			delete(s.auditSet, id)
+			s.dirty = true
+		}
+	}
+	s.appendEvents(evs)
+	if s.opt.Dir != "" && s.dirty {
+		if err := s.save(now); err == nil {
+			s.dirty, s.lastSave = false, now
+		}
+	}
+	return evs
+}
+
+// auditStatus — подпись статуса проверки для текста события.
+func auditStatus(st string) i18n.Msg {
+	switch st {
+	case model.AuditFail:
+		return i18n.T("audit.status.fail")
+	case model.AuditWarn:
+		return i18n.T("audit.status.warn")
+	}
+	return i18n.L(st)
 }
 
 // Flush принудительно сохраняет состояние (при остановке службы).

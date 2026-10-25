@@ -40,7 +40,7 @@ const riskBadge = (r) => h('span', { class: 'risk risk-' + r }, r);
 
 // Названия типов событий и категорий признаков — из общего каталога
 // (event.<тип>, cat.<категория>), неизвестное значение выводится как есть.
-const EVENT_TYPES = ['baseline', 'started', 'exited', 'changed', 'risk_up', 'risk_down', 'finding', 'listen', 'system'];
+const EVENT_TYPES = ['baseline', 'started', 'exited', 'changed', 'risk_up', 'risk_down', 'finding', 'listen', 'system', 'audit'];
 const CATEGORIES = ['location', 'integrity', 'masquerade', 'chain', 'network', 'content', 'behavior', 'environment', 'privilege', 'persistence', 'exposure', 'info'];
 const eventName = (t) => (EVENT_TYPES.includes(t) ? tr('event.' + t) : t);
 
@@ -56,6 +56,13 @@ const FW_NAMES = {
 const UFW_NAMES = {
   absent: () => tr('tui.ufw.absent'), inactive: () => tr('tui.ufw.inactive'), active: () => tr('tui.ufw.active'),
 };
+const STATUS_NAMES = {
+  pass: () => tr('audit.status.pass'), fail: () => tr('audit.status.fail'), warn: () => tr('audit.status.warn'),
+  info: () => tr('audit.status.info'), 'n/a': () => tr('audit.status.na'), unknown: () => tr('audit.status.unknown'),
+};
+const GROUP_NAMES = { ssh: () => tr('audit.group.ssh'), accounts: () => tr('audit.group.accounts'), sudo: () => tr('audit.group.sudo') };
+const STATUS_CLASS = { pass: 'st-pass', fail: 'st-fail', warn: 'st-warn', info: 'st-info', 'n/a': 'st-na', unknown: 'st-unknown' };
+const STATUS_RANK = { fail: 0, warn: 1, unknown: 2, info: 3, pass: 4, 'n/a': 5 };
 const label = (names, v) => (names[v] ? names[v]() : (v || '—'));
 const endpoint = (addr, port) => (addr.includes(':') ? `[${addr}]:${port}` : `${addr}:${port}`);
 const categoryName = (c) => (CATEGORIES.includes(c) ? tr('cat.' + c) : c);
@@ -112,7 +119,7 @@ async function copyText(text) {
 // ---------------------------------------------------------------------
 
 const state = {
-  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null,
+  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null,
   tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
 
@@ -303,6 +310,47 @@ function renderPorts() {
     { t: tr('tui.h.facts'), v: () => 0, r: (e) => h('ul', { class: 'findings' }, (e.evidence || []).slice(1).map((m) => h('li', null, tx(m)))), c: 'wrap' },
     { t: tr('tui.h.recommendation'), v: () => 0, r: (e) => tx(e.recommendation), c: 'wrap' },
   ], rows, (e) => e.procKey && openCard(e.procKey), tr('web.ports.empty'));
+}
+
+function renderAudit() {
+  const a = state.audit;
+  if (!a) return;
+  const btn = $('btn-audit-run');
+  btn.disabled = !a.enabled || a.running;
+  if (!a.enabled) {
+    $('audit-when').textContent = tr('web.audit.disabled');
+    $('audit-score').textContent = '';
+  } else if (!a.ready || a.running) {
+    $('audit-when').textContent = tr('web.audit.running');
+    $('audit-score').textContent = '';
+  } else {
+    const next = new Date(new Date(a.time).getTime() + a.interval * 1000).toISOString();
+    $('audit-when').textContent = tr('web.audit.when', fmtTime(a.time), a.durationMs, fmtTime(next));
+    const s = a.summary;
+    $('audit-score').textContent = tr('web.audit.score', a.passed, a.total, s.fail, s.warn, s.info, s.na + s.unknown);
+  }
+  const q = $('a-q').value.trim().toLowerCase();
+  const st = $('a-status').value;
+  const grp = $('a-group').value;
+  const rows = (a.checks || []).filter((c) => {
+    if (st === 'problems' && c.status !== 'fail' && c.status !== 'warn') return false;
+    if (st && st !== 'problems' && c.status !== st) return false;
+    if (grp && c.group !== grp) return false;
+    if (q && ![c.id, tx(c.title), ...(c.evidence || []).map(tx)].join(' ').toLowerCase().includes(q)) return false;
+    return true;
+  });
+  renderTable('t-audit', [
+    { t: tr('web.col.status'), v: (c) => STATUS_RANK[c.status] ?? 9, r: (c) => h('span', { class: 'st ' + (STATUS_CLASS[c.status] || 'st-na') }, label(STATUS_NAMES, c.status)) },
+    { t: tr('web.col.group'), v: (c) => c.group, r: (c) => label(GROUP_NAMES, c.group), c: 'nowrap' },
+    { t: tr('tui.title.check'), v: (c) => tx(c.title), r: (c) => h('span', { title: c.id }, tx(c.title)), c: 'wrap' },
+    // Важность показывается только у проблем: у пройденных проверок и советов она сбивала бы с толку.
+    { t: tr('web.col.severity'), v: (c) => riskNum(c.severity), r: (c) => (c.status === 'fail' || c.status === 'warn' ? riskBadge(c.severity) : ''), desc: true },
+    { t: tr('tui.h.facts'), v: () => 0, r: (c) => h('ul', { class: 'findings' }, (c.evidence || []).map((m) => h('li', { class: 'mono' }, tx(m)))), c: 'wrap' },
+    { t: tr('tui.h.recommendation'), v: () => 0, r: (c) => h('div', null, tx(c.recommendation),
+      c.fixCommand ? h('div', { class: 'fix' }, h('pre', null, c.fixCommand),
+        h('button', { class: 'small secondary', type: 'button', onclick: (e) => { e.stopPropagation(); copyText(c.fixCommand); } }, tr('tui.hint.copy'))) : '',
+      c.references && c.references.length ? h('div', { class: 'muted' }, 'MITRE ATT&CK: ' + c.references.join(', ')) : ''), c: 'wrap' },
+  ], rows, null, a.enabled ? tr('web.audit.empty') : tr('web.audit.disabled'));
 }
 
 function renderHistory() {
@@ -539,6 +587,9 @@ function renderSummary() {
     h('div', { class: 'stat', onclick: () => switchTab('net') }, h('div', { class: 'num' }, s.stats.sockets), h('div', { class: 'lbl' }, tr('web.stat.sockets'))),
     h('div', { class: 'stat', onclick: () => switchTab('ports') }, h('div', { class: 'num' }, s.stats.publicPorts || 0,
       s.stats.dangerousPorts ? h('span', { class: 'risk risk-HIGH', title: tr('web.stat.dangerous_title') }, ' ⚠ ' + s.stats.dangerousPorts) : ''), h('div', { class: 'lbl' }, tr('web.stat.public_ports'))),
+    h('div', { class: 'stat', onclick: () => switchTab('audit') }, h('div', { class: 'num' },
+      s.audit && s.audit.ready ? h('span', { class: 'st ' + (s.audit.fail ? 'st-fail' : s.audit.warn ? 'st-warn' : 'st-pass') }, s.audit.fail + s.audit.warn) : '—'),
+      h('div', { class: 'lbl' }, tr('web.stat.audit'))),
     h('div', { class: 'stat', onclick: () => switchTab('system') }, h('div', { class: 'num' }, s.systemFindings || 0), h('div', { class: 'lbl' }, tr('web.stat.system'))),
   );
   const banner = $('banner');
@@ -551,6 +602,7 @@ function renderSummary() {
   $('cnt-suspicious').textContent = s.stats.total - (by.INFO || 0);
   $('cnt-net').textContent = s.stats.sockets;
   $('cnt-ports').textContent = s.stats.publicPorts || 0;
+  $('cnt-audit').textContent = s.audit && s.audit.ready ? s.audit.fail + s.audit.warn : '—';
   $('cnt-system').textContent = s.systemFindings || 0;
 }
 
@@ -562,6 +614,7 @@ function renderAll() {
     case 'tree': renderTree(); break;
     case 'net': renderNet(); break;
     case 'ports': renderPorts(); break;
+    case 'audit': renderAudit(); break;
     case 'history': renderHistory(); break;
     case 'system': renderSystem(); break;
   }
@@ -572,6 +625,7 @@ async function loadTabData() {
     case 'tree': state.tree = await api('/api/tree'); break;
     case 'net': state.sockets = (await api('/api/connections')).sockets || []; break;
     case 'ports': state.exposure = (await api('/api/exposure')).exposure || null; break;
+    case 'audit': state.audit = await api('/api/audit'); break;
     case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
     case 'system': state.system = await api('/api/system'); break;
   }
@@ -634,7 +688,7 @@ async function init() {
   });
 
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-  for (const id of ['proc-filters', 'net-filters', 'ports-filters', 'hist-filters']) {
+  for (const id of ['proc-filters', 'net-filters', 'ports-filters', 'audit-filters', 'hist-filters']) {
     const form = $(id);
     form.addEventListener('input', () => { state.showAll = {}; renderAll(); });
     form.addEventListener('submit', (e) => e.preventDefault());
@@ -650,6 +704,16 @@ async function init() {
       await api('/api/rescan', { method: 'POST' });
       toast(tr('tui.flash.scan_started'));
       setTimeout(refresh, 1500);
+    } catch (e) { toast(e.message); }
+  });
+  // «Проверить сейчас»: служба запускает аудит в фоне; результат приходит
+  // при следующих обновлениях, пока идёт проверка — индикатор.
+  $('btn-audit-run').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/audit/run', { method: 'POST' });
+      toast(r.started ? tr('web.audit.started') : tr('web.audit.already'));
+      if (state.audit) { state.audit.running = true; renderAudit(); }
+      setTimeout(refresh, 1000);
     } catch (e) { toast(e.message); }
   });
   $('btn-logout').addEventListener('click', async () => {
