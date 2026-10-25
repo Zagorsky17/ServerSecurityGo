@@ -410,7 +410,7 @@ func TestLineLimits(t *testing.T) {
 	fd := newFileData()
 	long := stamp(time.Hour) + " fail2ban.filter [1]: INFO [sshd] Found 203.0.113.1 " + strings.Repeat("x", 200<<10) + "\n"
 	in := long + logLine(time.Hour, "filter", "INFO", "[sshd] Found 203.0.113.2 - x")
-	n := fd.consume(strings.NewReader(in), 1<<30, false, time.UTC)
+	n, _ := fd.consume(strings.NewReader(in), 1<<30, false, time.UTC)
 	if n != int64(len(in)) || len(fd.byIP) != 1 {
 		t.Fatalf("длинная строка: n=%d из %d, адресов %d", n, len(in), len(fd.byIP))
 	}
@@ -476,5 +476,102 @@ func TestMemoryBudget(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("нет предупреждения о пределе: %v", rep.Warnings)
+	}
+}
+
+// TestReadBudget: общий бюджет чтения кончился посреди файла — файл
+// дочитывается при следующих построениях, а не считается обрезанным
+// навсегда (и предупреждения о размере файла нет).
+func TestReadBudget(t *testing.T) {
+	old := maxTotalBytes
+	t.Cleanup(func() { maxTotalBytes = old })
+	root := installed(t)
+	line := logLine(time.Hour, "filter", "INFO", "[sshd] Found 203.0.113.1 - x")
+	maxTotalBytes = int64(len(line))*3 + 10
+	write(t, root, "var/log/fail2ban.log.2.gz", gz(t, strings.Repeat(line, 5)))
+	write(t, root, "var/log/fail2ban.log.1", strings.Repeat(line, 5))
+	write(t, root, "var/log/fail2ban.log", strings.Repeat(line, 5))
+	c := NewCollector()
+	var rep *model.Fail2banReport
+	for i := 0; i < 8; i++ {
+		rep, _ = build(t, c, root, server)
+	}
+	if rep.Found != 15 {
+		t.Errorf("после нескольких построений found=%d, нужно 15", rep.Found)
+	}
+	for _, w := range rep.Warnings {
+		if strings.Contains(w.String(), "МБ") || strings.Contains(w.String(), "MB") {
+			t.Errorf("ложное предупреждение о размере: %v", w)
+		}
+	}
+}
+
+// TestCopytruncateRegrow: после copytruncate файл успел вырасти больше
+// прежнего размера — он разбирается заново, а не с середины.
+func TestCopytruncateRegrow(t *testing.T) {
+	root := installed(t)
+	cur := write(t, root, "var/log/fail2ban.log", logLine(3*time.Hour, "filter", "INFO", "[sshd] Found 203.0.113.1 - x"))
+	c := NewCollector()
+	if rep, _ := build(t, c, root, server); rep.Found != 1 {
+		t.Fatalf("found=%d", rep.Found)
+	}
+	// Тот же inode (WriteFile усекает файл), новое содержимое длиннее.
+	var b strings.Builder
+	for i := 0; i < 4; i++ {
+		b.WriteString(logLine(time.Hour, "filter", "INFO", "[sshd] Found 198.51.100.7 - x"))
+	}
+	if err := os.WriteFile(cur, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, _ := build(t, c, root, server)
+	if rep.Found != 4 || rep.Top[0].Addr != "198.51.100.7" {
+		t.Errorf("после copytruncate found=%d top=%+v", rep.Found, rep.Top)
+	}
+}
+
+// TestRestoreBeforeJailStarted: строка Restore Ban в ту же секунду перед
+// «Jail started» не теряется; выключенный jail берёт bantime из DEFAULT.
+func TestRestoreBeforeJailStarted(t *testing.T) {
+	root := installed(t)
+	write(t, root, "etc/fail2ban/jail.local", "[DEFAULT]\nbantime = 1d\n")
+	write(t, root, "var/log/fail2ban.log", logLine(2*time.Hour, "server", "INFO", "Starting Fail2ban v1.0.2")+
+		logLine(2*time.Hour, "actions", "NOTICE", "[sshd] Restore Ban 203.0.113.9")+
+		logLine(2*time.Hour, "jail", "INFO", "Jail 'sshd' started")+
+		logLine(time.Hour, "actions", "NOTICE", "[old-jail] Ban 203.0.113.10"))
+	rep, _ := build(t, NewCollector(), root, server)
+	got := map[string]bool{}
+	for _, b := range rep.Bans {
+		got[b.IP] = true
+	}
+	if !got["203.0.113.9"] || !got["203.0.113.10"] {
+		t.Errorf("баны: %+v", rep.Bans)
+	}
+}
+
+// TestWindowAndMemo: счётчики старше окна забываются и не попадают в топ
+// (в том числе ignoreip), а без изменений отчёт не пересчитывается.
+func TestWindowAndMemo(t *testing.T) {
+	root := installed(t)
+	write(t, root, "var/log/fail2ban.log", logLine(20*24*time.Hour, "filter", "INFO", "[sshd] Found 203.0.113.50 - x")+
+		logLine(20*24*time.Hour, "filter", "INFO", "[sshd] Ignore 192.0.2.50 by ip")+
+		logLine(time.Hour, "filter", "INFO", "[sshd] Found 203.0.113.1 - x"))
+	c := NewCollector()
+	rep, _ := build(t, c, root, server)
+	if len(rep.Top) != 1 || rep.Top[0].Addr != "203.0.113.1" {
+		t.Errorf("топ за окном: %+v", rep.Top)
+	}
+	for _, fd := range c.files {
+		if len(fd.byIP) != 1 || len(fd.ignored) != 0 {
+			t.Errorf("старые счётчики не забыты: %v %v", fd.byIP, fd.ignored)
+		}
+	}
+	if rep2, _ := build(t, c, root, server); rep2 != rep {
+		t.Error("отчёт пересчитан без изменений")
+	}
+	f, _ := os.OpenFile(filepath.Join(root, "var/log/fail2ban.log"), os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(logLine(time.Minute, "filter", "INFO", "[sshd] Found 203.0.113.1 - x"))
+	f.Close()
+	if rep3, _ := build(t, c, root, server); rep3 == rep || rep3.Found != 2 {
+		t.Errorf("после дописывания отчёт не обновился: found=%d", rep3.Found)
 	}
 }

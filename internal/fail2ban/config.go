@@ -242,6 +242,9 @@ func (sc serverConfig) verbose() bool {
 type jailConfig struct {
 	Jails []jail
 	Files []string // прочитанные файлы
+	// BanTimes — bantime каждой секции, включая выключенные jail и
+	// DEFAULT: баны выключенного позже jail ещё могут действовать.
+	BanTimes map[string]int64
 }
 
 type jail struct {
@@ -266,9 +269,17 @@ func (j jail) SSH() bool {
 // включённые jail. Секции DEFAULT и INCLUDES — служебные.
 func readJails(hostRoot string) jailConfig {
 	c, files := readConfigSet(hostRoot, "jail")
-	jc := jailConfig{Files: files}
+	jc := jailConfig{Files: files, BanTimes: map[string]int64{}}
 	for _, sec := range c.order {
-		if sec == "DEFAULT" || sec == "INCLUDES" {
+		if sec == "INCLUDES" {
+			continue
+		}
+		if v, ok := c.get(sec, "bantime"); ok {
+			if n, ok := parseDuration(v); ok {
+				jc.BanTimes[sec] = n
+			}
+		}
+		if sec == "DEFAULT" {
 			continue
 		}
 		v, _ := c.get(sec, "enabled")

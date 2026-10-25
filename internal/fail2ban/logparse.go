@@ -39,12 +39,11 @@ var (
 // event — бан, разбан или перезапуск (строки Found в события не
 // попадают: их слишком много, они сразу сворачиваются в счётчики).
 type event struct {
-	t      int64 // Unix-время, секунды
-	act    uint8
-	jail   string
-	ip     string
-	until  int64 // для actIncrease: до какого времени продлён бан
-	detail string
+	t     int64 // Unix-время, секунды
+	act   uint8
+	jail  string
+	ip    string
+	until int64 // для actIncrease: до какого времени продлён бан
 }
 
 type hourKey struct {
@@ -60,14 +59,19 @@ type ipKey struct {
 
 // fileData — разобранная часть одного файла журнала: счётчики и события.
 type fileData struct {
-	id       fileID
-	size     int64
-	mtime    time.Time
-	offset   int64 // сколько байт разобрано (для дочитывания текущего файла)
-	gz       bool
-	found    map[hourKey]int
-	byIP     map[ipKey]int
-	ignored  map[string]int
+	id     fileID
+	size   int64
+	mtime  time.Time
+	offset int64 // сколько байт разобрано (для дочитывания текущего файла)
+	// head — первые байты файла: если после усечения (copytruncate) файл
+	// снова вырос больше offset, по размеру этого не видно, а по началу —
+	// видно.
+	head  []byte
+	gz    bool
+	found map[hourKey]int
+	byIP  map[ipKey]int
+	// ignored — попытки адресов из ignoreip (jail в ключе пустой).
+	ignored  map[ipKey]int
 	overflow int // попытки, не попавшие в byIP из-за предела
 	events   []event
 	dropped  bool // часть событий отброшена из-за предела
@@ -75,21 +79,35 @@ type fileData struct {
 	// бюджета (maxTotalIPs, maxTotalEvts); выставляет Collector.load.
 	ipCap, evCap int
 	cut          bool // файл прочитан не целиком (больше предела)
+	partial      bool // кончился общий бюджет: файл дочитается позже
 	version      string
-	lines        int
 }
 
 func newFileData() *fileData {
-	return &fileData{found: map[hourKey]int{}, byIP: map[ipKey]int{}, ignored: map[string]int{}, ipCap: maxTotalIPs, evCap: maxTotalEvts}
+	return &fileData{found: map[hourKey]int{}, byIP: map[ipKey]int{}, ignored: map[ipKey]int{}, ipCap: maxTotalIPs, evCap: maxTotalEvts}
 }
 
-// consume разбирает строки из r и возвращает число байт полностью
-// разобранных строк. final = true — последняя строка без перевода строки
-// тоже разбирается (сжатый или ротированный файл больше не растёт); иначе
-// она остаётся на следующий раз: fail2ban мог ещё не дописать её.
-func (fd *fileData) consume(r io.Reader, limit int64, final bool, loc *time.Location) int64 {
-	br := bufio.NewReaderSize(io.LimitReader(r, limit), 64<<10)
-	var n int64
+// countReader считает прочитанные байты.
+type countReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// consume разбирает строки из r (не больше limit байт) и возвращает число
+// байт полностью разобранных строк и сколько прочитано. final = true —
+// последняя строка без перевода строки тоже разбирается (сжатый или
+// ротированный файл больше не растёт); иначе она остаётся на следующий
+// раз: fail2ban мог ещё не дописать её. read >= limit — чтение упёрлось в
+// предел, и в файле, возможно, есть ещё данные.
+func (fd *fileData) consume(r io.Reader, limit int64, final bool, loc *time.Location) (n, read int64) {
+	cr := &countReader{r: io.LimitReader(r, limit)}
+	br := bufio.NewReaderSize(cr, 64<<10)
 	skipping := false
 	for {
 		line, err := br.ReadSlice('\n')
@@ -107,17 +125,16 @@ func (fd *fileData) consume(r io.Reader, limit int64, final bool, loc *time.Loca
 			skipping = false
 			continue
 		}
-		// EOF или ошибка чтения.
-		if len(line) > 0 && final {
+		// EOF или ошибка чтения. Хвост без перевода строки — последняя
+		// строка, только если файл действительно кончился, а не упёрся в
+		// предел чтения.
+		if len(line) > 0 && final && cr.n < limit {
 			n += int64(len(line))
 			if !skipping {
 				fd.line(line, loc)
 			}
 		}
-		if errors.Is(err, io.EOF) && n >= limit {
-			fd.cut = true
-		}
-		return n
+		return n, cr.n
 	}
 }
 
@@ -137,7 +154,6 @@ func (fd *fileData) line(b []byte, loc *time.Location) {
 	if !ok {
 		return
 	}
-	fd.lines++
 	msg := message(b[19:])
 	if msg == nil {
 		return
@@ -178,8 +194,9 @@ func (fd *fileData) line(b []byte, loc *time.Location) {
 			fd.overflow++
 		}
 	case actIgnore:
-		if _, ok := fd.ignored[ip]; ok || len(fd.byIP)+len(fd.ignored) < fd.ipCap {
-			fd.ignored[ip]++
+		k := ipKey{ip: ip, day: ts / 86400}
+		if _, ok := fd.ignored[k]; ok || len(fd.byIP)+len(fd.ignored) < fd.ipCap {
+			fd.ignored[k]++
 		} else {
 			fd.overflow++
 		}
@@ -207,7 +224,7 @@ func (fd *fileData) serverLine(ts int64, msg []byte) {
 			v = v[:32]
 		}
 		fd.version = v
-		fd.addEvent(event{t: ts, act: actStart, detail: v})
+		fd.addEvent(event{t: ts, act: actStart})
 	case bytes.HasPrefix(msg, []byte("Exiting Fail2ban")):
 		fd.addEvent(event{t: ts, act: actStop})
 	case bytes.HasPrefix(msg, []byte("Jail '")):
@@ -326,4 +343,26 @@ func parseStamp(b []byte, loc *time.Location) (time.Time, bool) {
 // gzipReader — распаковка ротированного журнала (.gz).
 func gzipReader(r io.Reader) (io.Reader, error) {
 	return gzip.NewReader(r)
+}
+
+// prune забывает счётчики старше окна: в долгоживущем файле (ротация раз в
+// месяц или её нет) старые адреса иначе занимали бы общий бюджет, и новые
+// атакующие в него бы не попадали. События банов не трогаются: по ним
+// восстанавливаются длинные баны.
+func (fd *fileData) prune(fromHour, fromDay int64) {
+	for k := range fd.found {
+		if k.hour < fromHour {
+			delete(fd.found, k)
+		}
+	}
+	for k := range fd.byIP {
+		if k.day < fromDay {
+			delete(fd.byIP, k)
+		}
+	}
+	for k := range fd.ignored {
+		if k.day < fromDay {
+			delete(fd.ignored, k)
+		}
+	}
 }

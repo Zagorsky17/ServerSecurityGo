@@ -42,8 +42,8 @@ func FuzzLogLine(f *testing.F) {
 		for _, e := range fd.events {
 			check(e.ip, e.jail)
 		}
-		for ip := range fd.ignored {
-			check(ip, "")
+		for k := range fd.ignored {
+			check(k.ip, k.jail)
 		}
 		if c := unbanCommand(func() (string, string) {
 			for _, e := range fd.events {

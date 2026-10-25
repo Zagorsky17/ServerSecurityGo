@@ -240,7 +240,7 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 - 最活跃的地址，以及包含多个攻击地址的 /24 子网（IPv6 为 /64）；仍在尝试的 `ignoreip` 地址会被标记；
 - 最近事件：封禁、解封、恢复和延长的封禁、fail2ban 与 jail 的重启。
 
-数据只来自文件：`/var/log/fail2ban.log`（路径取自 `fail2ban.conf`/`fail2ban.local` 中的 `logtarget`）及其轮转副本，包括 `.gz`。不调用 `fail2ban-client`。轮转文件只解析一次，当前文件从上次停下的位置继续读取，因此每次扫描只需几次 `stat`。当前封禁根据日志重建（有封禁而之后没有解封，并考虑 `bantime`；fail2ban 重启会解除所有封禁，直到出现 `Restore Ban` 行）；精确列表请用 `fail2ban-client status sshd`。IP 地址属于个人数据：只保存在服务内存中，不会写入 `state.json` 或事件历史。解析量有上限（每个文件 256 MB，所有文件合计 200,000 个不同地址），因此遭受大量暴力破解的服务器日志也不会耗尽服务内存。
+数据只来自文件：`/var/log/fail2ban.log`（路径取自 `fail2ban.conf`/`fail2ban.local` 中的 `logtarget`）及其轮转副本，包括 `.gz`。不调用 `fail2ban-client`。轮转文件只解析一次，当前文件从上次停下的位置继续读取；只有当日志、配置或 fail2ban 状态发生变化时才重新计算汇总（否则至多每分钟一次）。超出统计周期的计数会被丢弃。当前封禁根据日志重建（有封禁而之后没有解封，并考虑 `bantime`；fail2ban 重启会解除所有封禁，直到出现 `Restore Ban` 行）；精确列表请用 `fail2ban-client status sshd`。IP 地址属于个人数据：只保存在服务内存中，不会写入 `state.json` 或事件历史。解析量有上限（每个文件 256 MB，所有文件合计 200,000 个不同地址），因此遭受大量暴力破解的服务器日志也不会耗尽服务内存。
 
 公网服务器上的暴力破解从不停止，因此这些统计仅供参考，不影响进程评分。系统检查：
 

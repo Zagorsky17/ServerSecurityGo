@@ -131,8 +131,9 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	ctx := &detect.Context{Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
 	detect.Analyze(snap.Processes, ctx)
 	snap.System = append(detect.SystemChecks(s.opt.FS.HostRoot, start, s.opt.Detect), exposure.SystemFindings(snap.Exposure)...)
-	// fail2ban: журнал разбирается заново только в новой части, поэтому
-	// каждое сканирование обходится в несколько stat.
+	// fail2ban: из журнала читаются только новые строки, а сводка
+	// пересчитывается, лишь когда что-то изменилось (и не чаще раза в
+	// минуту без изменений).
 	var f2bFindings []model.SystemFinding
 	snap.Fail2ban, f2bFindings = s.f2b.Build(fail2ban.Input{HostRoot: s.opt.FS.HostRoot, Procs: snap.Processes, Exposure: snap.Exposure,
 		Now: start, Days: s.opt.LogDays, Allowed: s.opt.Detect.Allowed})

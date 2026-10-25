@@ -14,6 +14,7 @@ package fail2ban
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/netip"
@@ -34,10 +35,12 @@ import (
 
 // Пределы чтения журнала за одно построение отчёта.
 const (
-	maxLogFiles   = 60        // ротированных файлов
-	maxFileBytes  = 256 << 20 // байт (после распаковки) из одного файла
-	maxTotalBytes = 1 << 30   // байт за одно построение
+	maxLogFiles  = 60        // ротированных файлов
+	maxFileBytes = 256 << 20 // байт (после распаковки) из одного файла
 )
+
+// maxTotalBytes — байт за одно построение (переменная — для теста).
+var maxTotalBytes int64 = 1 << 30
 
 // Пределы отчёта.
 const (
@@ -72,6 +75,12 @@ type Input struct {
 type Collector struct {
 	mu    sync.Mutex
 	files map[fileID]*fileData
+	// last — последний отчёт и то, из чего он построен (sig): если ничего
+	// не изменилось, сводка не пересчитывается. Время в sig — с точностью
+	// до минуты: от него зависят окно и истечение банов.
+	last    *model.Fail2banReport
+	lastErr error
+	sig     string
 }
 
 // NewCollector создаёт сборщик с пустым кешем.
@@ -96,6 +105,7 @@ func (c *Collector) Build(in Input) (*model.Fail2banReport, []model.SystemFindin
 	if how == "" {
 		// fail2ban удалили — кеш больше не нужен.
 		clear(c.files)
+		c.last, c.sig = nil, ""
 		return &model.Fail2banReport{}, nil
 	}
 	from := in.Now.Add(-time.Duration(in.Days) * 24 * time.Hour).Truncate(time.Hour)
@@ -111,6 +121,20 @@ func (c *Collector) Build(in Input) (*model.Fail2banReport, []model.SystemFindin
 		files, names, logErr = c.readLogs(in.HostRoot, path, from, in.Loc)
 		rep.LogFiles = names
 		rep.LogAvailable = logErr == nil
+	}
+	fromHour := from.Unix() / 3600
+	for _, fd := range files {
+		fd.prune(fromHour, fromHour/24)
+	}
+	// Сводка по сотням тысяч событий не нужна каждое сканирование: если
+	// журнал, конфигурация и состояние fail2ban те же, берётся прошлая.
+	var sig strings.Builder
+	fmt.Fprintf(&sig, "%d|%d|%v|%+v|%+v|%v|%v", in.Now.Unix()/60, in.Days, pid, sc, jc, rep.LogFiles, logErr)
+	for _, fd := range files {
+		fmt.Fprintf(&sig, "|%p:%d:%d:%v", fd, fd.offset, fd.size, fd.cut)
+	}
+	if c.last != nil && c.sig == sig.String() {
+		return c.last, findings(c.last, in, how, sc, jc, c.lastErr)
 	}
 	aggregate(rep, files, jc, in.Now, in.Loc)
 	if !sc.verbose() {
@@ -128,6 +152,7 @@ func (c *Collector) Build(in Input) (*model.Fail2banReport, []model.SystemFindin
 			break
 		}
 	}
+	c.last, c.lastErr, c.sig = rep, logErr, sig.String()
 	return rep, findings(rep, in, how, sc, jc, logErr)
 }
 
@@ -205,7 +230,7 @@ func (c *Collector) readLogs(hostRoot, logPath string, from time.Time, loc *time
 	var out []*fileData
 	var names []string
 	var mainErr error
-	budget := int64(maxTotalBytes)
+	budget := maxTotalBytes
 	for _, cd := range cands {
 		fd, err := c.load(cd.path, !cd.active, loc, &budget)
 		if err != nil {
@@ -243,18 +268,25 @@ func (c *Collector) load(path string, final bool, loc *time.Location, budget *in
 	gz := strings.HasSuffix(path, ".gz")
 	fd := c.files[id]
 	switch {
-	case fd != nil && fd.gz == gz && gz && fd.size == fi.Size() && fd.mtime.Equal(fi.ModTime()):
+	case fd != nil && fd.gz == gz && gz && fd.size == fi.Size() && fd.mtime.Equal(fi.ModTime()) && !fd.partial:
 		return fd, nil // сжатый файл не меняется
-	case fd != nil && fd.gz == gz && fd.cut && fi.Size() >= fd.offset:
+	case fd != nil && fd.gz == gz && gz && fd.size == fi.Size() && fd.mtime.Equal(fi.ModTime()):
+		// Сжатый файл разобран не до конца (кончился бюджет): ниже
+		// распаковка пропустит уже разобранное.
+	case fd != nil && fd.gz == gz && fd.cut && fi.Size() >= fd.offset && (gz || sameHead(f, fd.head)):
 		// Файл больше предела: прочитанная часть остаётся, остальное не
 		// читается, пока файл не ротируют.
 		return fd, nil
-	case fd != nil && fd.gz == gz && !gz && fi.Size() >= fd.offset:
+	case fd != nil && fd.gz == gz && !gz && fi.Size() >= fd.offset && sameHead(f, fd.head):
 		if fi.Size() == fd.offset {
 			fd.size, fd.mtime = fi.Size(), fi.ModTime()
 			return fd, nil
 		}
-		// Файл дописан: читаем только новое.
+		// Файл дописан: читаем только новое. Начало файла, прочитанное,
+		// пока он был короче headLen, дополняется.
+		if len(fd.head) < headLen {
+			fd.head = readHead(f)
+		}
 		if _, err := f.Seek(fd.offset, io.SeekStart); err != nil {
 			return nil, err
 		}
@@ -273,9 +305,10 @@ func (c *Collector) load(path string, final bool, loc *time.Location, budget *in
 		}
 	}
 	fd.ipCap, fd.evCap = max(maxTotalIPs-usedIP, 0), max(maxTotalEvts-usedEv, 0)
-	limit := min(int64(maxFileBytes)-fd.offset, *budget)
+	perFile := int64(maxFileBytes) - fd.offset
+	limit := min(perFile, *budget)
 	if limit <= 0 {
-		if fd.offset >= maxFileBytes {
+		if perFile <= 0 {
 			fd.cut = true
 			c.files[id] = fd
 		}
@@ -283,20 +316,50 @@ func (c *Collector) load(path string, final bool, loc *time.Location, budget *in
 		// следующем построении.
 		return fd, nil
 	}
+	if fd.offset == 0 && !gz {
+		fd.head = readHead(f)
+	}
 	var r io.Reader = f
 	if gz {
 		zr, err := gzipReader(f)
 		if err != nil {
 			return nil, err
 		}
+		// Сжатый поток с середины не открыть: распаковываем заново и
+		// пропускаем уже разобранное (без разбора строк это дёшево).
+		if _, err := io.CopyN(io.Discard, zr, fd.offset); err != nil {
+			return nil, err
+		}
 		r = zr
 	}
-	n := fd.consume(r, limit, final || gz, loc)
-	*budget -= n
+	n, read := fd.consume(r, limit, final || gz, loc)
+	*budget -= read
 	fd.offset += n
 	fd.size, fd.mtime = fi.Size(), fi.ModTime()
+	// Чтение упёрлось в предел файла — дальше файл не читается, пока его не
+	// ротируют; в общий бюджет — дочитается при следующих построениях.
+	fd.partial = read >= limit && limit < perFile
+	fd.cut = read >= limit && limit == perFile
 	c.files[id] = fd
 	return fd, nil
+}
+
+// headLen — сколько первых байт файла запоминается для проверки усечения.
+const headLen = 256
+
+// readHead читает начало файла, не сдвигая позицию чтения.
+func readHead(f *os.File) []byte {
+	b := make([]byte, headLen)
+	n, _ := f.ReadAt(b, 0)
+	return b[:n]
+}
+
+// sameHead — начало файла не изменилось (файл только дописывали). После
+// copytruncate fail2ban пишет новые строки с начала, и их время
+// отличается от прежнего начала.
+func sameHead(f *os.File, head []byte) bool {
+	cur := readHead(f)
+	return len(cur) >= len(head) && string(cur[:len(head)]) == string(head)
 }
 
 // aggregate сводит разобранные файлы в отчёт за окно [rep.From, now].
@@ -379,10 +442,12 @@ func aggregate(rep *model.Fail2banReport, files []*fileData, jc jailConfig, now 
 		// Адрес из ignoreip fail2ban пишет строкой «Ignore», а не «Found»: в
 		// почасовую статистику такие попытки не входят (fail2ban их не
 		// считает), а у источника видны с пометкой.
-		for ip, n := range fd.ignored {
-			s := getSrc(ip)
-			s.ignored = true
-			s.found += n
+		for k, n := range fd.ignored {
+			if k.day >= fromDay {
+				s := getSrc(k.ip)
+				s.ignored = true
+				s.found += n
+			}
 		}
 		events = append(events, fd.events...)
 	}
@@ -398,6 +463,14 @@ func aggregate(rep *model.Fail2banReport, files []*fileData, jc jailConfig, now 
 	banCount := map[string]int{}
 	banTime := func(jail string) int64 {
 		if t, ok := banTimes[jail]; ok {
+			return t
+		}
+		// Jail сейчас выключен, но банил раньше: его bantime из секции
+		// (или из [DEFAULT]) всё равно известен.
+		if t, ok := jc.BanTimes[jail]; ok {
+			return t
+		}
+		if t, ok := jc.BanTimes["DEFAULT"]; ok {
 			return t
 		}
 		return defaultBanTime
@@ -443,7 +516,9 @@ func aggregate(rep *model.Fail2banReport, files []*fileData, jc jailConfig, now 
 			// При запуске и остановке fail2ban снимает все блокировки; после
 			// запуска действующие баны восстанавливаются строками Restore Ban.
 			clear(active)
-		case actJailStart, actJailStop:
+		case actJailStop:
+			// «Jail started» баны не сбрасывает: строки Restore Ban могут
+			// прийти раньше неё. Полный сброс — при запуске fail2ban.
 			for key := range active {
 				if key.jail == e.jail {
 					delete(active, key)
