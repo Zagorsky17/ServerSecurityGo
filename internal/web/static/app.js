@@ -63,6 +63,11 @@ const STATUS_NAMES = {
 const GROUP_NAMES = { ssh: () => tr('audit.group.ssh'), accounts: () => tr('audit.group.accounts'), sudo: () => tr('audit.group.sudo') };
 const STATUS_CLASS = { pass: 'st-pass', fail: 'st-fail', warn: 'st-warn', info: 'st-info', 'n/a': 'st-na', unknown: 'st-unknown' };
 const STATUS_RANK = { fail: 0, warn: 1, unknown: 2, info: 3, pass: 4, 'n/a': 5 };
+const F2B_ACTIONS = {
+  ban: () => tr('web.f2b.act.ban'), unban: () => tr('web.f2b.act.unban'), restore: () => tr('web.f2b.act.restore'),
+  increase: () => tr('web.f2b.act.increase'), start: () => tr('web.f2b.act.start'), stop: () => tr('web.f2b.act.stop'),
+  jail_start: () => tr('web.f2b.act.jail_start'), jail_stop: () => tr('web.f2b.act.jail_stop'),
+};
 const label = (names, v) => (names[v] ? names[v]() : (v || '—'));
 const endpoint = (addr, port) => (addr.includes(':') ? `[${addr}]:${port}` : `${addr}:${port}`);
 const categoryName = (c) => (CATEGORIES.includes(c) ? tr('cat.' + c) : c);
@@ -119,7 +124,7 @@ async function copyText(text) {
 // ---------------------------------------------------------------------
 
 const state = {
-  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null,
+  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null,
   tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
 
@@ -351,6 +356,153 @@ function renderAudit() {
         h('button', { class: 'small secondary', type: 'button', onclick: (e) => { e.stopPropagation(); copyText(c.fixCommand); } }, tr('tui.hint.copy'))) : '',
       c.references && c.references.length ? h('div', { class: 'muted' }, 'MITRE ATT&CK: ' + c.references.join(', ')) : ''), c: 'wrap' },
   ], rows, null, a.enabled ? tr('web.audit.empty') : tr('web.audit.disabled'));
+}
+
+// ---------------------------------------------------------------------
+// fail2ban
+// ---------------------------------------------------------------------
+
+/** Время fail2ban (секунды) коротко: 10m, 1h, 1w; отрицательное — навсегда. */
+function fmtDur(sec) {
+  if (sec < 0) return tr('web.f2b.forever');
+  for (const [n, u] of [[604800, 'w'], [86400, 'd'], [3600, 'h'], [60, 'm']]) {
+    if (sec >= n && sec % n === 0) return (sec / n) + u;
+  }
+  return sec + 's';
+}
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+/** Элемент SVG. Атрибуты — только числа и имена классов, текста нет. */
+function svg(tag, attrs) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
+  return el;
+}
+
+/** Подпись интервала графика: день или час. */
+function bucketLabel(t, mode) {
+  const d = new Date(t);
+  return mode === 'hours'
+    ? d.toLocaleString(dateLocale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString(dateLocale(), { day: '2-digit', month: '2-digit' });
+}
+
+/** Подсказка графика: значения обеих серий для интервала, значение — крупно. */
+function showTip(e, b, mode) {
+  const tip = $('chart-tip');
+  tip.replaceChildren(h('div', { class: 'muted' }, bucketLabel(b.time, mode)),
+    h('div', null, h('b', null, b.found), ' ', tr('web.f2b.tip_found')),
+    h('div', null, h('b', null, b.bans), ' ', tr('web.f2b.tip_bans')));
+  tip.classList.remove('hidden');
+  // Позиция — через CSSOM: CSP запрещает только inline-стили в разметке.
+  let x = e.clientX, y = e.clientY;
+  if (x === undefined) { const r = e.target.getBoundingClientRect(); x = r.right; y = r.top; }
+  tip.style.left = Math.min(x + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
+  tip.style.top = Math.max(y - tip.offsetHeight - 8, 8) + 'px';
+}
+function hideTip() { $('chart-tip').classList.add('hidden'); }
+
+/**
+ * Столбчатый график одной серии (found или bans). У каждого графика своя
+ * шкала: попытки и баны отличаются на порядки, и общая ось сплющила бы
+ * баны. Ось времени у обоих графиков общая. Зона наведения — весь столбец
+ * по высоте, не только закрашенная часть.
+ */
+function barChart(boxId, buckets, key, title, mode) {
+  const box = $(boxId);
+  const w = Math.max(box.clientWidth || 600, 120), ht = 84;
+  const maxV = Math.max(1, ...buckets.map((b) => b[key]));
+  const n = Math.max(buckets.length, 1);
+  const step = w / n;
+  const gap = step >= 6 ? 2 : step >= 3 ? 1 : 0;
+  const bw = Math.max(1, step - gap);
+  const root = svg('svg', { viewBox: `0 0 ${w} ${ht}`, width: w, height: ht });
+  root.setAttribute('aria-label', title + ': ' + tr('web.f2b.max', maxV));
+  buckets.forEach((b, i) => {
+    const g = svg('g');
+    const x = i * step;
+    const v = b[key];
+    if (v > 0) {
+      const bh = Math.max(2, (ht - 4) * v / maxV);
+      const x0 = x + gap / 2, y0 = ht - bh, r = Math.min(4, bw / 2, bh);
+      // Скруглён только верх: низ столбца стоит на базовой линии.
+      g.append(svg('path', { class: 'bar', d: `M${x0},${ht}V${y0 + r}Q${x0},${y0} ${x0 + r},${y0}H${x0 + bw - r}Q${x0 + bw},${y0} ${x0 + bw},${y0 + r}V${ht}Z` }));
+    }
+    const hit = svg('rect', { class: 'hit', x, y: 0, width: step, height: ht, tabindex: 0 });
+    const show = (e) => showTip(e, b, mode);
+    hit.addEventListener('pointermove', show);
+    hit.addEventListener('focus', show);
+    hit.addEventListener('pointerleave', hideTip);
+    hit.addEventListener('blur', hideTip);
+    g.append(hit);
+    root.append(g);
+  });
+  root.append(svg('line', { class: 'base', x1: 0, y1: ht - 0.5, x2: w, y2: ht - 0.5 }));
+  box.replaceChildren(root);
+}
+
+function renderFail2ban() {
+  const f = state.fail2ban;
+  if (!f || !f.installed) return;
+  $('f2b-state').replaceChildren(
+    f.running ? h('span', { class: 'st st-pass' }, tr('web.f2b.running')) : h('span', { class: 'st st-fail' }, tr('web.f2b.stopped')),
+    f.version ? ' fail2ban ' + f.version : '');
+  $('f2b-log').textContent = f.logAvailable ? tr('web.f2b.log', (f.logFiles || []).join(', '), f.days) : tr('web.f2b.no_log', f.logTarget || '—');
+  $('f2b-warn').replaceChildren(...(f.warnings || []).map((w) => h('li', null, '⚠ ' + tx(w))));
+
+  const mode = $('f2b-range').value;
+  const buckets = mode === 'hours' ? (f.hourly || []).slice(-48) : (f.daily || []);
+  barChart('f2b-chart-found', buckets, 'found', tr('web.f2b.chart_found'), mode);
+  barChart('f2b-chart-bans', buckets, 'bans', tr('web.f2b.chart_bans'), mode);
+  $('f2b-axis').replaceChildren(...(buckets.length ? [h('span', null, bucketLabel(buckets[0].time, mode)), h('span', null, bucketLabel(buckets[buckets.length - 1].time, mode))] : []));
+  $('f2b-totals').replaceChildren(
+    ...kv(tr('web.f2b.k.found', f.days), f.found), ...kv(tr('web.f2b.k.found24'), f.found24h),
+    ...kv(tr('web.f2b.k.bans', f.days), f.banCount), ...kv(tr('web.f2b.k.bans24'), f.bans24h),
+    ...kv(tr('web.f2b.k.peak'), f.peak && f.peak.found ? tr('web.f2b.peak', f.peak.found, bucketLabel(f.peak.time, 'hours')) : '—'),
+    ...kv(tr('web.f2b.k.banned'), (f.bans || []).length),
+  );
+
+  renderTable('t-f2b-jails', [
+    { t: 'jail', v: (j) => j.name, r: (j) => h('span', null, j.name, j.ssh ? h('span', { class: 'tag' }, 'SSH') : '', j.source ? '' : h('span', { class: 'tag', title: tr('web.f2b.not_enabled_title') }, tr('web.f2b.not_enabled'))) },
+    { t: 'maxretry', v: (j) => j.maxRetry, r: (j) => (j.source ? j.maxRetry : '—'), c: 'num' },
+    { t: 'findtime', v: (j) => j.findTime, r: (j) => (j.source ? fmtDur(j.findTime) : '—'), c: 'num' },
+    { t: 'bantime', v: (j) => j.banTime, r: (j) => (j.source ? h('span', null, fmtDur(j.banTime), j.banTimeIncrement ? h('span', { class: 'tag', title: 'bantime.increment' }, '↑') : '') : '—'), c: 'num' },
+    { t: tr('web.f2b.col.found'), v: (j) => j.found, r: (j) => j.found, c: 'num', desc: true },
+    { t: tr('web.f2b.col.bans'), v: (j) => j.bans, r: (j) => j.bans, c: 'num', desc: true },
+    { t: tr('web.f2b.col.banned'), v: (j) => j.banned, r: (j) => j.banned, c: 'num', desc: true },
+    { t: tr('tui.k.file'), v: (j) => j.source || '', r: (j) => j.source || '', c: 'mono' },
+  ], f.jails || [], null, tr('web.f2b.no_jails'));
+
+  const q = $('b-q').value.trim().toLowerCase();
+  const has = (...xs) => !q || xs.join(' ').toLowerCase().includes(q);
+  renderTable('t-f2b-bans', [
+    { t: 'IP', v: (b) => b.ip, r: (b) => b.ip, c: 'mono' },
+    { t: 'jail', v: (b) => b.jail, r: (b) => b.jail },
+    { t: tr('web.f2b.col.since'), v: (b) => b.since, r: (b) => h('span', null, fmtTime(b.since), b.restored ? h('span', { class: 'tag', title: tr('web.f2b.restored_title') }, tr('web.f2b.restored')) : ''), c: 'nowrap', desc: true },
+    { t: tr('web.f2b.col.until'), v: (b) => (b.permanent ? '9' : b.until || ''), r: (b) => (b.permanent ? tr('web.f2b.forever') : fmtTime(b.until)), c: 'nowrap' },
+    { t: tr('web.f2b.col.count'), v: (b) => b.count, r: (b) => h('span', null, b.count, b.count > 1 ? h('span', { class: 'tag strong' }, tr('web.f2b.repeat')) : ''), c: 'num', desc: true },
+    { t: tr('web.f2b.col.unban'), v: () => 0, r: (b) => (b.unbanCommand ? h('div', { class: 'fix' }, h('pre', null, b.unbanCommand),
+      h('button', { class: 'small secondary', type: 'button', onclick: (e) => { e.stopPropagation(); copyText(b.unbanCommand); } }, tr('tui.hint.copy'))) : '—'), c: 'wrap' },
+  ], (f.bans || []).filter((b) => has(b.ip, b.jail)), null, f.running ? tr('web.f2b.no_bans') : tr('web.f2b.no_bans_stopped'));
+
+  renderTable('t-f2b-top', [
+    { t: 'IP', v: (s) => s.addr, r: (s) => h('span', { class: 'mono' }, s.addr, s.ignored ? h('span', { class: 'tag', title: tr('web.f2b.ignored_title') }, 'ignoreip') : '') },
+    { t: tr('web.f2b.col.found'), v: (s) => s.found, r: (s) => s.found, c: 'num', desc: true },
+    { t: tr('web.f2b.col.bans'), v: (s) => s.bans, r: (s) => s.bans, c: 'num', desc: true },
+    { t: 'jail', v: (s) => (s.jails || []).join(','), r: (s) => (s.jails || []).join(', ') },
+  ], (f.top || []).filter((s) => has(s.addr, ...(s.jails || []))), null, tr('web.f2b.no_attempts'));
+  renderTable('t-f2b-nets', [
+    { t: tr('web.f2b.col.net'), v: (s) => s.addr, r: (s) => s.addr, c: 'mono' },
+    { t: tr('web.f2b.col.ips'), v: (s) => s.ips, r: (s) => s.ips, c: 'num', desc: true },
+    { t: tr('web.f2b.col.found'), v: (s) => s.found, r: (s) => s.found, c: 'num', desc: true },
+    { t: tr('web.f2b.col.bans'), v: (s) => s.bans, r: (s) => s.bans, c: 'num', desc: true },
+  ], (f.topNets || []).filter((s) => has(s.addr)), null, tr('web.f2b.no_nets'));
+  renderTable('t-f2b-recent', [
+    { t: tr('web.col.time'), v: (e) => e.time, r: (e) => fmtTime(e.time), c: 'nowrap' },
+    { t: tr('tui.title.event'), v: (e) => e.action, r: (e) => label(F2B_ACTIONS, e.action) },
+    { t: 'jail', v: (e) => e.jail || '', r: (e) => e.jail || '' },
+    { t: 'IP', v: (e) => e.ip || '', r: (e) => e.ip || '', c: 'mono' },
+  ], (f.recent || []).filter((e) => has(e.ip, e.jail, e.action)), null, tr('web.f2b.no_events'));
 }
 
 function renderHistory() {
@@ -590,6 +742,10 @@ function renderSummary() {
     h('div', { class: 'stat', onclick: () => switchTab('audit') }, h('div', { class: 'num' },
       s.audit && s.audit.ready ? h('span', { class: 'st ' + (s.audit.fail ? 'st-fail' : s.audit.warn ? 'st-warn' : 'st-pass') }, s.audit.fail + s.audit.warn) : '—'),
       h('div', { class: 'lbl' }, tr('web.stat.audit'))),
+    // Карточка fail2ban — только при установленном fail2ban.
+    s.fail2ban ? h('div', { class: 'stat', onclick: () => switchTab('fail2ban') }, h('div', { class: 'num' },
+      s.fail2ban.running ? s.fail2ban.banned : h('span', { class: 'st st-fail', title: tr('web.f2b.stopped') }, '⚠'),
+      h('span', { class: 'muted', title: tr('web.stat.found24_title') }, ' · ' + s.fail2ban.found24h)), h('div', { class: 'lbl' }, tr('web.stat.fail2ban'))) : '',
     h('div', { class: 'stat', onclick: () => switchTab('system') }, h('div', { class: 'num' }, s.systemFindings || 0), h('div', { class: 'lbl' }, tr('web.stat.system'))),
   );
   const banner = $('banner');
@@ -604,6 +760,8 @@ function renderSummary() {
   $('cnt-ports').textContent = s.stats.publicPorts || 0;
   $('cnt-audit').textContent = s.audit && s.audit.ready ? s.audit.fail + s.audit.warn : '—';
   $('cnt-system').textContent = s.systemFindings || 0;
+  $('tabbtn-fail2ban').classList.toggle('hidden', !s.fail2ban);
+  $('cnt-fail2ban').textContent = s.fail2ban ? s.fail2ban.banned : 0;
 }
 
 function renderAll() {
@@ -615,6 +773,7 @@ function renderAll() {
     case 'net': renderNet(); break;
     case 'ports': renderPorts(); break;
     case 'audit': renderAudit(); break;
+    case 'fail2ban': renderFail2ban(); break;
     case 'history': renderHistory(); break;
     case 'system': renderSystem(); break;
   }
@@ -626,6 +785,7 @@ async function loadTabData() {
     case 'net': state.sockets = (await api('/api/connections')).sockets || []; break;
     case 'ports': state.exposure = (await api('/api/exposure')).exposure || null; break;
     case 'audit': state.audit = await api('/api/audit'); break;
+    case 'fail2ban': state.fail2ban = await api('/api/fail2ban'); break;
     case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
     case 'system': state.system = await api('/api/system'); break;
   }
@@ -643,6 +803,9 @@ async function refresh() {
       setTimeout(refresh, 1500);
       return;
     }
+    // fail2ban удалили (или вкладка запомнилась с другого сервера): раздела
+    // больше нет — уходим на вкладку по умолчанию.
+    if (state.tab === 'fail2ban' && !state.status.fail2ban) showTab('suspicious');
     if (state.tab === 'suspicious' || state.tab === 'all') {
       state.processes = (await api('/api/processes')).processes || [];
     }
@@ -656,12 +819,18 @@ async function refresh() {
 }
 
 function switchTab(tab) {
+  showTab(tab);
+  refresh();
+}
+
+/** Переключает вкладку без загрузки данных. */
+function showTab(tab) {
   state.tab = tab;
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab').forEach((s) => s.classList.toggle('active', s.id === 'tab-' + tab));
   $('proc-filters').classList.toggle('hidden', !(tab === 'suspicious' || tab === 'all'));
   try { localStorage.setItem('ssg.tab', tab); } catch (_) { /* приватный режим */ }
-  refresh();
+  hideTip();
 }
 
 let timer = null;
@@ -688,12 +857,15 @@ async function init() {
   });
 
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-  for (const id of ['proc-filters', 'net-filters', 'ports-filters', 'audit-filters', 'hist-filters']) {
+  for (const id of ['proc-filters', 'net-filters', 'ports-filters', 'audit-filters', 'f2b-filters', 'hist-filters']) {
     const form = $(id);
     form.addEventListener('input', () => { state.showAll = {}; renderAll(); });
     form.addEventListener('submit', (e) => e.preventDefault());
     form.addEventListener('reset', () => setTimeout(renderAll, 0));
   }
+  // Графики строятся по ширине карточки — перестраиваем при её изменении.
+  let resizeT = null;
+  window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (state.tab === 'fail2ban') renderFail2ban(); }, 150); });
   $('tree-q').addEventListener('input', renderTree);
   $('tree-kernel').addEventListener('change', renderTree);
   $('tree-expand').addEventListener('click', () => { state.collapsed.clear(); renderTree(); });

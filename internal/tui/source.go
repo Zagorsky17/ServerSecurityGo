@@ -33,6 +33,10 @@ type Data struct {
 	// Audit — настройки безопасности; nil, если служба старой версии без
 	// /api/audit.
 	Audit *view.AuditView
+	// Fail2ban — состояние fail2ban; nil, если fail2ban не установлен или
+	// служба старой версии без /api/fail2ban. Панель есть, только когда
+	// Installed.
+	Fail2ban *model.Fail2banReport
 }
 
 // Source — откуда интерфейс берёт данные: из запущенной службы (через
@@ -101,7 +105,11 @@ func (l *LocalSource) Fetch() (*Data, error) {
 		av = view.BuildAudit(true, l.audit.Running(), l.audit.Interval(), l.audit.Report())
 	}
 	st.Audit = av.Brief()
-	return &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap), Exposure: view.Exposure(snap), Audit: &av}, nil
+	d := &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap), Exposure: view.Exposure(snap), Audit: &av}
+	if f := view.Fail2ban(snap); f.Installed {
+		d.Fail2ban = f
+	}
+	return d, nil
 }
 
 func (l *LocalSource) RunAudit() error {
@@ -232,6 +240,16 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 		return nil, fmt.Errorf("/api/exposure: %w", err)
 	}
 	d.Exposure = exp.Exposure
+	// fail2ban запрашивается, только если он установлен: так говорит сводка
+	// в /api/status (старая служба сводки не присылает — раздела нет).
+	if d.Status.Fail2ban != nil {
+		var f model.Fail2banReport
+		if err := r.get("/api/fail2ban", &f); err == nil && f.Installed {
+			d.Fail2ban = &f
+		} else if err != nil && !errors.Is(err, errNotFound) {
+			return nil, fmt.Errorf("/api/fail2ban: %w", err)
+		}
+	}
 	if c, b := r.audit, d.Status.Audit; c != nil && c.Enabled == b.Enabled && c.Running == b.Running && c.Time.Equal(b.Time) {
 		d.Audit = c
 		return d, nil

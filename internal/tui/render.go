@@ -19,8 +19,11 @@ type seg struct {
 }
 type line []seg
 
-// minHeight — минимальная высота окна для раскладки панелей.
-const minHeight = 16
+// minHeight — минимальная высота окна для раскладки панелей: свёрнутые
+// панели — по рамке с заголовком (2 строки), у развёрнутой — хотя бы одна
+// строка списка, плюс строка подсказок. 16 строк при восьми панелях, 18 —
+// при девяти (с fail2ban).
+func (a *App) minHeight() int { return 2*(len(a.visible())-2) + 4 }
 
 // draw рисует кадр целиком и выводит его.
 func (a *App) draw() {
@@ -31,8 +34,8 @@ func (a *App) draw() {
 // render раскладывает панели и рисует их в буфер (без вывода — удобно
 // для тестов).
 func (a *App) render() {
-	// Меньше 16 строк восемь панелей слева не помещаются даже рамками.
-	if a.w < 20 || a.h < minHeight {
+	// В низком окне панели слева не помещаются даже рамками.
+	if a.w < 20 || a.h < a.minHeight() {
 		a.scr = newScreen(max(a.w, 1), max(a.h, 1))
 		a.scr.Text(0, 0, a.w, a.tr("tui.too_small"), stWarn)
 		return
@@ -83,7 +86,8 @@ func (a *App) render() {
 // панели нужно хотя бы несколько строк списка.
 func (a *App) layoutLeft(lw, contentH int) {
 	// Свёрнутые панели-списки: все, кроме развёрнутой.
-	folded := int(nPanels) - 2
+	lists := a.visible()[1:]
+	folded := len(lists) - 1
 	const bigMin = 6
 	statusH := 6
 	if contentH-statusH < folded*2+bigMin {
@@ -101,12 +105,12 @@ func (a *App) layoutLeft(lw, contentH int) {
 		big = avail - small*folded
 	}
 	y := statusH
-	for p := pSusp; p < nPanels; p++ {
+	for i, p := range lists {
 		h := small
 		if p == a.expanded {
 			h = big
 		}
-		if p == nPanels-1 {
+		if i == len(lists)-1 {
 			h = contentH - y // остаток — последней панели
 		}
 		a.rects[p] = rect{0, y, lw, h}
@@ -115,7 +119,7 @@ func (a *App) layoutLeft(lw, contentH int) {
 	if statusH > 0 {
 		a.drawStatus(a.rects[pStatus])
 	}
-	for p := pSusp; p < nPanels; p++ {
+	for _, p := range lists {
 		a.drawList(p, a.rects[p])
 	}
 }
@@ -173,7 +177,7 @@ func secs(f float64) string {
 // ---------------------------------------------------------------------
 
 func (a *App) listTitle(p panelID) string {
-	t := fmt.Sprintf("[%d] %s (%d)", p+1, a.panelTitle(p), a.count(p))
+	t := fmt.Sprintf("[%d] %s (%d)", a.panelNum(p), a.panelTitle(p), a.count(p))
 	if p == pProcs {
 		if a.treeMode {
 			t += " · " + a.tr("tui.tree")
@@ -265,6 +269,8 @@ func (a *App) columnsHeader(p panelID, w int) string {
 		return fit(a.tr("tui.cols.ports"), w)
 	case pAudit:
 		return fit(a.tr("tui.cols.audit"), w)
+	case pF2B:
+		return fit(a.tr("tui.cols.f2b"), w)
 	case pHist:
 		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
@@ -384,6 +390,22 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{sev + " ", sevSt},
 			{fit(a.groupName(c.Group), 8) + " ", stDim},
 			{a.txt(c.Title), stNormal},
+		}
+	case pF2B:
+		b := a.bans[i]
+		until := a.tr("web.f2b.forever")
+		if !b.Permanent {
+			until = b.Until.Local().Format("02.01 15:04")
+		}
+		cst := stDim
+		if b.Count > 1 {
+			cst = stWarn // рецидивист
+		}
+		return []seg{
+			{fit(b.IP, 20) + " ", stAddr},
+			{fit(b.Jail, 10) + " ", stNormal},
+			{fit(until, 11) + " ", stDim},
+			{"×" + strconv.Itoa(b.Count), cst},
 		}
 	case pHist:
 		e := a.events[i]
@@ -580,6 +602,15 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.auditDetail(b, c)
 		return a.tr("tui.panel.audit") + " · " + auditShort(c.Status), b.lines
+	case pF2B:
+		// Сверху — выбранный бан, ниже — состояние и статистика fail2ban.
+		title := a.tr("tui.panel.f2b")
+		if bn, ok := a.selBan(); ok {
+			a.banDetail(b, bn)
+			title += " · " + bn.IP
+		}
+		a.f2bOverview(b)
+		return title, b.lines
 	case pSys:
 		f, ok := a.selSystem()
 		if !ok {
@@ -1025,6 +1056,171 @@ func (a *App) portDetail(b *lb, e model.Exposure) {
 	a.processDetail(b, e.ProcKey)
 }
 
+// sparkBlocks — восемь уровней мини-графика.
+var sparkBlocks = []rune("▁▂▃▄▅▆▇█")
+
+// spark — мини-график из блочных символов: не больше w последних
+// значений, ноль — пробел (чтобы пустые часы не выглядели как попытки).
+func spark(vals []int, w int) string {
+	if len(vals) > w {
+		vals = vals[len(vals)-w:]
+	}
+	mx := 0
+	for _, v := range vals {
+		mx = max(mx, v)
+	}
+	out := make([]rune, len(vals))
+	for i, v := range vals {
+		switch {
+		case v == 0:
+			out[i] = ' '
+		default:
+			out[i] = sparkBlocks[min(len(sparkBlocks)-1, (v*len(sparkBlocks)-1)/max(mx, 1))]
+		}
+	}
+	return string(out)
+}
+
+// banDetail — подробности текущего бана и команда разбана.
+func (a *App) banDetail(b *lb, bn model.Fail2banBan) {
+	b.add(seg{" BAN ", Style{FG: 16, BG: riskStyle("HIGH").FG, Bold: true}}, seg{"  " + sanitize(bn.IP), stAddr}, seg{" · " + sanitize(bn.Jail), stBold})
+	b.kv(a.tr("web.f2b.col.since"), fmtTime(bn.Since))
+	until := a.tr("web.f2b.forever")
+	if !bn.Permanent {
+		until = fmtTime(bn.Until)
+	}
+	b.kv(a.tr("web.f2b.col.until"), until)
+	b.kv(a.tr("web.f2b.col.count"), strconv.Itoa(bn.Count))
+	if bn.Restored {
+		b.para(a.tr("web.f2b.restored_title"), stDim, 2)
+	}
+	if bn.UnbanCommand != "" {
+		b.header(a.tr("web.f2b.col.unban"))
+		b.para(bn.UnbanCommand, Style{FG: 223, BG: -1}, 2)
+		b.para(a.tr("tui.f2b.copy_hint"), stDim, 2)
+	}
+	b.blank()
+}
+
+// f2bOverview — состояние fail2ban, мини-графики, jail и самые активные
+// адреса.
+func (a *App) f2bOverview(b *lb) {
+	f := a.data.Fail2ban
+	if f == nil {
+		return
+	}
+	state, sst := a.tr("web.f2b.running"), stOK
+	if !f.Running {
+		state, sst = a.tr("web.f2b.stopped"), riskStyle("CRITICAL")
+	}
+	line := []seg{{"fail2ban ", stBold}, {state, sst}}
+	if f.Version != "" {
+		line = append(line, seg{" · " + sanitize(f.Version), stDim})
+	}
+	b.add(line...)
+	if f.LogAvailable {
+		b.para(a.tr("web.f2b.log", strings.Join(f.LogFiles, ", "), f.Days), stDim, 0)
+	} else {
+		b.para(a.tr("web.f2b.no_log", orDash(f.LogTarget)), stWarn, 0)
+	}
+	for _, w := range f.Warnings {
+		b.para("⚠ "+a.txt(w), stWarn, 0)
+	}
+	if !f.Running {
+		b.para(a.tr("web.f2b.no_bans_stopped"), stWarn, 0)
+	} else if len(f.Bans) == 0 {
+		b.para(a.tr("web.f2b.no_bans"), stDim, 0)
+	}
+
+	// Мини-графики: у попыток и банов своя шкала (как и в веб-панели).
+	sw := max(10, b.w-4)
+	hourly := f.Hourly
+	if len(hourly) > 48 {
+		hourly = hourly[len(hourly)-48:]
+	}
+	if len(hourly) > 0 {
+		found, bans := make([]int, len(hourly)), make([]int, len(hourly))
+		for i, h := range hourly {
+			found[i], bans[i] = h.Found, h.Bans
+		}
+		b.header(a.tr("tui.f2b.hourly"))
+		b.add(seg{"  " + spark(found, sw), stAccent})
+		b.header(a.tr("tui.f2b.bans_hourly"))
+		b.add(seg{"  " + spark(bans, sw), stWarn})
+		first := hourly[max(0, len(hourly)-sw)].Time
+		b.add(seg{"  " + first.Local().Format("02.01 15:04") + " … " + hourly[len(hourly)-1].Time.Local().Format("02.01 15:04"), stDim})
+	}
+	if len(f.Daily) > 0 {
+		vals := make([]int, len(f.Daily))
+		for i, d := range f.Daily {
+			vals[i] = d.Found
+		}
+		b.header(a.tr("tui.f2b.daily", f.Days))
+		b.add(seg{"  " + spark(vals, sw), stAccent})
+	}
+	b.header(a.tr("tui.h.f2b_totals"))
+	b.kv(a.tr("web.f2b.k.found24"), strconv.Itoa(f.Found24h))
+	b.kv(a.tr("web.f2b.k.bans24"), strconv.Itoa(f.Bans24h))
+	b.kv(a.tr("web.f2b.k.found", f.Days), strconv.Itoa(f.Found))
+	b.kv(a.tr("web.f2b.k.bans", f.Days), strconv.Itoa(f.BanCount))
+	if f.Peak.Found > 0 {
+		b.kv(a.tr("web.f2b.k.peak"), a.tr("web.f2b.peak", f.Peak.Found, fmtTime(f.Peak.Time)))
+	}
+	b.kv(a.tr("web.f2b.k.banned"), strconv.Itoa(len(f.Bans)))
+
+	b.header(a.tr("web.f2b.jails"))
+	if len(f.Jails) == 0 {
+		b.para(a.tr("web.f2b.no_jails"), stWarn, 2)
+	}
+	for _, j := range f.Jails {
+		name := sanitize(j.Name)
+		if j.Source == "" {
+			name += " (" + a.tr("web.f2b.not_enabled") + ")"
+		}
+		params := ""
+		if j.Source != "" {
+			params = a.tr("tui.f2b.jail_params", j.MaxRetry, fmtDur(a, j.FindTime), fmtDur(a, j.BanTime))
+		}
+		b.add(seg{"  " + fit(name, 22) + " ", stBold}, seg{params, stDim})
+		b.add(seg{"    " + a.tr("tui.f2b.jail_counts", j.Found, j.Bans, j.Banned), stNormal})
+	}
+	if len(f.Top) > 0 {
+		b.header(a.tr("web.f2b.top"))
+		for i, s := range f.Top {
+			if i >= 10 {
+				break
+			}
+			mark := ""
+			if s.Ignored {
+				mark = " ignoreip"
+			}
+			b.add(seg{"  " + fit(sanitize(s.Addr), 22) + " ", stAddr}, seg{a.tr("tui.f2b.src_counts", s.Found, s.Bans), stNormal}, seg{mark, stWarn})
+		}
+	}
+	if len(f.TopNets) > 0 {
+		b.header(a.tr("web.f2b.nets"))
+		for _, s := range f.TopNets {
+			b.add(seg{"  " + fit(sanitize(s.Addr), 22) + " ", stAddr}, seg{a.tr("tui.f2b.net_counts", s.IPs, s.Found, s.Bans), stNormal})
+		}
+	}
+}
+
+// fmtDur — время fail2ban (секунды) коротко: 10m, 1h, 1w; < 0 — навсегда.
+func fmtDur(a *App, sec int64) string {
+	if sec < 0 {
+		return a.tr("web.f2b.forever")
+	}
+	for _, u := range []struct {
+		n int64
+		s string
+	}{{604800, "w"}, {86400, "d"}, {3600, "h"}, {60, "m"}} {
+		if sec >= u.n && sec%u.n == 0 {
+			return strconv.FormatInt(sec/u.n, 10) + u.s
+		}
+	}
+	return strconv.FormatInt(sec, 10) + "s"
+}
+
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
 	rs := f.Risk.String()
 	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
@@ -1091,6 +1287,14 @@ func (a *App) overview(b *lb) {
 			b.kv(a.tr("tui.k.addrs"), strings.Join(addrs, ", "))
 		}
 	}
+	if f := a.data.Fail2ban; f != nil && f.Installed {
+		b.header("fail2ban")
+		if f.Running {
+			b.para(a.tr("tui.f2b.summary", len(f.Bans), f.Found24h, f.Bans24h), stNormal, 2)
+		} else {
+			b.para(a.tr("web.f2b.stopped"), riskStyle("CRITICAL"), 2)
+		}
+	}
 	if len(st.Warnings) > 0 {
 		b.header(a.tr("tui.h.limits"))
 		for _, w := range st.Warnings {
@@ -1136,7 +1340,7 @@ func (a *App) drawBottom() {
 	case a.focus == pProcs:
 		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"s", a.tr("tui.hint.sort")}, {"t", a.tr("tui.tree")}, {"K", a.tr("tui.hint.kernel")}, {"y", a.tr("tui.hint.copy")}}
 	default:
-		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"1-8/Tab", a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y", a.tr("tui.hint.copy")}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {fmt.Sprintf("1-%d/Tab", len(a.visible())), a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y", a.tr("tui.hint.copy")}}
 	}
 	hints = append(hints, [2]string{"L", a.tr("tui.hint.lang")}, [2]string{"?", a.tr("tui.hint.help")}, [2]string{"q", a.tr("tui.hint.quit")})
 	cx := 0
@@ -1173,7 +1377,7 @@ func (a *App) drawBottom() {
 // Пустая клавиша — заголовок раздела.
 var helpLines = [][2]string{
 	{"", "tui.help.nav"},
-	{"1 … 8", "tui.help.panels"},
+	{"1 … N", "tui.help.panels"},
 	{"Tab / Shift+Tab, [ ]", "tui.help.next_panel"},
 	{"↑ ↓ / j k", "tui.help.select"},
 	{"PgUp PgDn, Ctrl+U Ctrl+D", "tui.help.page"},
@@ -1222,7 +1426,11 @@ func (a *App) drawHelp() {
 			s.Text(x+2, row, w-4, a.tr(hl[1]), Style{FG: 75, BG: -1, Bold: true})
 			continue
 		}
-		s.Text(x+4, row, 26, hl[0], stKey)
+		k := hl[0]
+		if k == "1 … N" {
+			k = fmt.Sprintf("1 … %d", len(a.visible())) // число панелей зависит от fail2ban
+		}
+		s.Text(x+4, row, 26, k, stKey)
 		s.Text(x+31, row, w-33, a.tr(hl[1]), stNormal)
 	}
 }

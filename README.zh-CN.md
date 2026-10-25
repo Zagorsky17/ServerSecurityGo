@@ -23,6 +23,7 @@
 - [功能](#功能)
   - [开放端口](#开放端口)
   - [安全设置](#安全设置)
+  - [fail2ban](#fail2ban)
 - [风险评分方式](#风险评分方式)
 - [可检测的异常示例](#可检测的异常示例)
 - [检测局限](#检测局限)
@@ -113,17 +114,17 @@ serversecuritygo
 ↑↓ select  1-8/Tab panels  Enter details  / filter  r scan  y copy  L русский  ? help  q quit
 ```
 
-左侧有八个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、安全设置、历史和系统检查。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
+左侧有八个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、安全设置、历史和系统检查。如果安装了 fail2ban，会在历史之前出现第九个面板 fail2ban，其后面板的编号随之顺延。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
 
 | 按键 | 作用 |
 |---|---|
-| `1`…`8`、`Tab` / `Shift+Tab` | 切换面板 |
+| `1`…`8`（有 fail2ban 时为 `9`）、`Tab` / `Shift+Tab` | 切换面板 |
 | `↑` `↓` / `j` `k`、`PgUp` `PgDn`、`g` `G` | 选择行；在详情中滚动 |
 | `Enter` / `→`、`Esc` / `←` | 进入详情并返回 |
 | `/` | 按名称、PID、路径、用户、指标或风险等级过滤面板 |
 | `s`、`t`、`K` | 排序进程（风险、CPU、内存、PID、名称）、树形视图、内核线程 |
 | `r`、`p` | 立即扫描（在“设置”面板上为立即检查设置）、暂停自动刷新 |
-| `y`、`Y` | 把命令行（在“设置”面板上为修复命令）或 JSON 复制到你电脑的剪贴板（OSC 52，可通过 SSH 使用） |
+| `y`、`Y` | 把命令行（在“设置”面板上为修复命令，在 fail2ban 面板上为解封命令）或 JSON 复制到你电脑的剪贴板（OSC 52，可通过 SSH 使用） |
 | `+` | 将当前一侧放大到全屏 |
 | `L` | 界面语言：英文 / 俄文 |
 | `?`、`q` | 帮助、退出 |
@@ -227,6 +228,30 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 **变化。** 服务把用户名和 UID、特权组成员以及 sudoers 文件的 SHA-256 记录在 `/var/lib/serversecuritygo/audit-baseline.json` 中（权限 600，不含密码和文件内容）。出现新用户、特权组新成员或 sudoers 被修改时，`acct_new`、`acct_priv_groups` 或 `sudo_changed` 会在 24 小时内保持危险，下一次检查不会悄悄清除告警。如果某次运行时文件读取失败，会保留该文件对应的基线部分，之后不会把所有内容都误报为新的。每次结果变化（“原为通过，现为危险”、“已修复”）都会记录到“历史”标签页和日志中。一次性的 `serversecuritygo audit` 没有可比较的对象，因此其中的变化类检查为不适用。
 
+### fail2ban
+
+**fail2ban** 标签页（终端界面中的一个面板、`GET /api/fail2ban`）仅在安装了 fail2ban 时出现：存在 `/etc/fail2ban` 和 `fail2ban-server`（或 dpkg 软件包），或者 `fail2ban-server` 进程正在运行。没有 fail2ban 时既没有标签页，也没有面板或空白占位；API 返回 `{"installed": false}`。
+
+显示最近 `SSG_AUTH_LOG_DAYS` 天（默认 14 天）的以下内容：
+
+- 状态：是否运行、版本、已启用的 jail 及其 `maxretry`、`findtime`、`bantime`（以及 `bantime.increment`）和启用该 jail 的文件；配置按 fail2ban 自己的方式读取：`jail.conf`、`jail.d/*.conf`、`jail.local`、`jail.d/*.local`，支持 `[DEFAULT]` 和 `%(名称)s` 替换；
+- 当前封禁：IP、jail、开始时间、截止时间（或永久）、该地址已被封禁的次数（惯犯），以及现成的 `fail2ban-client set <jail> unbanip <IP>` 命令——应用本身从不执行它；
+- 密码暴力破解强度：按天和按小时统计的尝试次数（`Found` 行）和封禁次数（面板中为图表，终端中为块字符迷你图）、24 小时和整个周期的合计、峰值小时；
+- 最活跃的地址，以及包含多个攻击地址的 /24 子网（IPv6 为 /64）；仍在尝试的 `ignoreip` 地址会被标记；
+- 最近事件：封禁、解封、恢复和延长的封禁、fail2ban 与 jail 的重启。
+
+数据只来自文件：`/var/log/fail2ban.log`（路径取自 `fail2ban.conf`/`fail2ban.local` 中的 `logtarget`）及其轮转副本，包括 `.gz`。不调用 `fail2ban-client`。轮转文件只解析一次，当前文件从上次停下的位置继续读取，因此每次扫描只需几次 `stat`。当前封禁根据日志重建（有封禁而之后没有解封，并考虑 `bantime`；fail2ban 重启会解除所有封禁，直到出现 `Restore Ban` 行）；精确列表请用 `fail2ban-client status sshd`。IP 地址属于个人数据：只保存在服务内存中，不会写入 `state.json` 或事件历史。解析量有上限（每个文件 256 MB，所有文件合计 200,000 个不同地址），因此遭受大量暴力破解的服务器日志也不会耗尽服务内存。
+
+公网服务器上的暴力破解从不停止，因此这些统计仅供参考，不影响进程评分。系统检查：
+
+| ID | 级别 | 触发条件 |
+|---|---|---|
+| `fail2ban_not_running` | MEDIUM | 已安装 fail2ban，但 `fail2ban-server` 未运行：防暴力破解保护已关闭 |
+| `fail2ban_sshd_disabled` | LOW | SSH 可从互联网访问，但没有已启用的 jail 保护它 |
+| `fail2ban_log_unavailable` | INFO | 日志写入 journald/syslog（`logtarget = SYSTEMD-JOURNAL`）或文件无法读取 |
+
+可以用针对 `sshd` 进程的 allowlist 规则屏蔽 `fail2ban_sshd_disabled`。
+
 ## 风险评分方式
 
 每条规则产生一个**指标**：一组说明读取了什么、从哪里读取的事实，例如 `/proc/3101/exe → /dev/shm/.x/kworkerds`。单个指标本身并不断定是否恶意。它有权重、类别，如果它单独出现时很少是合法的，还会带有“强”标记。
@@ -265,7 +290,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | 最近修改过的 `authorized_keys` | SSH 密钥最近被修改 | LOW（系统） |
 
 可用于白名单的完整规则 ID 列表：
-`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`，以及上面针对危险公网端口的 `exposed_*` ID。
+`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`。
 
 ## 检测局限
 
@@ -313,6 +338,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | `SSG_LANG` | —（自动） | 默认语言：`ru` 或 `en` |
 | `SSG_AUDIT_ENABLED` | `true` | 在服务中执行安全设置审计 |
 | `SSG_AUDIT_INTERVAL` | `1h` | 审计的重复周期（最少 `1m`） |
+| `SSG_AUTH_LOG_DAYS` | `14` | 分析多少天的 fail2ban 日志（1–365） |
 
 修改 `.env` 后，执行 `systemctl restart serversecuritygo`。
 
@@ -504,6 +530,7 @@ internal/
   detect/                 规则、风险评分、解释、白名单、系统检查
   exposure/               开放端口：可达范围、危险服务、ufw、Docker 发布的端口
   audit/                  安全设置审计：sshd_config、账户、sudoers；后台运行
+  fail2ban/               fail2ban：jail 配置、日志解析（含 .gz）、当前封禁、暴力破解统计
   report/                 scan 和 audit 报告：文本、JSON、HTML、Markdown；退出码
   safefile/               安全读取攻击者可能控制的文件（不跟随符号链接、拒绝 FIFO、限制大小）
   redact/                 遮蔽命令行中的密钥
@@ -523,7 +550,7 @@ allowlist.example.json    白名单示例
 .github/workflows/        CI 和发布
 ```
 
-API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/audit`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan` 和 `POST /api/audit/run`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
+API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/audit`、`/api/fail2ban`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan` 和 `POST /api/audit/run`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
 
 ## 安全
 

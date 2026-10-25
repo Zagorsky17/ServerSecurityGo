@@ -312,3 +312,64 @@ func TestScanNoLeaks(t *testing.T) {
 		t.Errorf("куча выросла с %d до %d байт", h0, h)
 	}
 }
+
+// TestDemoFail2ban: fail2ban на демо-данных — запущен, jail sshd и
+// recidive, журнал из двух файлов, текущие баны; дописанная строка
+// учитывается на следующем сканировании; остановка даёт находку.
+func TestDemoFail2ban(t *testing.T) {
+	sc, tree, procRoot := newDemoScanner(t)
+	snap, err := sc.ScanOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := snap.Fail2ban
+	if f == nil || !f.Installed || !f.Running || f.PID != 640 || !f.LogAvailable || len(f.LogFiles) != 2 || f.Version != "1.0.2" {
+		t.Fatalf("отчёт: %+v", f)
+	}
+	names := map[string]bool{}
+	for _, j := range f.Jails {
+		names[j.Name] = j.Source != ""
+	}
+	if !names["sshd"] || !names["recidive"] || names["nginx-http-auth"] {
+		t.Errorf("включённые jail: %v", names)
+	}
+	if f.Found < 500 || f.BanCount < 50 || len(f.Bans) == 0 || len(f.Top) == 0 || f.Top[0].Addr != "203.0.113.7" || len(f.TopNets) == 0 {
+		t.Errorf("статистика: found=%d bans=%d current=%d top=%v nets=%v", f.Found, f.BanCount, len(f.Bans), f.Top, f.TopNets)
+	}
+	ignored := false
+	for _, s := range f.Top {
+		ignored = ignored || (s.Addr == "192.0.2.200" && s.Ignored)
+	}
+	if !ignored {
+		t.Error("адрес из ignoreip не помечен в топе")
+	}
+	for _, sf := range snap.System {
+		if strings.HasPrefix(sf.ID, "fail2ban_") {
+			t.Errorf("находка при исправном fail2ban: %+v", sf)
+		}
+	}
+	// Демо-аниматор дописывает попытку перед каждым сканированием.
+	sc.opt.BeforeScan = func() {
+		fakeproc.NewAnimator(tree, procRoot).Step()
+	}
+	snap2, _ := sc.ScanOnce()
+	if snap2.Fail2ban.Found != f.Found+1 {
+		t.Errorf("дописанная попытка не учтена: %d → %d", f.Found, snap2.Fail2ban.Found)
+	}
+	// fail2ban остановлен.
+	sc.opt.BeforeScan = nil
+	if err := tree.Remove(procRoot, 640); err != nil {
+		t.Fatal(err)
+	}
+	snap3, _ := sc.ScanOnce()
+	if snap3.Fail2ban.Running || len(snap3.Fail2ban.Bans) != 0 {
+		t.Errorf("после остановки: running=%v bans=%d", snap3.Fail2ban.Running, len(snap3.Fail2ban.Bans))
+	}
+	found := false
+	for _, sf := range snap3.System {
+		found = found || (sf.ID == "fail2ban_not_running" && sf.Risk == model.RiskMedium)
+	}
+	if !found {
+		t.Error("нет находки fail2ban_not_running")
+	}
+}

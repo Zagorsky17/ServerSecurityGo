@@ -181,7 +181,7 @@ func init() {
 
 		"tui.help.title":      {"Клавиши · Esc — закрыть", "Keys · Esc — close"},
 		"tui.help.nav":        {"Навигация", "Navigation"},
-		"tui.help.panels":     {"перейти к панели (сводка, подозрительные, процессы, сеть, порты, история, система)", "go to a panel (summary, suspicious, processes, network, ports, history, system)"},
+		"tui.help.panels":     {"перейти к панели (сводка, подозрительные, процессы, сеть, порты, настройки, fail2ban — если установлен, история, система)", "go to a panel (summary, suspicious, processes, network, ports, settings, fail2ban — if installed, history, system)"},
 		"tui.help.next_panel": {"следующая / предыдущая панель", "next / previous panel"},
 		"tui.help.select":     {"выбор строки (в подробностях — прокрутка)", "select a row (scroll in details)"},
 		"tui.help.page":       {"страница вверх / вниз", "page up / down"},

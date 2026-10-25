@@ -218,5 +218,16 @@ func init() {
 		"rule.fw_docker_bypass.title": {"Порт контейнера открыт в обход ufw", "Container port is open despite ufw"},
 		"rule.fw_docker_bypass.rec": {"Опубликуйте порт только на loopback: в docker-compose.yml «ports: \"127.0.0.1:{0}:{1}\"» (или docker run -p 127.0.0.1:{0}:{1}), затем docker compose up -d. Если порт должен быть открыт — закройте лишние адреса правилом в цепочке DOCKER-USER; проверьте: iptables -L DOCKER-USER -n.",
 			"Publish the port on loopback only: in docker-compose.yml “ports: \"127.0.0.1:{0}:{1}\"” (or docker run -p 127.0.0.1:{0}:{1}), then docker compose up -d. If the port must stay open, restrict addresses with a rule in the DOCKER-USER chain; check with: iptables -L DOCKER-USER -n."},
+
+		// fail2ban (internal/fail2ban).
+		"rule.fail2ban_not_running.title": {"fail2ban установлен, но не запущен", "fail2ban is installed but not running"},
+		"rule.fail2ban_not_running.rec": {"Защита от перебора паролей выключена. Проверьте причину: systemctl status fail2ban и journalctl -u fail2ban -n 50 (частая причина — jail sshd не нашёл журнал: на Debian 12 без rsyslog нужно «backend = systemd» в [sshd]). Затем: systemctl enable --now fail2ban.",
+			"Password brute-force protection is off. Find the reason: systemctl status fail2ban and journalctl -u fail2ban -n 50 (a common cause is the sshd jail not finding its log: on Debian 12 without rsyslog set “backend = systemd” in [sshd]). Then: systemctl enable --now fail2ban."},
+		"rule.fail2ban_sshd_disabled.title": {"SSH открыт в интернет, а jail fail2ban для SSH не включён", "SSH is open to the internet, but no fail2ban jail protects it"},
+		"rule.fail2ban_sshd_disabled.rec": {"Включите jail: в /etc/fail2ban/jail.local добавьте «[sshd]», «enabled = true» (на Debian 12 без rsyslog ещё «backend = systemd»), затем systemctl reload fail2ban и проверьте: fail2ban-client status sshd. Надёжнее всего — отключить вход по паролю (PasswordAuthentication no).",
+			"Enable the jail: add “[sshd]” and “enabled = true” to /etc/fail2ban/jail.local (on Debian 12 without rsyslog also “backend = systemd”), then systemctl reload fail2ban and check: fail2ban-client status sshd. The most reliable fix is to disable password login (PasswordAuthentication no)."},
+		"rule.fail2ban_log_unavailable.title": {"Журнал fail2ban недоступен: баны и попытки не видны", "fail2ban log is unavailable: bans and attempts are not visible"},
+		"rule.fail2ban_log_unavailable.rec": {"Статистика строится по файлу журнала. Посмотреть баны вручную: fail2ban-client status sshd. Чтобы раздел заработал, задайте в /etc/fail2ban/fail2ban.local «[Definition]» и «logtarget = /var/log/fail2ban.log», затем systemctl restart fail2ban.",
+			"Statistics are built from the log file. To see bans manually: fail2ban-client status sshd. To make this section work, set “[Definition]” and “logtarget = /var/log/fail2ban.log” in /etc/fail2ban/fail2ban.local, then systemctl restart fail2ban."},
 	})
 }

@@ -186,7 +186,7 @@ func cmdServe(args []string) error {
 	}
 	pfs := procfs.New(cfg.ProcRoot, cfg.HostRoot)
 	pfs.MaxFiles = cfg.MaxFiles
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log})
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log, LogDays: cfg.LogDays})
 
 	// Без пароля панель только для LocalUIDs: владельца подключения служба
 	// определяет по /proc/net/tcp (см. web.Options.CheckPeer).
@@ -425,7 +425,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	pfs := procfs.New(cfg.ProcRoot, cfg.HostRoot)
 	pfs.MaxFiles = cfg.MaxFiles
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet})
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet, LogDays: cfg.LogDays})
 	// Аудит без каталога данных: базовая линия только на время сеанса,
 	// файлы службы не трогаются.
 	var ar *audit.Runner
@@ -480,7 +480,7 @@ func runScan(args []string) (int, error) {
 	hist, _ := history.Open(history.Options{CPUThreshold: cfg.CPUThreshold, MemThreshold: cfg.MemThreshold})
 	pfs := procfs.New(cfg.ProcRoot, cfg.HostRoot)
 	pfs.MaxFiles = cfg.MaxFiles
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error")})
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays})
 	snap, err := sc.ScanOnce()
 	if err != nil {
 		return 0, err

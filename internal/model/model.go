@@ -241,6 +241,7 @@ type Snapshot struct {
 	Sockets   []Socket            `json:"sockets"`
 	System    []SystemFinding     `json:"system"`
 	Exposure  *ExposureReport     `json:"exposure,omitempty"`
+	Fail2ban  *Fail2banReport     `json:"fail2ban,omitempty"`
 	Warnings  []i18n.Msg          `json:"warnings"`
 	Stats     Stats               `json:"stats"`
 	ByKey     map[string]*Process `json:"-"`
@@ -337,6 +338,103 @@ type ExposureReport struct {
 	Firewall FirewallInfo  `json:"firewall"`
 	Bindings []PortBinding `json:"bindings"`
 	Warnings []i18n.Msg    `json:"warnings,omitempty"`
+}
+
+// Fail2banJail — включённый jail fail2ban: параметры из конфигурации и
+// счётчики из журнала за окно отчёта.
+type Fail2banJail struct {
+	Name   string `json:"name"`
+	Filter string `json:"filter,omitempty"`
+	Port   string `json:"port,omitempty"`
+	// MaxRetry, FindTime, BanTime — как в jail.local; время в секундах,
+	// BanTime < 0 — бан навсегда.
+	MaxRetry  int   `json:"maxRetry"`
+	FindTime  int64 `json:"findTime"`
+	BanTime   int64 `json:"banTime"`
+	Increment bool  `json:"banTimeIncrement,omitempty"`
+	// IgnoreIP — адреса и сети, которые jail никогда не банит.
+	IgnoreIP []string `json:"ignoreIp,omitempty"`
+	// Source — файл, в котором jail включён (enabled = true).
+	Source string `json:"source,omitempty"`
+	SSH    bool   `json:"ssh,omitempty"` // jail защищает SSH
+	Found  int    `json:"found"`         // попыток за окно
+	Bans   int    `json:"bans"`          // банов за окно
+	Banned int    `json:"banned"`        // забанено сейчас
+}
+
+// Fail2banBan — текущая блокировка, восстановленная по журналу.
+type Fail2banBan struct {
+	IP    string    `json:"ip"`
+	Jail  string    `json:"jail"`
+	Since time.Time `json:"since"`
+	// Until — когда бан истечёт; нулевое при Permanent.
+	Until     time.Time `json:"until,omitzero"`
+	Permanent bool      `json:"permanent,omitempty"`
+	// Restored — бан восстановлен после перезапуска fail2ban (Restore Ban):
+	// Since — время восстановления, а не первого бана.
+	Restored bool `json:"restored,omitempty"`
+	// Count — сколько раз этот IP банили за окно (рецидивисты).
+	Count int `json:"count"`
+	// UnbanCommand — команда разблокировки. Только текст: приложение её
+	// не выполняет.
+	UnbanCommand string `json:"unbanCommand,omitempty"`
+}
+
+// Fail2banBucket — попытки и баны за интервал (час или сутки).
+type Fail2banBucket struct {
+	Time  time.Time `json:"time"`
+	Found int       `json:"found"`
+	Bans  int       `json:"bans"`
+}
+
+// Fail2banSource — IP или подсеть с числом попыток за окно.
+type Fail2banSource struct {
+	Addr  string   `json:"addr"` // IP или сеть /24 (/64 для IPv6)
+	Found int      `json:"found"`
+	Bans  int      `json:"bans"`
+	IPs   int      `json:"ips,omitempty"` // для подсети — сколько разных IP
+	Jails []string `json:"jails,omitempty"`
+	// Ignored — адрес из ignoreip: fail2ban видит перебор, но не банит.
+	Ignored bool `json:"ignored,omitempty"`
+}
+
+// Fail2banEvent — событие журнала fail2ban (бан, разбан, перезапуск).
+type Fail2banEvent struct {
+	Time   time.Time `json:"time"`
+	Action string    `json:"action"` // ban, unban, restore, increase, start, stop
+	Jail   string    `json:"jail,omitempty"`
+	IP     string    `json:"ip,omitempty"`
+}
+
+// Fail2banReport — состояние fail2ban и интенсивность перебора паролей.
+// Installed = false — fail2ban на сервере нет, остальные поля пусты, и
+// интерфейсы раздел не показывают.
+type Fail2banReport struct {
+	Installed bool   `json:"installed"`
+	Running   bool   `json:"running"`
+	PID       int    `json:"pid,omitempty"`
+	Version   string `json:"version,omitempty"` // из журнала: «Starting Fail2ban v1.0.2»
+	// LogTarget — logtarget из fail2ban.conf (путь, SYSTEMD-JOURNAL, SYSLOG...).
+	LogTarget string `json:"logTarget,omitempty"`
+	// LogFiles — прочитанные файлы журнала (с ротированными).
+	LogFiles []string `json:"logFiles,omitempty"`
+	// LogAvailable — журнал прочитан: статистика и баны достоверны.
+	LogAvailable bool             `json:"logAvailable"`
+	Days         int              `json:"days"`
+	From         time.Time        `json:"from"`
+	Jails        []Fail2banJail   `json:"jails"`
+	Bans         []Fail2banBan    `json:"bans"`
+	Hourly       []Fail2banBucket `json:"hourly"`
+	Daily        []Fail2banBucket `json:"daily"`
+	Top          []Fail2banSource `json:"top"`
+	TopNets      []Fail2banSource `json:"topNets"`
+	Recent       []Fail2banEvent  `json:"recent"`
+	Found        int              `json:"found"`    // попыток за окно
+	BanCount     int              `json:"banCount"` // банов за окно
+	Found24h     int              `json:"found24h"`
+	Bans24h      int              `json:"bans24h"`
+	Peak         Fail2banBucket   `json:"peak"` // час с наибольшим числом попыток
+	Warnings     []i18n.Msg       `json:"warnings,omitempty"`
 }
 
 // Статусы проверки аудита конфигурации.

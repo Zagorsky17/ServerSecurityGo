@@ -124,6 +124,19 @@ ul.plain { margin: 0; padding-left: 18px; }
 .chain a, a.plink { color: var(--accent); cursor: pointer; text-decoration: none; }
 .cmd-head { display: flex; justify-content: space-between; align-items: center; }
 
+/* Графики fail2ban: одна серия на график, общая ось времени. Цвет —
+   из токенов темы; подсказка — один элемент, позиция задаётся из JS. */
+.chart { width: 100%; height: 84px; }
+.chart svg { display: block; width: 100%; height: 100%; }
+.chart .bar { fill: var(--accent); }
+.chart .hit { fill: transparent; cursor: default; outline: none; }
+.chart g:hover .bar, .chart g:focus-within .bar { fill: var(--text); }
+.chart .base { stroke: var(--border); stroke-width: 1; }
+.chart-axis { display: flex; justify-content: space-between; font-size: 12px; margin: 2px 0 10px; }
+.chart-tip { position: fixed; z-index: 25; pointer-events: none; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 12.5px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.chart-tip b { font-size: 14px; }
+.warn-list li { color: var(--medium); }
+
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 6px; z-index: 30; }
 
 .login-page { display: flex; min-height: 100vh; align-items: center; justify-content: center; padding: 16px; }

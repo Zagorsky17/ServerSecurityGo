@@ -195,6 +195,19 @@ type Status struct {
 	Warnings       []i18n.Msg     `json:"warnings"`
 	SystemFindings int            `json:"systemFindings"`
 	Audit          AuditBrief     `json:"audit"`
+	// Fail2ban — есть, только если fail2ban установлен: по этому полю
+	// интерфейсы показывают или скрывают раздел.
+	Fail2ban *Fail2banBrief `json:"fail2ban,omitempty"`
+}
+
+// Fail2banBrief — счётчики fail2ban для заголовка интерфейса.
+type Fail2banBrief struct {
+	Installed    bool `json:"installed"`
+	Running      bool `json:"running"`
+	LogAvailable bool `json:"logAvailable"`
+	Banned       int  `json:"banned"`
+	Found24h     int  `json:"found24h"`
+	Bans24h      int  `json:"bans24h"`
 }
 
 // BuildStatus заполняет данные снимка в Status (snap может быть nil).
@@ -214,7 +227,39 @@ func BuildStatus(st Status, snap *model.Snapshot) Status {
 			st.SystemFindings++
 		}
 	}
+	if f := snap.Fail2ban; f != nil && f.Installed {
+		st.Fail2ban = &Fail2banBrief{Installed: true, Running: f.Running, LogAvailable: f.LogAvailable, Banned: len(f.Bans), Found24h: f.Found24h, Bans24h: f.Bans24h}
+	}
 	return st
+}
+
+// Fail2ban возвращает отчёт fail2ban снимка: при установленном fail2ban
+// — с пустыми списками вместо nil, иначе только {installed: false}.
+func Fail2ban(snap *model.Snapshot) *model.Fail2banReport {
+	if snap == nil || snap.Fail2ban == nil || !snap.Fail2ban.Installed {
+		return &model.Fail2banReport{}
+	}
+	r := *snap.Fail2ban
+	for _, s := range []*[]model.Fail2banBucket{&r.Hourly, &r.Daily} {
+		if *s == nil {
+			*s = []model.Fail2banBucket{}
+		}
+	}
+	for _, s := range []*[]model.Fail2banSource{&r.Top, &r.TopNets} {
+		if *s == nil {
+			*s = []model.Fail2banSource{}
+		}
+	}
+	if r.Jails == nil {
+		r.Jails = []model.Fail2banJail{}
+	}
+	if r.Bans == nil {
+		r.Bans = []model.Fail2banBan{}
+	}
+	if r.Recent == nil {
+		r.Recent = []model.Fail2banEvent{}
+	}
+	return &r
 }
 
 // SortedSystem возвращает системные находки по убыванию риска.

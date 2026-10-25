@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,7 +32,11 @@ func demoScanner(t *testing.T) *scanner.Scanner {
 // demoEnv — сканер и аудит над одним демо-деревом.
 func demoEnv(t *testing.T) (*scanner.Scanner, *audit.Runner) {
 	t.Helper()
-	tree := fakeproc.Demo(time.Now())
+	return demoEnvTree(t, fakeproc.Demo(time.Now()))
+}
+
+func demoEnvTree(t *testing.T, tree *fakeproc.Tree) (*scanner.Scanner, *audit.Runner) {
+	t.Helper()
 	procRoot, hostRoot, err := tree.Write(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +85,7 @@ func r(c rune) Key { return Key{Kind: KeyRune, Rune: c} }
 func TestRenderPanels(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
 	s := screen(a)
-	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] Настройки", "[7] История", "[8] Система",
+	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] Настройки", "[7] fail2ban", "[8] История", "[9] Система",
 		"demo-host", "CRIT 4", "kworkerds", "CRITICAL", "Оценка риска", "q выход"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q\n%s", want, s)
@@ -175,11 +180,11 @@ func TestPanelsDetails(t *testing.T) {
 	if s := screen(a); !strings.Contains(s, "Сокет") || !strings.Contains(s, "LISTEN") {
 		t.Errorf("панель сети:\n%s", s)
 	}
-	press(a, r('8'))
+	press(a, r('9'))
 	if s := screen(a); !strings.Contains(s, "ld.so.preload") {
 		t.Errorf("панель системы:\n%s", s)
 	}
-	press(a, r('7'))
+	press(a, r('8'))
 	if s := screen(a); !strings.Contains(s, "Начало") && !strings.Contains(s, "Признак") && !strings.Contains(s, "Настройки безопасности: «") {
 		t.Errorf("панель истории:\n%s", s)
 	}
@@ -299,7 +304,7 @@ func TestRemoteSourceOldService(t *testing.T) {
 	srv := web.New(web.Options{Scanner: sc, Version: "old", ListenAddr: "127.0.0.1:8090", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	local := srv.LocalHandler()
 	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/exposure" || r.URL.Path == "/api/audit" {
+		if r.URL.Path == "/api/exposure" || r.URL.Path == "/api/audit" || r.URL.Path == "/api/fail2ban" {
 			http.NotFound(w, r)
 			return
 		}
@@ -324,7 +329,7 @@ func TestRemoteSourceOldService(t *testing.T) {
 	}
 	t.Cleanup(rs.Close)
 	d, err := rs.Fetch()
-	if err != nil || d.Exposure != nil || d.Audit != nil || len(d.Procs) == 0 {
+	if err != nil || d.Exposure != nil || d.Audit != nil || d.Fail2ban != nil || len(d.Procs) == 0 {
 		t.Fatalf("Fetch у старой службы: %v %+v %+v", err, d.Exposure, d.Audit)
 	}
 	a := New(Options{Source: rs, Out: io.Discard, Lang: i18n.RU})
@@ -373,6 +378,9 @@ func TestRemoteSource(t *testing.T) {
 	}
 	if d.Exposure == nil || len(d.Exposure.Entries) == 0 || d.Exposure.Firewall.UFW != "active" {
 		t.Errorf("открытые порты: %+v", d.Exposure)
+	}
+	if d.Fail2ban == nil || !d.Fail2ban.Running || len(d.Fail2ban.Bans) == 0 {
+		t.Errorf("fail2ban: %+v", d.Fail2ban)
 	}
 	// Аудит в этой службе выключен: панель это показывает, запуск — ошибка.
 	if d.Audit == nil || d.Audit.Enabled {
@@ -538,7 +546,7 @@ func TestAddrInTitle(t *testing.T) {
 // TestAddrInHistory: адрес в тексте события в панели «История».
 func TestAddrInHistory(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
-	press(a, r('7'))
+	press(a, r('8'))
 	a.events[0].Details = i18n.T("hist.listen", "tcp 203.0.113.5:8443")
 	a.render()
 	cs := cellsAt(a, "203.0.113.5:8443")
@@ -624,11 +632,11 @@ func TestLayoutHeights(t *testing.T) {
 	a, _ := newTestApp(t, 100, 24)
 	for _, exp := range []panelID{pSusp, pPorts, pSys} {
 		a.focusPanel(exp)
-		for h := minHeight; h <= 80; h++ {
+		for h := a.minHeight(); h <= 80; h++ {
 			a.w, a.h = 100, h
 			a.render()
 			y := 0
-			for p := pStatus; p < nPanels; p++ {
+			for _, p := range a.visible() {
 				r := a.rects[p]
 				if r.h == 0 && p == pStatus {
 					continue
@@ -702,5 +710,88 @@ func TestAuditPanel(t *testing.T) {
 	press(a, r('r'))
 	if a.msgErr || !a.data.Audit.Time.After(before) {
 		t.Errorf("повторная проверка: %q, время %v → %v", a.msg, before, a.data.Audit.Time)
+	}
+}
+
+// TestFail2banPanel: панель fail2ban — текущие баны, подробности с
+// мини-графиками и командой разбана, y копирует команду.
+func TestFail2banPanel(t *testing.T) {
+	a, out := newTestApp(t, 160, 50)
+	press(a, r('7'))
+	if a.focus != pF2B || len(a.bans) == 0 {
+		t.Fatalf("фокус %d, банов %d", a.focus, len(a.bans))
+	}
+	s := screen(a)
+	for _, want := range []string{"[7] fail2ban (", "fail2ban запущен", "Попытки по часам", "Включённые jail", "recidive", "Самые активные адреса",
+		"fail2ban-client set", "203.0.113.7", "1-9/Tab"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("на экране нет %q\n%s", want, s)
+		}
+	}
+	out.Reset()
+	press(a, r('y'))
+	b, _ := a.selBan()
+	if want := base64.StdEncoding.EncodeToString([]byte(b.UnbanCommand)); b.UnbanCommand == "" || !strings.Contains(out.String(), want) {
+		t.Errorf("y не скопировал команду разбана %q", b.UnbanCommand)
+	}
+	// Фильтр по IP.
+	press(a, r('/'))
+	for _, c := range b.IP {
+		press(a, r(c))
+	}
+	press(a, Key{Kind: KeyEnter})
+	if len(a.bans) == 0 || a.bans[0].IP != b.IP {
+		t.Errorf("фильтр по IP: %+v", a.bans)
+	}
+	// Сводка упоминает fail2ban.
+	press(a, r('1'))
+	if s := screen(a); !strings.Contains(s, "забанено") {
+		t.Errorf("в обзоре нет fail2ban:\n%s", s)
+	}
+}
+
+// TestNoFail2banPanel: без fail2ban панели нет, номера сдвигаются,
+// клавиша 9 ничего не делает, окно 80×16 по-прежнему помещается.
+func TestNoFail2banPanel(t *testing.T) {
+	tree := fakeproc.Demo(time.Now())
+	for k := range tree.HostFiles {
+		if strings.Contains(k, "fail2ban") {
+			delete(tree.HostFiles, k)
+		}
+	}
+	procs := tree.Procs[:0]
+	for _, p := range tree.Procs {
+		if p.Comm != "fail2ban-server" {
+			procs = append(procs, p)
+		}
+	}
+	tree.Procs = procs
+	sc, ar := demoEnvTree(t, tree)
+	src, err := NewLocalSource(sc, ar, "test", true, i18n.T("tui.source_demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(src.Close)
+	a := New(Options{Source: src, Out: &bytes.Buffer{}, Lang: i18n.RU})
+	a.w, a.h = 160, 45
+	a.load()
+	s := screen(a)
+	if strings.Contains(s, "fail2ban") || !strings.Contains(s, "[7] История") || !strings.Contains(s, "[8] Система") || !strings.Contains(s, "1-8/Tab") {
+		t.Errorf("панели без fail2ban:\n%s", s)
+	}
+	press(a, r('8'))
+	if a.focus != pSys {
+		t.Errorf("8 → %d, нужна «Система»", a.focus)
+	}
+	press(a, r('9'))
+	if a.focus != pSys {
+		t.Errorf("9 сменила панель: %d", a.focus)
+	}
+	press(a, Key{Kind: KeyTab})
+	if a.focus != pStatus {
+		t.Errorf("Tab после последней панели: %d", a.focus)
+	}
+	if a.minHeight() != 16 {
+		t.Errorf("минимальная высота без fail2ban: %d", a.minHeight())
 	}
 }
