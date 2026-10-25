@@ -315,7 +315,7 @@ func (c *AuditCounts) add(status string) {
 	}
 }
 
-// AuditView — вкладка «Настройки безопасности»: результат последнего
+// AuditView — вкладка «Результаты аудита»: результат последнего
 // аудита и сводка «пройдено N из M» (советы, n/a и unknown не считаются).
 type AuditView struct {
 	Enabled    bool                   `json:"enabled"`

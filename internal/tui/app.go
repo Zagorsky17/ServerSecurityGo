@@ -617,7 +617,7 @@ func (a *App) runeKey(r rune, list panelID) bool {
 		}
 	case 'r':
 		if a.focus == pAudit {
-			// На панели настроек r — «Проверить сейчас».
+			// На панели результатов аудита r — «Проверить сейчас».
 			if err := a.src.RunAudit(); err != nil {
 				a.flash(a.tr("tui.error", err.Error()), true)
 			} else {
@@ -772,7 +772,7 @@ func (a *App) copyCmdline() {
 		return
 	}
 	if a.focus == pAudit {
-		// На панели настроек y копирует команду исправления.
+		// На панели результатов аудита y копирует команду исправления.
 		if c, ok := a.selCheck(); ok && c.FixCommand != "" {
 			a.osc52(c.FixCommand)
 			a.flash(a.tr("tui.flash.fix_copied"), false)
