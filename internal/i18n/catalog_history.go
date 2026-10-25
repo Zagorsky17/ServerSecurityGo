@@ -13,7 +13,7 @@ func init() {
 		"event.finding":   {"Новый признак", "New indicator"},
 		"event.listen":    {"Новый порт", "New port"},
 		"event.system":    {"Система", "System"},
-		"event.audit":     {"Настройки безопасности", "Security settings"},
+		"event.audit":     {"Аудит", "Audit"},
 
 		"hist.started":        {"Новый процесс: {0}", "New process: {0}"},
 		"hist.started_parent": {"Новый процесс: {0} (родитель PID {1})", "New process: {0} (parent PID {1})"},
@@ -23,8 +23,8 @@ func init() {
 		"hist.listen":         {"Начал слушать {0}", "Started listening on {0}"},
 		"hist.exited":         {"Процесс завершился (наблюдался с {0})", "Process exited (observed since {0})"},
 		"hist.system":         {"{0}: {1}", "{0}: {1}"},
-		"hist.audit_bad":      {"Настройки безопасности: «{0}» — {1}", "Security settings: “{0}” — {1}"},
-		"hist.audit_fixed":    {"Настройки безопасности: «{0}» — исправлено", "Security settings: “{0}” — fixed"},
+		"hist.audit_bad":      {"Аудит: «{0}» — {1}", "Audit: “{0}” — {1}"},
+		"hist.audit_fixed":    {"Аудит: «{0}» — исправлено", "Audit: “{0}” — fixed"},
 		"hist.baseline":       {"Первое сканирование: зафиксировано процессов — {0}. Далее отслеживаются изменения.", "First scan: {0} processes recorded. Changes are tracked from now on."},
 
 		"err.data_dir": {"каталог данных: {0}", "data directory: {0}"},

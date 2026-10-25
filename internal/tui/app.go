@@ -640,7 +640,7 @@ func (a *App) runeKey(r rune, list panelID) bool {
 		}
 	case 'r':
 		if a.focus == pAudit {
-			// На панели настроек r — «Проверить сейчас».
+			// На панели результатов аудита r — «Проверить сейчас».
 			if err := a.src.RunAudit(); err != nil {
 				a.flash(a.tr("tui.error", err.Error()), true)
 			} else {

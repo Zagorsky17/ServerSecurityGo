@@ -52,7 +52,7 @@ Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
 		"cli.flag.refresh":         {"период обновления экрана", "screen refresh interval"},
 		"cli.flag.format":          {"формат отчёта: text, json, html или md", "report format: text, json, html or md"},
 		"cli.flag.all_checks":      {"показывать и пройденные проверки", "show passed checks too"},
-		"cli.audit.header":         {"Настройки безопасности: пройдено {0} из {1} · опасно {2} · требует внимания {3} · советов {4}", "Security settings: {0} of {1} passed · fail {2} · warning {3} · tips {4}"},
+		"cli.audit.header":         {"Результаты аудита: пройдено {0} из {1} · опасно {2} · требует внимания {3} · советов {4}", "Audit results: {0} of {1} passed · fail {2} · warning {3} · tips {4}"},
 		"cli.audit.footer":         {"Изменения (новые пользователи, правка sudoers) отслеживает служба. Команды исправления только предлагаются — выполните их сами, проверив вход по ключу в отдельной сессии.", "The service tracks changes (new users, sudoers edits). Fix commands are only suggestions — run them yourself after checking key login in a separate session."},
 		"cli.flag.min_risk":        {"минимальный уровень для вывода: INFO, LOW, MEDIUM, HIGH, CRITICAL", "minimum level to show: INFO, LOW, MEDIUM, HIGH, CRITICAL"},
 		"cli.flag.sample":          {"сделать два замера с этим интервалом для точного CPU% (например, 2s)", "take two samples with this interval for accurate CPU% (e.g. 2s)"},

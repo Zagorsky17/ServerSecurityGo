@@ -5,7 +5,7 @@ package i18n
 func init() {
 	add(map[string]entry{
 		"report.title_scan":       {"Проверка процессов: {0}", "Process check: {0}"},
-		"report.title_audit":      {"Настройки безопасности: {0}", "Security settings: {0}"},
+		"report.title_audit":      {"Результаты аудита: {0}", "Audit results: {0}"},
 		"report.generated":        {"Сформирован {0} · {1} · ядро {2} · ServerSecurityGo {3}", "Generated {0} · {1} · kernel {2} · ServerSecurityGo {3}"},
 		"report.generated_audit":  {"Сформирован {0} · ServerSecurityGo {1}", "Generated {0} · ServerSecurityGo {1}"},
 		"report.scan_summary":     {"процессов {0}: CRITICAL {1}, HIGH {2}, MEDIUM {3}, LOW {4} · системных находок {5} · публичных портов {6}, опасных {7}", "{0} processes: CRITICAL {1}, HIGH {2}, MEDIUM {3}, LOW {4} · {5} system findings · {6} public ports, {7} dangerous"},

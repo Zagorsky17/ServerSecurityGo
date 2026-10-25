@@ -85,7 +85,7 @@ func r(c rune) Key { return Key{Kind: KeyRune, Rune: c} }
 func TestRenderPanels(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
 	s := screen(a)
-	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] Настройки", "[7] fail2ban", "[8] История", "[9] Система",
+	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] Результаты аудита", "[7] fail2ban", "[8] История", "[9] Система",
 		"demo-host", "CRIT 4", "kworkerds", "CRITICAL", "Оценка риска", "q выход"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q\n%s", want, s)
@@ -185,7 +185,7 @@ func TestPanelsDetails(t *testing.T) {
 		t.Errorf("панель системы:\n%s", s)
 	}
 	press(a, r('8'))
-	if s := screen(a); !strings.Contains(s, "Начало") && !strings.Contains(s, "Признак") && !strings.Contains(s, "Настройки безопасности: «") {
+	if s := screen(a); !strings.Contains(s, "Начало") && !strings.Contains(s, "Признак") && !strings.Contains(s, "Аудит: «") {
 		t.Errorf("панель истории:\n%s", s)
 	}
 	// Порты: самый опасный — MongoDB, опубликованный Docker в обход ufw.
@@ -663,13 +663,13 @@ func TestLayoutHeights(t *testing.T) {
 	}
 }
 
-// TestAuditPanel: панель «Настройки» показывает итоги, r запускает
+// TestAuditPanel: панель «Результаты аудита» показывает итоги, r запускает
 // проверку заново, y копирует команду исправления.
 func TestAuditPanel(t *testing.T) {
 	a, out := newTestApp(t, 150, 40)
 	press(a, r('6'))
 	s := screen(a)
-	for _, want := range []string{"[6] Настройки", "Пройдено", "UID 0 только у root", "FAIL", "/etc/passwd:"} {
+	for _, want := range []string{"[6] Результаты аудита", "Пройдено", "UID 0 только у root", "FAIL", "/etc/passwd:"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("нет %q:\n%s", want, s)
 		}
@@ -704,7 +704,7 @@ func TestAuditPanel(t *testing.T) {
 	if !strings.Contains(out.String(), "\x1b]52;c;") || a.msgErr {
 		t.Errorf("копирование команды: %q %q", out.String(), a.msg)
 	}
-	// r на панели настроек — повторная проверка, не пересканирование.
+	// r на панели результатов аудита — повторная проверка, не пересканирование.
 	before := a.data.Audit.Time
 	time.Sleep(5 * time.Millisecond)
 	press(a, r('r'))

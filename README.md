@@ -22,7 +22,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
 - [Web dashboard (optional)](#web-dashboard-optional)
 - [Features](#features)
   - [Open ports](#open-ports)
-  - [Security settings](#security-settings)
+  - [Audit results](#audit-results)
   - [fail2ban](#fail2ban)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
@@ -108,13 +108,13 @@ serversecuritygo
 ╭ [3] Процессы (47) · риск ────────────────╮│ Командная строка  (y — копировать)                   │
 ╭ [4] Сеть (17) ───────────────────────────╮│   bash -i                                            │
 ╭ [5] Порты (9) ───────────────────────────╮│                                                      │
-╭ [6] Настройки (32) ──────────────────────╮│                                                      │
+╭ [6] Результаты аудита (32) ──────────────╮│                                                      │
 ╭ [7] История (25) ────────────────────────╮│ Цепочка запуска                                      │
 ╭ [8] Система (2) ─────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
 ↑↓ выбор  1-8/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
 ```
 
-On the left are eight panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, security settings, history and system checks. If fail2ban is installed, a ninth panel, fail2ban, appears before history, and the panels after it are renumbered. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
+On the left are eight panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, audit results, history and system checks. If fail2ban is installed, a ninth panel, fail2ban, appears before history, and the panels after it are renumbered. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
 
 | Keys | Action |
 |---|---|
@@ -123,7 +123,7 @@ On the left are eight panels: summary, suspicious processes, all processes (as a
 | `Enter` / `→`, `Esc` / `←` | go to the details and back |
 | `/` | filter the panel by name, PID, path, user, indicator or risk level |
 | `s`, `t`, `K` | sort processes (risk, CPU, memory, PID, name), tree view, kernel threads |
-| `r`, `p` | scan now (on the Settings panel — check settings now), pause auto-refresh |
+| `r`, `p` | scan now (on the Audit results panel — run the audit now), pause auto-refresh |
 | `y` | copy the main value of the selected item to your computer's clipboard (OSC 52, works over SSH): the command line of a process, the fix command of an audit check, the IP of a fail2ban ban, the address:port of an open port, the remote IP of a connection |
 | `c` | copy menu: everything in the details — IPs, commands, paths, facts, recommendations; `Enter` or `1`…`9` copies an item |
 | `Y` | copy the selected item as JSON |
@@ -192,7 +192,7 @@ The **terminal UI** is described [above](#terminal-ui). **Web dashboard** (light
 3. **Tree** — parent and child relationships, collapsible branches, highlighting of matches.
 4. **Network** — sockets with their owning processes, filters by protocol, state and external addresses.
 5. **Open ports** — what the server listens on and where it is reachable from; see [Open ports](#open-ports).
-6. **Security settings** — the SSH, account and sudo audit; see [Security settings](#security-settings).
+6. **Audit results** — the SSH, account and sudo audit; see [Audit results](#audit-results).
 7. **History** — process start and exit, changes of exe, cmdline or user, risk increases and decreases, new indicators, new listening ports, system findings, security setting changes.
 8. **System** — server details, scanning limitations (privileges, container), persistence checks and dangerous open ports.
 9. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
@@ -214,9 +214,9 @@ The level is the danger of the service being reachable, not a sign of compromise
 
 To silence a deliberately open port, add an allowlist rule for the process with the indicator ID (for example, `{"exe": "/usr/lib/postgresql/16/bin/postgres", "rules": ["exposed_database"]}`): the process indicator and the system finding are both shown as suppressed and no longer count. Ports published by Docker without a listening process (`userland-proxy: false`) cannot be suppressed this way.
 
-### Security settings
+### Audit results
 
-Most VPS break-ins come not from zero-day exploits but from password logins, a stray `NOPASSWD: ALL` or a forgotten user. The **Security settings** tab (panel `6` in the terminal UI, `GET /api/audit`, the `serversecuritygo audit` command) checks the configuration — the causes of a break-in rather than its traces.
+Most VPS break-ins come not from zero-day exploits but from password logins, a stray `NOPASSWD: ALL` or a forgotten user. The **Audit results** tab (panel `6` in the terminal UI, `GET /api/audit`, the `serversecuritygo audit` command) checks the configuration — the causes of a break-in rather than its traces.
 
 The service runs the audit right at startup and then every `SSG_AUDIT_INTERVAL` (1 hour by default). The **Check now** button (`r` on the panel in the terminal UI) runs it immediately, for example after you have fixed something; a new check does not start while one is running. The tab shows when the last check ran and how many checks passed: "N of M passed" counts only checks with a pass, fail or warning result (tips, n/a and unknown are not counted).
 

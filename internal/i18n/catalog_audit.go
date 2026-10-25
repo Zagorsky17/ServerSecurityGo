@@ -92,8 +92,8 @@ func init() {
 		"audit.group.accounts": {"Учётные записи", "Accounts"},
 		"audit.group.sudo":     {"sudo", "sudo"},
 
-		// Вкладка «Настройки безопасности» (веб) и панель «Настройки» (терминал).
-		"web.tab.audit":           {"Настройки безопасности", "Security settings"},
+		// Вкладка и панель терминала «Результаты аудита».
+		"web.tab.audit":           {"Результаты аудита", "Audit results"},
 		"web.audit.hint":          {"Проверка настроек SSH, учётных записей и sudo. Это причины взлома, а не его признаки: исправив их, вы закрываете дыру заранее. Приложение ничего не меняет — команды исправления выполняете вы.", "A check of SSH, account and sudo settings. These are causes of break-ins rather than signs of one: fixing them closes the hole in advance. The application changes nothing — you run the fix commands yourself."},
 		"web.audit.run":           {"Проверить сейчас", "Check now"},
 		"web.audit.q":             {"Проверка, файл, пользователь", "Check, file, user"},
@@ -105,18 +105,18 @@ func init() {
 		"web.audit.when":          {"Последняя проверка: {0} ({1} мс) · следующая: {2}", "Last check: {0} ({1} ms) · next: {2}"},
 		"web.audit.score":         {"Пройдено {0} из {1} · опасно {2} · требует внимания {3} · советов {4} · не проверено {5}", "{0} of {1} passed · fail {2} · warning {3} · tips {4} · not checked {5}"},
 		"web.audit.empty":         {"Нет проверок по условиям фильтра", "No checks match the filter"},
-		"web.audit.started":       {"Проверка настроек запущена", "Settings check started"},
+		"web.audit.started":       {"Аудит запущен", "Audit started"},
 		"web.audit.already":       {"Проверка уже выполняется", "A check is already running"},
 		"web.col.status":          {"Результат", "Result"},
 		"web.col.group":           {"Группа", "Group"},
 		"web.col.severity":        {"Важность", "Severity"},
-		"web.stat.audit":          {"настроек требуют внимания", "settings need attention"},
+		"web.stat.audit":          {"результатов аудита требуют внимания", "audit results need attention"},
 		"web.err.audit_disabled":  {"аудит настроек выключен (SSG_AUDIT_ENABLED=false)", "settings audit is disabled (SSG_AUDIT_ENABLED=false)"},
-		"tui.panel.audit":         {"Настройки", "Settings"},
+		"tui.panel.audit":         {"Результаты аудита", "Audit results"},
 		"tui.cols.audit":          {"ИТОГ РИСК ГРУППА    ПРОВЕРКА", "RES  RISK GROUP    CHECK"},
 		"tui.audit.when":          {"Последняя проверка {0} ({1} мс) · r — проверить сейчас · y — копировать команду", "Last check {0} ({1} ms) · r — check now · y — copy the command"},
 		"tui.h.fix":               {"Команда исправления (y — копировать; выполняете вы)", "Fix command (y — copy; you run it)"},
-		"tui.flash.audit_started": {"Проверка настроек запущена", "Settings check started"},
+		"tui.flash.audit_started": {"Аудит запущен", "Audit started"},
 
 		// Журнал службы.
 		"log.audit_done":         {"аудит конфигурации завершён", "configuration audit finished"},
