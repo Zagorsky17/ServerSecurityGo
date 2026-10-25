@@ -38,26 +38,23 @@ const RISKS = ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const riskNum = (r) => RISKS.indexOf(r);
 const riskBadge = (r) => h('span', { class: 'risk risk-' + r }, r);
 
-const EVENT_NAMES = {
-  baseline: 'Начало наблюдения', started: 'Запуск', exited: 'Завершение', changed: 'Изменение',
-  risk_up: 'Рост риска', risk_down: 'Снижение риска', finding: 'Новый признак', listen: 'Новый порт', system: 'Система',
-};
-const CATEGORY_NAMES = {
-  location: 'расположение', integrity: 'целостность файла', masquerade: 'маскировка/имя', chain: 'цепочка запуска',
-  network: 'сеть', content: 'командная строка', behavior: 'поведение', environment: 'окружение',
-  privilege: 'привилегии', persistence: 'закрепление', info: 'справка',
-};
+// Названия типов событий и категорий признаков — из общего каталога
+// (event.<тип>, cat.<категория>), неизвестное значение выводится как есть.
+const EVENT_TYPES = ['baseline', 'started', 'exited', 'changed', 'risk_up', 'risk_down', 'finding', 'listen', 'system'];
+const CATEGORIES = ['location', 'integrity', 'masquerade', 'chain', 'network', 'content', 'behavior', 'environment', 'privilege', 'persistence', 'info'];
+const eventName = (t) => (EVENT_TYPES.includes(t) ? tr('event.' + t) : t);
+const categoryName = (c) => (CATEGORIES.includes(c) ? tr('cat.' + c) : c);
 
 function fmtBytes(n) {
   if (!n) return '0';
-  const u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  const u = tr('web.units').split(',');
   let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return (i === 0 ? n : n.toFixed(1)) + ' ' + u[i];
 }
 function fmtTime(t) {
   if (!t || t.startsWith('0001')) return '—';
-  return new Date(t).toLocaleString('ru-RU');
+  return new Date(t).toLocaleString(dateLocale());
 }
 function fmtAgo(t) {
   if (!t || t.startsWith('0001')) return '—';
@@ -65,10 +62,10 @@ function fmtAgo(t) {
   const d = Math.floor(s / 86400); s -= d * 86400;
   const hh = Math.floor(s / 3600); s -= hh * 3600;
   const m = Math.floor(s / 60);
-  if (d > 0) return `${d} д ${hh} ч`;
-  if (hh > 0) return `${hh} ч ${m} мин`;
-  if (m > 0) return `${m} мин`;
-  return `${Math.floor(s)} с`;
+  if (d > 0) return tr('tui.ago.days', d, hh);
+  if (hh > 0) return tr('tui.ago.hours', hh, m);
+  if (m > 0) return tr('tui.ago.minutes', m);
+  return tr('tui.ago.seconds', Math.floor(s));
 }
 function fmtPct(v) { return (v || 0).toFixed(1); }
 
@@ -92,7 +89,7 @@ async function copyText(text) {
     document.execCommand('copy');
     ta.remove();
   }
-  toast('Скопировано');
+  toast(tr('web.copied'));
 }
 
 // ---------------------------------------------------------------------
@@ -105,7 +102,7 @@ const state = {
 };
 
 async function api(path, opts = {}) {
-  const headers = { 'Accept': 'application/json' };
+  const headers = { 'Accept': 'application/json', 'X-SSG-Lang': I18N.lang };
   if (opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = state.csrf;
   const r = await fetch(path, { credentials: 'same-origin', ...opts, headers });
   if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
@@ -136,7 +133,7 @@ function renderTable(id, cols, rows, onClick, emptyText) {
   }
   const head = h('tr', null, cols.map((c, i) => h('th', {
     class: i === sort.col ? 'sorted' : '',
-    title: 'Сортировать',
+    title: tr('web.sort'),
     onclick: () => {
       state.sort[id] = { col: i, dir: sort.col === i ? -sort.dir : (c.desc ? -1 : 1) };
       renderAll();
@@ -150,18 +147,18 @@ function renderTable(id, cols, rows, onClick, emptyText) {
   table.replaceChildren(h('thead', null, head), body);
   const wrap = table.parentElement;
   wrap.querySelectorAll('.empty,.more').forEach((e) => e.remove());
-  if (rows.length === 0) wrap.append(h('div', { class: 'empty' }, emptyText || 'Нет данных'));
+  if (rows.length === 0) wrap.append(h('div', { class: 'empty' }, emptyText || tr('web.no_data')));
   if (rows.length > limit) {
-    wrap.append(h('div', { class: 'more' }, `Показано ${limit} из ${rows.length}. `,
-      h('button', { class: 'small secondary', type: 'button', onclick: () => { state.showAll[id] = true; renderAll(); } }, 'Показать все')));
+    wrap.append(h('div', { class: 'more' }, tr('web.shown', limit, rows.length) + ' ',
+      h('button', { class: 'small secondary', type: 'button', onclick: () => { state.showAll[id] = true; renderAll(); } }, tr('web.show_all'))));
   }
 }
 
 function findingTags(p) {
   return h('div', null, p.findings.map((f) => h('span', {
     class: 'tag' + (f.strong ? ' strong' : '') + (f.suppressed ? ' supp' : ''),
-    title: `${CATEGORY_NAMES[f.category] || f.category}, вес +${f.weight}${f.suppressed ? ', подавлен allowlist' : ''}`,
-  }, f.title)));
+    title: tr('web.tag_title', categoryName(f.category), f.weight) + (f.suppressed ? ', ' + tr('tui.suppressed') : ''),
+  }, tx(f.title))));
 }
 
 // Значения фильтров процессов.
@@ -181,45 +178,46 @@ function procFilter() {
     if (path && !(p.exe || '').toLowerCase().includes(path)) return false;
     if (risk && riskNum(p.risk) < riskNum(risk)) return false;
     if (q) {
-      const hay = [p.pid, p.name, p.user, p.exe, p.cmdline, p.container, ...p.findings.map((f) => f.title)].join(' ').toLowerCase();
+      const hay = [p.pid, p.name, p.user, p.exe, p.cmdline, p.container, ...p.findings.map((f) => tx(f.title))].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   };
 }
 
-const colPID = { t: 'PID', v: (p) => p.pid, r: (p) => p.pid, c: 'num' };
-const colName = { t: 'Имя', v: (p) => p.name.toLowerCase(), r: (p) => h('span', null, p.name, p.container ? h('span', { class: 'tag', title: 'контейнер' }, '⧉ ' + p.container) : '') };
-const colUser = { t: 'Пользователь', v: (p) => p.user, r: (p) => p.user, c: 'nowrap' };
-const colRisk = { t: 'Риск', v: (p) => riskNum(p.risk) * 1000 + p.score, r: (p) => riskBadge(p.risk), desc: true };
-const colPath = { t: 'Путь', v: (p) => p.exe || '', r: (p) => h('span', { title: p.exe }, p.exe ? p.exe + (p.exeDeleted ? ' (удалён)' : '') : (p.kernel ? '[ядро]' : '—')), c: 'path' };
-const colCmd = { t: 'Командная строка', v: (p) => p.cmdline, r: (p) => h('span', { title: p.cmdline, class: 'mono' }, p.cmdline || '—'), c: 'cmd' };
+// Колонки таблиц процессов. Заголовки — функции: язык можно переключить на лету.
+const colPID = () => ({ t: 'PID', v: (p) => p.pid, r: (p) => p.pid, c: 'num' });
+const colName = () => ({ t: tr('tui.k.name'), v: (p) => p.name.toLowerCase(), r: (p) => h('span', null, p.name, p.container ? h('span', { class: 'tag', title: tr('web.container') }, '⧉ ' + p.container) : '') });
+const colUser = () => ({ t: tr('tui.k.user'), v: (p) => p.user, r: (p) => p.user, c: 'nowrap' });
+const colRisk = () => ({ t: tr('web.col.risk'), v: (p) => riskNum(p.risk) * 1000 + p.score, r: (p) => riskBadge(p.risk), desc: true });
+const colPath = () => ({ t: tr('tui.k.path'), v: (p) => p.exe || '', r: (p) => h('span', { title: p.exe }, p.exe ? p.exe + (p.exeDeleted ? ' ' + tr('tui.deleted') : '') : (p.kernel ? tr('web.kernel_short') : '—')), c: 'path' });
+const colCmd = () => ({ t: tr('web.col.cmdline'), v: (p) => p.cmdline, r: (p) => h('span', { title: p.cmdline, class: 'mono' }, p.cmdline || '—'), c: 'cmd' });
 
 function renderSuspicious() {
   const f = procFilter();
   const rows = state.processes.filter((p) => p.risk !== 'INFO' && f(p));
   if (!state.sort['t-suspicious']) state.sort['t-suspicious'] = { col: 0, dir: -1 };
   renderTable('t-suspicious', [
-    colRisk, colPID, colName, colUser,
-    { t: 'Путь / команда', v: (p) => p.exe, r: (p) => h('div', null, h('div', { class: 'mono', title: p.exe }, p.exe || '—'), h('div', { class: 'mono muted', title: p.cmdline }, p.cmdline.length > 140 ? p.cmdline.slice(0, 140) + '…' : p.cmdline)), c: 'wrap' },
-    { t: 'Признаки', v: (p) => p.findings.length, r: findingTags, c: 'wrap', desc: true },
-    { t: 'Баллы', v: (p) => p.score, r: (p) => p.score, c: 'num', desc: true },
-    { t: 'Впервые', v: (p) => p.firstSeen, r: (p) => fmtTime(p.firstSeen), c: 'nowrap' },
-    { t: 'Последний раз', v: (p) => p.lastSeen, r: (p) => fmtTime(p.lastSeen), c: 'nowrap' },
-    { t: 'Рекомендация', v: () => 0, r: (p) => (p.recommendations && p.recommendations[0]) || '', c: 'wrap' },
-  ], rows, (p) => openCard(p.key), 'Подозрительных процессов не найдено (с учётом фильтров).');
+    colRisk(), colPID(), colName(), colUser(),
+    { t: tr('web.col.path_cmd'), v: (p) => p.exe, r: (p) => h('div', null, h('div', { class: 'mono', title: p.exe }, p.exe || '—'), h('div', { class: 'mono muted', title: p.cmdline }, p.cmdline.length > 140 ? p.cmdline.slice(0, 140) + '…' : p.cmdline)), c: 'wrap' },
+    { t: tr('tui.h.findings'), v: (p) => p.findings.length, r: findingTags, c: 'wrap', desc: true },
+    { t: tr('web.col.score'), v: (p) => p.score, r: (p) => p.score, c: 'num', desc: true },
+    { t: tr('tui.k.first'), v: (p) => p.firstSeen, r: (p) => fmtTime(p.firstSeen), c: 'nowrap' },
+    { t: tr('tui.k.last'), v: (p) => p.lastSeen, r: (p) => fmtTime(p.lastSeen), c: 'nowrap' },
+    { t: tr('tui.h.recommendation'), v: () => 0, r: (p) => tx(p.recommendations && p.recommendations[0]), c: 'wrap' },
+  ], rows, (p) => openCard(p.key), tr('web.empty.suspicious'));
 }
 
 function renderAllProcs() {
   const rows = state.processes.filter(procFilter());
   renderTable('t-all', [
-    colPID,
+    colPID(),
     { t: 'PPID', v: (p) => p.ppid, r: (p) => p.ppid, c: 'num' },
-    colName, colUser,
+    colName(), colUser(),
     { t: 'CPU %', v: (p) => p.cpuPercent, r: (p) => fmtPct(p.cpuPercent) + (p.cpuAverage ? '*' : ''), c: 'num', desc: true },
     { t: 'RAM', v: (p) => p.rssBytes, r: (p) => fmtBytes(p.rssBytes), c: 'num', desc: true },
-    { t: 'Работает', v: (p) => p.startTime, r: (p) => fmtAgo(p.startTime), c: 'nowrap' },
-    colPath, colCmd, colRisk,
+    { t: tr('web.col.uptime'), v: (p) => p.startTime, r: (p) => fmtAgo(p.startTime), c: 'nowrap' },
+    colPath(), colCmd(), colRisk(),
   ], rows, (p) => openCard(p.key));
 }
 
@@ -240,13 +238,13 @@ function renderNet() {
     return true;
   });
   renderTable('t-net', [
-    { t: 'Протокол', v: (s) => s.proto, r: (s) => s.proto },
-    { t: 'Локальный адрес', v: (s) => s.localPort, r: (s) => `${s.localAddr}:${s.localPort}`, c: 'mono' },
-    { t: 'Удалённый адрес', v: (s) => s.remoteAddr, r: (s) => (s.remotePort ? `${s.remoteAddr}:${s.remotePort}` : '—'), c: 'mono' },
-    { t: 'Состояние', v: (s) => s.state, r: (s) => s.state },
+    { t: tr('tui.k.proto'), v: (s) => s.proto, r: (s) => s.proto },
+    { t: tr('tui.k.local'), v: (s) => s.localPort, r: (s) => `${s.localAddr}:${s.localPort}`, c: 'mono' },
+    { t: tr('tui.k.remote'), v: (s) => s.remoteAddr, r: (s) => (s.remotePort ? `${s.remoteAddr}:${s.remotePort}` : '—'), c: 'mono' },
+    { t: tr('tui.k.state'), v: (s) => s.state, r: (s) => s.state },
     { t: 'PID', v: (s) => s.pid || 0, r: (s) => s.pid || '—', c: 'num' },
-    { t: 'Процесс', v: (s) => s.procName || '', r: (s) => s.procName || h('span', { class: 'muted', title: 'Владелец не найден: нет прав на /proc/PID/fd, сокет ядра или соединение уже закрыто' }, 'неизвестно') },
-    { t: 'Пользователь', v: (s) => s.user || '', r: (s) => s.user || '' },
+    { t: tr('tui.title.process'), v: (s) => s.procName || '', r: (s) => s.procName || h('span', { class: 'muted', title: tr('tui.no_owner') }, tr('tui.unknown')) },
+    { t: tr('tui.k.user'), v: (s) => s.user || '', r: (s) => s.user || '' },
     { t: 'Netns', v: (s) => s.netns || '', r: (s) => s.netns || '', c: 'mono' },
   ], rows, (s) => s.procKey && openCard(s.procKey));
 }
@@ -258,18 +256,18 @@ function renderHistory() {
   const rows = state.events.filter((e) => {
     if (type && e.type !== type) return false;
     if (risk && riskNum(e.risk) < riskNum(risk)) return false;
-    if (q && ![e.pid, e.name, e.user, e.exe, e.details].join(' ').toLowerCase().includes(q)) return false;
+    if (q && ![e.pid, e.name, e.user, e.exe, tx(e.details)].join(' ').toLowerCase().includes(q)) return false;
     return true;
   });
   renderTable('t-history', [
-    { t: 'Время', v: (e) => e.time, r: (e) => fmtTime(e.time), c: 'nowrap' },
-    { t: 'Событие', v: (e) => e.type, r: (e) => EVENT_NAMES[e.type] || e.type, c: 'nowrap' },
+    { t: tr('web.col.time'), v: (e) => e.time, r: (e) => fmtTime(e.time), c: 'nowrap' },
+    { t: tr('tui.title.event'), v: (e) => e.type, r: (e) => eventName(e.type), c: 'nowrap' },
     { t: 'PID', v: (e) => e.pid || 0, r: (e) => e.pid || '', c: 'num' },
-    { t: 'Имя', v: (e) => e.name || '', r: (e) => e.name || '' },
-    { t: 'Пользователь', v: (e) => e.user || '', r: (e) => e.user || '' },
-    { t: 'Подробности', v: (e) => e.details, r: (e) => e.details, c: 'wrap' },
-    { t: 'Риск', v: (e) => riskNum(e.risk), r: (e) => riskBadge(e.risk), desc: true },
-  ], rows, (e) => e.key && openCard(e.key), 'Событий пока нет');
+    { t: tr('tui.k.name'), v: (e) => e.name || '', r: (e) => e.name || '' },
+    { t: tr('tui.k.user'), v: (e) => e.user || '', r: (e) => e.user || '' },
+    { t: tr('tui.title.details'), v: (e) => tx(e.details), r: (e) => tx(e.details), c: 'wrap' },
+    { t: tr('web.col.risk'), v: (e) => riskNum(e.risk), r: (e) => riskBadge(e.risk), desc: true },
+  ], rows, (e) => e.key && openCard(e.key), tr('web.empty.events'));
 }
 
 function renderSystem() {
@@ -277,22 +275,24 @@ function renderSystem() {
   if (!s) return;
   const host = s.host || {};
   $('sys-host').replaceChildren(
-    ...kv('Хост', host.hostname), ...kv('ОС', host.os || '—'), ...kv('Ядро', host.kernel || '—'),
-    ...kv('Загрузка', fmtTime(host.bootTime) + ' (' + fmtAgo(host.bootTime) + ' назад)'), ...kv('ОЗУ', fmtBytes(host.memTotal)),
-    ...kv('Сканер от root', host.isRoot ? 'да' : 'нет'), ...kv('Внутри контейнера', host.inContainer ? 'да' : 'нет'),
-    ...kv('Версия', state.status ? state.status.version : ''),
+    ...kv(tr('tui.k.host'), host.hostname), ...kv(tr('web.k.os'), host.os || '—'), ...kv(tr('web.k.kernel'), host.kernel || '—'),
+    ...kv(tr('tui.k.boot'), fmtTime(host.bootTime) + ' (' + tr('tui.ago', fmtAgo(host.bootTime)) + ')'), ...kv(tr('web.k.ram'), fmtBytes(host.memTotal)),
+    ...kv(tr('tui.k.root'), yesNo(host.isRoot)), ...kv(tr('tui.k.in_container'), yesNo(host.inContainer)),
+    ...kv(tr('web.k.version'), state.status ? state.status.version : ''),
   );
-  const warns = s.warnings && s.warnings.length ? s.warnings : ['Ограничений не обнаружено.'];
+  const warns = s.warnings && s.warnings.length ? s.warnings.map(tx) : [tr('web.no_limits')];
   $('sys-warn').replaceChildren(...warns.map((w) => h('li', null, w)));
   renderTable('t-system', [
-    { t: 'Риск', v: (f) => riskNum(f.risk), r: (f) => riskBadge(f.risk), desc: true },
-    { t: 'Проверка', v: (f) => f.title, r: (f) => f.title, c: 'wrap' },
-    { t: 'Файл', v: (f) => f.path, r: (f) => f.path, c: 'mono' },
-    { t: 'Изменён', v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
-    { t: 'Факты', v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, e))), c: 'wrap' },
-    { t: 'Рекомендация', v: () => 0, r: (f) => f.recommendation, c: 'wrap' },
-  ], s.findings || [], null, 'Признаков закрепления не найдено');
+    { t: tr('web.col.risk'), v: (f) => riskNum(f.risk), r: (f) => riskBadge(f.risk), desc: true },
+    { t: tr('tui.title.check'), v: (f) => tx(f.title), r: (f) => tx(f.title), c: 'wrap' },
+    { t: tr('tui.k.file'), v: (f) => f.path, r: (f) => f.path, c: 'mono' },
+    { t: tr('tui.k.modified'), v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
+    { t: tr('tui.h.facts'), v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))), c: 'wrap' },
+    { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => tx(f.recommendation), c: 'wrap' },
+  ], s.findings || [], null, tr('web.empty.system'));
 }
+
+function yesNo(v) { return v ? tr('tui.yes') : tr('tui.no'); }
 
 function kv(k, v) { return [h('dt', null, k), h('dd', null, v === undefined || v === null ? '—' : String(v))]; }
 
@@ -302,7 +302,7 @@ function kv(k, v) { return [h('dt', null, k), h('dd', null, v === undefined || v
 
 function renderTree() {
   const box = $('tree');
-  if (!state.tree) { box.replaceChildren(h('div', { class: 'empty' }, 'Загрузка…')); return; }
+  if (!state.tree) { box.replaceChildren(h('div', { class: 'empty' }, tr('web.loading'))); return; }
   const q = $('tree-q').value.trim().toLowerCase();
   const showKernel = $('tree-kernel').checked;
   const match = (n) => q && [n.pid, n.name, n.exe, n.cmdline].join(' ').toLowerCase().includes(q);
@@ -352,7 +352,7 @@ async function openCard(key) {
     renderCard(data);
     $('modal').classList.remove('hidden');
   } catch (e) {
-    toast('Не удалось открыть карточку: ' + e.message);
+    toast(tr('web.card_error', e.message));
   }
 }
 
@@ -368,10 +368,10 @@ function renderCard(data) {
   const body = $('m-body');
   if (data.exited) {
     const t = data.track;
-    $('m-title').replaceChildren(`PID ${t.pid} · ${t.name} — процесс завершился`);
+    $('m-title').replaceChildren(tr('web.card.exited_title', t.pid, t.name));
     body.replaceChildren(
-      h('dl', { class: 'kv' }, ...kv('Пользователь', t.user), ...kv('Путь', t.exe), ...kv('Команда', t.cmdline),
-        ...kv('Впервые', fmtTime(t.firstSeen)), ...kv('Последний раз', fmtTime(t.lastSeen)), ...kv('Последний риск', t.risk)),
+      h('dl', { class: 'kv' }, ...kv(tr('tui.k.user'), t.user), ...kv(tr('tui.k.path'), t.exe), ...kv(tr('tui.k.command'), t.cmdline),
+        ...kv(tr('tui.k.first'), fmtTime(t.firstSeen)), ...kv(tr('tui.k.last'), fmtTime(t.lastSeen)), ...kv(tr('tui.k.last_risk'), t.risk)),
       eventsSection(data.events),
     );
     return;
@@ -387,81 +387,81 @@ function renderCard(data) {
   chain.append(h('b', null, `${p.name} (${p.pid})`));
 
   body.replaceChildren(
-    section('Оценка риска',
-      h('div', { class: 'explain' }, p.explanation),
-      active.length ? active.map(findingBlock) : h('p', { class: 'muted' }, 'Признаков нет.'),
-      p.recommendations && p.recommendations.length ? h('div', null, h('h3', null, 'Рекомендации по проверке'),
-        h('ul', null, p.recommendations.map((r) => h('li', null, r)))) : ''),
-    section('Командная строка',
-      h('div', { class: 'cmd-head' }, h('span', { class: 'muted' }, 'Секреты (пароли, токены) замаскированы как ***'),
-        h('button', { class: 'small secondary', type: 'button', onclick: () => copyText(p.cmdline) }, 'Копировать')),
-      h('pre', null, p.cmdline || '(пусто)'),
-      p.args && p.args.length > 1 ? h('details', null, h('summary', null, `Аргументы (${p.args.length})`),
+    section(tr('tui.h.assessment'),
+      h('div', { class: 'explain' }, tx(p.explanation)),
+      active.length ? active.map(findingBlock) : h('p', { class: 'muted' }, tr('web.card.no_findings')),
+      p.recommendations && p.recommendations.length ? h('div', null, h('h3', null, tr('tui.h.recommendations')),
+        h('ul', null, p.recommendations.map((r) => h('li', null, tx(r))))) : ''),
+    section(tr('web.col.cmdline'),
+      h('div', { class: 'cmd-head' }, h('span', { class: 'muted' }, tr('web.card.masked')),
+        h('button', { class: 'small secondary', type: 'button', onclick: () => copyText(p.cmdline) }, tr('tui.hint.copy'))),
+      h('pre', null, p.cmdline || tr('tui.empty_paren')),
+      p.args && p.args.length > 1 ? h('details', null, h('summary', null, tr('web.card.args', p.args.length)),
         h('ol', { start: 0 }, p.args.map((a) => h('li', { class: 'mono' }, a)))) : ''),
-    section('Основное', h('dl', { class: 'kv' },
-      ...kv('PID / PPID', `${p.pid} / ${p.ppid}`), ...kv('Имя (comm)', p.name), ...kv('Состояние', p.state),
-      ...kv('Пользователь', `${p.user} (UID ${p.uid}, EUID ${p.euid}, GID ${p.gid})`),
-      ...kv('Исполняемый файл', p.exe ? p.exe + (p.exeDeleted ? ' (удалён)' : '') : (p.kernel ? 'поток ядра' : 'недоступно')),
-      ...kv('Права файла', p.exeInfo ? `${p.exeInfo.mode}, владелец UID ${p.exeInfo.uid}, ${fmtBytes(p.exeInfo.size)}, изменён ${fmtTime(p.exeInfo.modTime)}` : '—'),
-      ...kv('Рабочий каталог', p.cwd || '—'),
-      ...kv('Запущен', fmtTime(p.startTime) + ' (' + fmtAgo(p.startTime) + ')'),
-      ...kv('Впервые замечен', fmtTime(p.firstSeen)), ...kv('Последнее наблюдение', fmtTime(p.lastSeen)),
-      ...kv('CPU', fmtPct(p.cpuPercent) + '%' + (p.cpuAverage ? ' (среднее с запуска)' : '')),
-      ...kv('Память', `${fmtBytes(p.rssBytes)} RSS (${fmtPct(p.memPercent)}%), ${fmtBytes(p.vmsBytes)} виртуальной`),
-      ...kv('Потоки', p.threads), ...kv('Открытых дескрипторов', p.fdCount),
-      ...kv('Опасные переменные окружения', p.envFlags && p.envFlags.length ? p.envFlags.join(', ') + ' (значения не читаются)' : 'нет'),
+    section(tr('tui.h.main'), h('dl', { class: 'kv' },
+      ...kv('PID / PPID', `${p.pid} / ${p.ppid}`), ...kv(tr('web.k.comm'), p.name), ...kv(tr('tui.k.state'), p.state),
+      ...kv(tr('tui.k.user'), `${p.user} (UID ${p.uid}, EUID ${p.euid}, GID ${p.gid})`),
+      ...kv(tr('tui.k.exe'), p.exe ? p.exe + (p.exeDeleted ? ' ' + tr('tui.deleted') : '') : (p.kernel ? tr('tui.kernel_thread') : tr('tui.unavailable'))),
+      ...kv(tr('tui.k.file_mode'), p.exeInfo ? tr('web.card.file_mode', p.exeInfo.mode, p.exeInfo.uid, fmtBytes(p.exeInfo.size), fmtTime(p.exeInfo.modTime)) : '—'),
+      ...kv(tr('tui.k.cwd'), p.cwd || '—'),
+      ...kv(tr('tui.k.started'), fmtTime(p.startTime) + ' (' + fmtAgo(p.startTime) + ')'),
+      ...kv(tr('tui.k.first_seen'), fmtTime(p.firstSeen)), ...kv(tr('web.k.last_seen'), fmtTime(p.lastSeen)),
+      ...kv('CPU', fmtPct(p.cpuPercent) + '%' + (p.cpuAverage ? ' ' + tr('tui.cpu_average') : '')),
+      ...kv(tr('tui.k.memory'), tr('web.card.memory', fmtBytes(p.rssBytes), fmtPct(p.memPercent), fmtBytes(p.vmsBytes))),
+      ...kv(tr('web.k.threads'), p.threads), ...kv(tr('web.k.fds'), p.fdCount),
+      ...kv(tr('web.k.danger_env'), p.envFlags && p.envFlags.length ? p.envFlags.join(', ') + ' ' + tr('tui.env_values') : tr('tui.no')),
     )),
-    section('Цепочка запуска', chain,
-      data.children && data.children.length ? h('p', null, 'Потомки: ', data.children.map((c, i) => [i ? ', ' : '', h('a', { class: 'plink', onclick: () => openCard(c.key) }, `${c.name} (${c.pid})`)])) : h('p', { class: 'muted' }, 'Потомков нет.')),
-    section('Контейнер и пространства имён', h('dl', { class: 'kv' },
-      ...kv('Контейнер', p.containerRuntime ? `${p.containerRuntime} ${p.container || ''}` : 'нет'),
-      ...kv('PID в пространствах имён', p.nspid ? p.nspid.join(' → ') : '—'),
-      ...kv('Отличаются от PID 1', p.foreignNs && p.foreignNs.length ? p.foreignNs.join(', ') : 'нет'),
+    section(tr('tui.h.chain'), chain,
+      data.children && data.children.length ? h('p', null, tr('web.card.children'), data.children.map((c, i) => [i ? ', ' : '', h('a', { class: 'plink', onclick: () => openCard(c.key) }, `${c.name} (${c.pid})`)])) : h('p', { class: 'muted' }, tr('web.card.no_children'))),
+    section(tr('web.card.container_ns'), h('dl', { class: 'kv' },
+      ...kv(tr('tui.k.container'), p.containerRuntime ? `${p.containerRuntime} ${p.container || ''}` : tr('tui.no')),
+      ...kv(tr('web.k.nspid'), p.nspid ? p.nspid.join(' → ') : '—'),
+      ...kv(tr('web.k.foreign_ns'), p.foreignNs && p.foreignNs.length ? p.foreignNs.join(', ') : tr('tui.no')),
       ...Object.entries(p.namespaces || {}).flatMap(([k, v]) => kv('ns/' + k, v)),
     )),
-    section('Сетевые соединения', socketsTable(p.sockets || [])),
-    section(`Открытые файлы (${(p.files || []).length} из ${p.fdCount})`, filesTable(p.files || [])),
-    info.length ? section('Справочно', info.map(findingBlock)) : '',
-    p.access && p.access.length ? section('Ограничения доступа', h('p', null, 'Не удалось прочитать: ' + p.access.join(', ') + '. Запустите сканер от root.')) : '',
+    section(tr('web.card.connections'), socketsTable(p.sockets || [])),
+    section(tr('tui.h.files', (p.files || []).length, p.fdCount), filesTable(p.files || [])),
+    info.length ? section(tr('tui.h.info'), info.map(findingBlock)) : '',
+    p.access && p.access.length ? section(tr('web.card.access'), h('p', null, tr('web.card.access_text', p.access.join(', ')))) : '',
     eventsSection(data.events),
   );
 }
 
 function findingBlock(f) {
   return h('div', { class: 'finding' + (f.strong ? ' strong' : '') + (f.suppressed ? ' supp' : '') },
-    h('div', null, h('b', null, f.title), ' ',
-      h('span', { class: 'tag' }, CATEGORY_NAMES[f.category] || f.category),
-      f.category !== 'info' ? h('span', { class: 'tag' }, '+' + f.weight + ' балл.') : '',
-      f.strong ? h('span', { class: 'tag strong' }, 'сильный признак') : '',
-      f.suppressed ? h('span', { class: 'tag' }, 'подавлен allowlist') : ''),
-    h('ul', { class: 'ev' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, e))),
-    f.recommendation ? h('div', { class: 'rec' }, '→ ' + f.recommendation) : '');
+    h('div', null, h('b', null, tx(f.title)), ' ',
+      h('span', { class: 'tag' }, categoryName(f.category)),
+      f.category !== 'info' ? h('span', { class: 'tag' }, tr('web.card.points', f.weight)) : '',
+      f.strong ? h('span', { class: 'tag strong' }, tr('web.card.strong')) : '',
+      f.suppressed ? h('span', { class: 'tag' }, tr('tui.suppressed')) : ''),
+    h('ul', { class: 'ev' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))),
+    tx(f.recommendation) ? h('div', { class: 'rec' }, '→ ' + tx(f.recommendation)) : '');
 }
 
 function socketsTable(socks) {
   const inet = socks.filter((s) => s.proto !== 'unix');
   const unix = socks.filter((s) => s.proto === 'unix');
-  if (!socks.length) return h('p', { class: 'muted' }, 'Нет сокетов (или нет прав на /proc/PID/fd).');
+  if (!socks.length) return h('p', { class: 'muted' }, tr('web.card.no_sockets'));
   return h('div', null,
     inet.length ? h('div', { class: 'table-wrap' }, h('table', null,
-      h('thead', null, h('tr', null, ['Протокол', 'Локальный', 'Удалённый', 'Состояние', 'inode'].map((t) => h('th', null, t)))),
+      h('thead', null, h('tr', null, [tr('tui.k.proto'), tr('tui.k.local'), tr('tui.k.remote'), tr('tui.k.state'), 'inode'].map((c) => h('th', null, c)))),
       h('tbody', null, inet.map((s) => h('tr', null, h('td', null, s.proto), h('td', { class: 'mono' }, `${s.localAddr}:${s.localPort}`),
         h('td', { class: 'mono' }, s.remotePort ? `${s.remoteAddr}:${s.remotePort}` : '—'), h('td', null, s.state), h('td', { class: 'num' }, s.inode)))))) : '',
-    unix.length ? h('p', { class: 'muted' }, `Unix-сокетов: ${unix.length}` + (unix.some((s) => s.path) ? ' (' + [...new Set(unix.map((s) => s.path).filter(Boolean))].slice(0, 5).join(', ') + ')' : '')) : '');
+    unix.length ? h('p', { class: 'muted' }, tr('web.card.unix', unix.length) + (unix.some((s) => s.path) ? ' (' + [...new Set(unix.map((s) => s.path).filter(Boolean))].slice(0, 5).join(', ') + ')' : '')) : '');
 }
 
 function filesTable(files) {
-  if (!files.length) return h('p', { class: 'muted' }, 'Нет данных.');
-  return h('details', null, h('summary', null, 'Показать'),
+  if (!files.length) return h('p', { class: 'muted' }, tr('web.no_data'));
+  return h('details', null, h('summary', null, tr('web.show')),
     h('div', { class: 'table-wrap' }, h('table', null,
-      h('thead', null, h('tr', null, h('th', null, 'fd'), h('th', null, 'Тип'), h('th', null, 'Цель'))),
+      h('thead', null, h('tr', null, h('th', null, 'fd'), h('th', null, tr('web.col.type')), h('th', null, tr('web.col.target')))),
       h('tbody', null, files.map((f) => h('tr', null, h('td', { class: 'num' }, f.fd), h('td', null, f.kind), h('td', { class: 'mono' }, f.target)))))));
 }
 
 function eventsSection(events) {
-  if (!events || !events.length) return section('История процесса', h('p', { class: 'muted' }, 'Событий нет.'));
-  return section('История процесса', h('ul', null, events.slice().reverse().map((e) =>
-    h('li', null, fmtTime(e.time), ' — ', h('b', null, EVENT_NAMES[e.type] || e.type), ': ', e.details))));
+  if (!events || !events.length) return section(tr('tui.h.history'), h('p', { class: 'muted' }, tr('web.card.no_events')));
+  return section(tr('tui.h.history'), h('ul', null, events.slice().reverse().map((e) =>
+    h('li', null, fmtTime(e.time), ' — ', h('b', null, eventName(e.type)), ': ', tx(e.details)))));
 }
 
 // ---------------------------------------------------------------------
@@ -472,20 +472,20 @@ function renderSummary() {
   const s = state.status;
   if (!s || !s.ready) return;
   const host = s.host;
-  $('hostline').textContent = `${host.hostname} · ${host.os || 'Linux'} · ядро ${host.kernel || '?'}` + (s.demo ? ' · ДЕМО-ДАННЫЕ' : '');
-  $('scaninfo').textContent = `Сканирование: ${fmtTime(s.time)} (${s.durationMs} мс, каждые ${s.interval} с)`;
+  $('hostline').textContent = tr('web.hostline', host.hostname, host.os || 'Linux', host.kernel || '?') + (s.demo ? ' · ' + tr('web.demo') : '');
+  $('scaninfo').textContent = tr('web.scaninfo', fmtTime(s.time), s.durationMs, s.interval);
   const by = s.stats.byRisk;
   const badge = (n, r) => { const b = riskBadge(r); b.textContent = n; return b; };
   $('summary').replaceChildren(
-    h('div', { class: 'stat', onclick: () => { $('f-risk').value = ''; switchTab('all'); renderAll(); } }, h('div', { class: 'num' }, s.stats.total), h('div', { class: 'lbl' }, 'процессов')),
+    h('div', { class: 'stat', onclick: () => { $('f-risk').value = ''; switchTab('all'); renderAll(); } }, h('div', { class: 'num' }, s.stats.total), h('div', { class: 'lbl' }, tr('web.stat.processes'))),
     ...['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((r) => h('div', { class: 'stat', onclick: () => { $('f-risk').value = r; switchTab('suspicious'); renderAll(); } },
       h('div', { class: 'num' }, badge(by[r] || 0, r)), h('div', { class: 'lbl' }, r))),
-    h('div', { class: 'stat', onclick: () => switchTab('net') }, h('div', { class: 'num' }, s.stats.sockets), h('div', { class: 'lbl' }, 'сокетов')),
-    h('div', { class: 'stat', onclick: () => switchTab('system') }, h('div', { class: 'num' }, s.systemFindings || 0), h('div', { class: 'lbl' }, 'системных находок')),
+    h('div', { class: 'stat', onclick: () => switchTab('net') }, h('div', { class: 'num' }, s.stats.sockets), h('div', { class: 'lbl' }, tr('web.stat.sockets'))),
+    h('div', { class: 'stat', onclick: () => switchTab('system') }, h('div', { class: 'num' }, s.systemFindings || 0), h('div', { class: 'lbl' }, tr('web.stat.system'))),
   );
   const banner = $('banner');
   if (s.warnings && s.warnings.length) {
-    banner.replaceChildren(h('b', null, 'Ограничения: '), s.warnings.join(' '));
+    banner.replaceChildren(h('b', null, tr('web.limits') + ' '), s.warnings.map(tx).join(' '));
     banner.classList.remove('hidden');
   } else banner.classList.add('hidden');
   $('btn-logout').classList.toggle('hidden', !s.auth);
@@ -524,7 +524,7 @@ async function refresh() {
     state.status = await api('/api/status');
     state.csrf = state.status.csrf;
     if (!state.status.ready) {
-      $('hostline').textContent = 'Выполняется первое сканирование…';
+      $('hostline').textContent = tr('web.first_scan');
       setTimeout(refresh, 1500);
       return;
     }
@@ -534,7 +534,7 @@ async function refresh() {
     await loadTabData();
     renderAll();
   } catch (e) {
-    if (e.message !== 'unauthorized') toast('Ошибка обновления: ' + e.message);
+    if (e.message !== 'unauthorized') toast(tr('web.refresh_error', e.message));
   } finally {
     loading = false;
   }
@@ -560,7 +560,18 @@ function setRefresh(sec) {
 // Инициализация
 // ---------------------------------------------------------------------
 
-function init() {
+async function init() {
+  // Каталог переводов нужен до первой отрисовки; без него остаются ключи,
+  // поэтому при ошибке повторяем загрузку при следующем обновлении.
+  try { await loadLang(detectLang()); } catch (_) { /* сервер недоступен — покажет refresh */ }
+  $('btn-lang').addEventListener('click', async () => {
+    try {
+      await switchLang();
+      renderAll();
+      if (cardData && !$('modal').classList.contains('hidden')) renderCard(cardData);
+    } catch (e) { toast(e.message); }
+  });
+
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   for (const id of ['proc-filters', 'net-filters', 'hist-filters']) {
     const form = $(id);
@@ -576,7 +587,7 @@ function init() {
   $('btn-rescan').addEventListener('click', async () => {
     try {
       await api('/api/rescan', { method: 'POST' });
-      toast('Сканирование запущено');
+      toast(tr('tui.flash.scan_started'));
       setTimeout(refresh, 1500);
     } catch (e) { toast(e.message); }
   });

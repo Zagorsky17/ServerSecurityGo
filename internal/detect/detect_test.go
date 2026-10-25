@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -30,11 +31,11 @@ func analyze(procs ...*model.Process) {
 func TestScoreCaps(t *testing.T) {
 	// Один признак одной категории без «сильных» — не выше LOW, даже
 	// если вес велик.
-	_, r, expl := Score([]model.Finding{{ID: "a", Title: "A", Category: model.CatLocation, Weight: 50}})
+	_, r, expl := Score([]model.Finding{{ID: "a", Title: i18n.L("A"), Category: model.CatLocation, Weight: 50}})
 	if r != model.RiskLow {
 		t.Errorf("одна категория без сильных: %s", r)
 	}
-	if !strings.Contains(expl, "ограничен") {
+	if !strings.Contains(expl.String(), "ограничен") {
 		t.Errorf("в объяснении нет причины ограничения: %s", expl)
 	}
 	// Сильный признак одной категории — не выше MEDIUM.
@@ -89,7 +90,7 @@ func TestMinerInTmp(t *testing.T) {
 	if p.Risk != model.RiskCritical {
 		t.Errorf("риск %s (%d)", p.Risk, p.Score)
 	}
-	if len(p.Recommendations) == 0 || !strings.Contains(p.Explanation, "CRITICAL") {
+	if len(p.Recommendations) == 0 || !strings.Contains(p.Explanation.String(), "CRITICAL") {
 		t.Errorf("нет рекомендаций или объяснения: %q", p.Explanation)
 	}
 }
@@ -241,7 +242,7 @@ func TestLDPreloadAndPerms(t *testing.T) {
 	// В доказательствах нет значения переменной.
 	for _, f := range p.Findings {
 		for _, e := range f.Evidence {
-			if strings.Contains(e, "=/") {
+			if strings.Contains(e.String(), "=/") {
 				t.Errorf("значение окружения попало в доказательства: %s", e)
 			}
 		}
@@ -265,7 +266,7 @@ func TestAllowlist(t *testing.T) {
 	if !found {
 		t.Error("подавленный признак должен оставаться видимым")
 	}
-	if !strings.Contains(p.Explanation, "allowlist") {
+	if !strings.Contains(p.Explanation.String(), "allowlist") {
 		t.Errorf("объяснение не упоминает подавление: %s", p.Explanation)
 	}
 }
@@ -318,7 +319,7 @@ func TestSystemChecks(t *testing.T) {
 		if strings.HasPrefix(k, "/etc/cron.d/ok|") {
 			t.Errorf("ложное срабатывание: %s", k)
 		}
-		if strings.Contains(byPath[k].Evidence[0], "AAAAC3Nza") {
+		if strings.Contains(byPath[k].Evidence[0].String(), "AAAAC3Nza") {
 			t.Error("содержимое ключа SSH попало в отчёт")
 		}
 	}
@@ -371,7 +372,7 @@ func TestAllowlistNameOnly(t *testing.T) {
 func TestUnicodeControl(t *testing.T) {
 	p := &model.Process{PID: 50, PPID: 1, Name: "ss​hd", Exe: "/usr/sbin/sshd", Args: []string{"sshd", "‮txt.exe"}}
 	f := findingByIDLocal(p, "unicode_control")
-	if f == nil || len(f.Evidence) != 2 || !strings.Contains(f.Evidence[0], "U+200B") || !strings.Contains(f.Evidence[1], "U+202E") {
+	if f == nil || len(f.Evidence) != 2 || !strings.Contains(f.Evidence[0].String(), "U+200B") || !strings.Contains(f.Evidence[1].String(), "U+202E") {
 		t.Fatalf("признак: %+v", f)
 	}
 	if findingByIDLocal(&model.Process{PID: 51, PPID: 1, Name: "nginx", Exe: "/usr/sbin/nginx", Args: []string{"nginx: кириллица"}}, "unicode_control") != nil {
@@ -471,7 +472,7 @@ func TestSystemChecksUnsafeKeys(t *testing.T) {
 	res := systemChecksTimeout(t, root)
 	got := map[string]string{}
 	for _, f := range res {
-		got[f.Path] += f.ID + " " + strings.Join(f.Evidence, "; ") + "|"
+		got[f.Path] += f.ID + " " + i18n.Join("; ", f.Evidence...).String() + "|"
 	}
 	for user, want := range map[string]string{"fifo": "FIFO", "zero": "/dev/zero", "link": "ссылка", "big": "больше лимита"} {
 		g := got["/home/"+user+"/.ssh/authorized_keys"]

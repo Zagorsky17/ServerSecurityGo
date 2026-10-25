@@ -7,8 +7,11 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 )
 
 // Risk — уровень риска процесса или системной проверки.
@@ -57,7 +60,7 @@ func (r *Risk) UnmarshalJSON(b []byte) error {
 	}
 	v, ok := ParseRisk(s)
 	if !ok {
-		return fmt.Errorf("неизвестный уровень риска %q", s)
+		return i18n.Errorf("err.unknown_risk", strconv.Quote(s))
 	}
 	*r = v
 	return nil
@@ -83,13 +86,13 @@ const (
 // Finding — один сработавший признак. Evidence содержит проверяемые
 // факты (что именно прочитано и откуда), а не выводы.
 type Finding struct {
-	ID             string   `json:"id"`
-	Title          string   `json:"title"`
-	Category       string   `json:"category"`
-	Weight         int      `json:"weight"`
-	Strong         bool     `json:"strong"`
-	Evidence       []string `json:"evidence"`
-	Recommendation string   `json:"recommendation"`
+	ID             string     `json:"id"`
+	Title          i18n.Msg   `json:"title"`
+	Category       string     `json:"category"`
+	Weight         int        `json:"weight"`
+	Strong         bool       `json:"strong"`
+	Evidence       []i18n.Msg `json:"evidence"`
+	Recommendation i18n.Msg   `json:"recommendation"`
 	// Suppressed — признак подавлен правилом allowlist; он показывается,
 	// но не учитывается в оценке.
 	Suppressed bool `json:"suppressed,omitempty"`
@@ -186,13 +189,13 @@ type Process struct {
 	// Access — что не удалось прочитать (обычно из-за прав).
 	Access []string `json:"access,omitempty"`
 
-	Findings        []Finding `json:"findings"`
-	Score           int       `json:"score"`
-	Risk            Risk      `json:"risk"`
-	Explanation     string    `json:"explanation"`
-	Recommendations []string  `json:"recommendations"`
-	FirstSeen       time.Time `json:"firstSeen"`
-	LastSeen        time.Time `json:"lastSeen"`
+	Findings        []Finding  `json:"findings"`
+	Score           int        `json:"score"`
+	Risk            Risk       `json:"risk"`
+	Explanation     i18n.Msg   `json:"explanation"`
+	Recommendations []i18n.Msg `json:"recommendations"`
+	FirstSeen       time.Time  `json:"firstSeen"`
+	LastSeen        time.Time  `json:"lastSeen"`
 }
 
 // SystemFinding — результат системной проверки (cron, systemd, ld.so.preload...).
@@ -232,7 +235,7 @@ type Snapshot struct {
 	Processes []*Process          `json:"processes"`
 	Sockets   []Socket            `json:"sockets"`
 	System    []SystemFinding     `json:"system"`
-	Warnings  []string            `json:"warnings"`
+	Warnings  []i18n.Msg          `json:"warnings"`
 	Stats     Stats               `json:"stats"`
 	ByKey     map[string]*Process `json:"-"`
 }
@@ -259,6 +262,6 @@ type Event struct {
 	Name    string    `json:"name,omitempty"`
 	User    string    `json:"user,omitempty"`
 	Exe     string    `json:"exe,omitempty"`
-	Details string    `json:"details"`
+	Details i18n.Msg  `json:"details"`
 	Risk    Risk      `json:"risk"`
 }

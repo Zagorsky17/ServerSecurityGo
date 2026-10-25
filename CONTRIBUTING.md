@@ -45,12 +45,13 @@ Small, focused pull requests are reviewed much faster than large ones. One logic
 - **Standard library only.** The project deliberately has no external Go modules. Please discuss it in an issue before adding a dependency.
 - **Read-only by design.** The application must never kill processes, delete files or change network rules. Pull requests that add such actions will not be accepted.
 - **Evidence, not verdicts.** A detection rule returns facts (what was read and where) and is worded as an indicator that needs checking, never as "malware". If a legitimate case is known, lower the weight for that case rather than disabling the rule.
-- **New detection rule:** add it to `internal/detect/rules.go` and to the `Rules` list, cover it with tests in `detect_test.go` (both a detection case and a legitimate case that must stay `INFO`), and add its ID to the rule list in both READMEs.
+- **New detection rule:** add it to `internal/detect/rules.go` and to the `Rules` list, cover it with tests in `detect_test.go` (both a detection case and a legitimate case that must stay `INFO`), add its title and recommendation (`rule.<id>.title`, `rule.<id>.rec`) in both languages to `internal/i18n/catalog_detect.go`, and add its ID to the rule list in both READMEs.
 - **New setting:** add it to `internal/config`, and add it to `.env.example` with a clear comment on a separate line: what it does, the default, whether it is required, and any pitfalls.
 - **Tests on a fake `/proc`.** Use `internal/fakeproc` and `fakeproc.NewFS` so tests pass on any OS. Code that depends on the real `/proc` belongs in `*_linux_test.go`.
 - **Web UI safety.** Process names and command lines are attacker-controlled. In `internal/web/static/app.js`, output text only via `textContent` (the `h()` helper) and never via `innerHTML`. Do not add inline scripts or styles (CSP).
-- **Language.** Code comments, UI texts and log messages in this project are written in Russian, and identifiers in English. Please follow the style of the surrounding code. If writing Russian is difficult for you, English comments are fine — we will help with translation during review.
-- **Commit messages** should briefly describe what changed and why. Either English or Russian is fine.
+- **Language.** Code comments are written in Russian and identifiers in English. Please follow the style of the surrounding code. If writing Russian is difficult for you, English comments are fine — we will help with translation during review.
+- **User-visible texts** (UI, indicators, events, CLI output, log, errors) never go into the code as plain strings: add a key to the catalog in `internal/i18n/catalog_*.go` with both the Russian and the English text and use `i18n.T(key, args...)` (`tr('key')` in the web dashboard). Placeholders are `{0}`, `{1}`; facts from the system (paths, command lines) are passed as arguments. Tests fail if a key is missing, unused or has different placeholders in the two languages.
+- **Commit messages** are written in English and briefly describe what changed and why.
 
 ### Testing on a real server
 
@@ -101,12 +102,13 @@ Issue можно писать на русском или английском я
 - **Только стандартная библиотека.** В проекте намеренно нет внешних модулей Go. Пожалуйста, обсудите в issue, прежде чем добавлять зависимость.
 - **Только чтение.** Приложение никогда не завершает процессы, не удаляет файлы и не меняет сетевые правила. Pull request'ы, добавляющие такие действия, не принимаются.
 - **Факты, а не вердикты.** Правило обнаружения возвращает факты (что прочитано и откуда) и формулируется как признак, требующий проверки, но никогда как «вредонос». Если известен легитимный случай, снижайте вес для этого случая, а не отключайте правило.
-- **Новое правило обнаружения:** добавьте его в `internal/detect/rules.go` и в список `Rules`, покройте тестами в `detect_test.go` (и случай срабатывания, и легитимный случай, который должен остаться `INFO`), добавьте идентификатор в список правил в обоих README.
+- **Новое правило обнаружения:** добавьте его в `internal/detect/rules.go` и в список `Rules`, покройте тестами в `detect_test.go` (и случай срабатывания, и легитимный случай, который должен остаться `INFO`), добавьте заголовок и рекомендацию (`rule.<id>.title`, `rule.<id>.rec`) на обоих языках в `internal/i18n/catalog_detect.go` и идентификатор в список правил в обоих README.
 - **Новая настройка:** добавьте её в `internal/config` и в `.env.example` с понятным комментарием на отдельной строке: назначение, значение по умолчанию, обязательность, подводные камни.
 - **Тесты на поддельном `/proc`.** Используйте `internal/fakeproc` и `fakeproc.NewFS`, чтобы тесты проходили на любой ОС. Код, зависящий от настоящего `/proc`, тестируйте в `*_linux_test.go`.
 - **Безопасность интерфейса.** Имена процессов и командные строки контролирует злоумышленник. В `internal/web/static/app.js` выводите текст только через `textContent` (помощник `h()`), никогда через `innerHTML`. Не добавляйте inline-скрипты и стили (CSP).
-- **Язык.** Комментарии в коде, тексты интерфейса и сообщения журнала пишутся на русском, идентификаторы на английском. Пожалуйста, придерживайтесь стиля окружающего кода. Если писать по-русски вам трудно, английские комментарии тоже подойдут: мы поможем с переводом при проверке.
-- **Сообщения коммитов** должны кратко описывать, что изменено и зачем. Подойдёт русский или английский язык.
+- **Язык.** Комментарии в коде пишутся на русском, идентификаторы на английском. Пожалуйста, придерживайтесь стиля окружающего кода. Если писать по-русски вам трудно, английские комментарии тоже подойдут: мы поможем с переводом при проверке.
+- **Тексты для пользователя** (интерфейс, признаки, события, вывод CLI, журнал, ошибки) не пишутся в коде строками: добавьте ключ в каталог `internal/i18n/catalog_*.go` сразу с русским и английским текстом и используйте `i18n.T(ключ, аргументы...)` (в веб-панели — `tr('ключ')`). Плейсхолдеры — `{0}`, `{1}`; факты из системы (пути, командные строки) передаются аргументами. Тесты падают, если ключа нет, он не используется или плейсхолдеры в языках различаются.
+- **Сообщения коммитов** пишутся на английском и кратко описывают, что изменено и зачем.
 
 ### Проверка на реальном сервере
 

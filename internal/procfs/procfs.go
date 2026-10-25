@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -40,7 +41,7 @@ const ClockTicks = 100
 const pfKthread = 0x00200000
 
 // ErrGone — процесс исчез во время чтения.
-var ErrGone = errors.New("процесс завершился")
+var ErrGone = i18n.Errorf("err.proc_gone")
 
 // FS — точка доступа к /proc.
 type FS struct {
@@ -109,7 +110,7 @@ func (f *FS) BootTime() (time.Time, error) {
 			return time.Unix(sec, 0), nil
 		}
 	}
-	return time.Time{}, errors.New("в /proc/stat нет btime")
+	return time.Time{}, i18n.Errorf("err.no_btime")
 }
 
 // MemTotal возвращает объём ОЗУ в байтах из /proc/meminfo.
@@ -453,13 +454,13 @@ func ParseStat(s string) (Stat, error) {
 	open := strings.IndexByte(s, '(')
 	closeIdx := strings.LastIndexByte(s, ')')
 	if open < 0 || closeIdx < open {
-		return st, errors.New("неверный формат stat")
+		return st, i18n.Errorf("err.stat_format")
 	}
 	st.Comm = s[open+1 : closeIdx]
 	fields := strings.Fields(s[closeIdx+1:])
 	// Индексы ниже — номер поля из man proc минус 3.
 	if len(fields) < 22 {
-		return st, fmt.Errorf("в stat мало полей: %d", len(fields))
+		return st, i18n.Errorf("err.stat_fields", len(fields))
 	}
 	u := func(i int) uint64 {
 		v, _ := strconv.ParseUint(fields[i], 10, 64)

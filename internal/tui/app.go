@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
@@ -42,10 +43,11 @@ const (
 	nPanels
 )
 
-var panelTitles = [nPanels]string{"Сводка", "Подозрительные", "Процессы", "Сеть", "История", "Система"}
+// panelKeys — ключи каталога для названий панелей.
+var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.hist", "tui.panel.sys"}
 
-// Режимы сортировки списка процессов.
-var sortNames = []string{"риск", "CPU", "память", "PID", "имя"}
+// sortKeys — режимы сортировки списка процессов (ключи каталога).
+var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
 
 // listState — положение курсора и фильтр одной панели-списка.
 type listState struct {
@@ -62,6 +64,7 @@ type Options struct {
 	Source  Source
 	Refresh time.Duration // как часто перечитывать данные
 	Out     io.Writer     // по умолчанию os.Stdout
+	Lang    i18n.Lang     // язык интерфейса; пусто — язык процесса (i18n.Default)
 }
 
 // App — состояние интерфейса.
@@ -71,6 +74,7 @@ type App struct {
 	scr     *Screen
 	w, h    int
 	refresh time.Duration
+	lang    i18n.Lang // язык интерфейса, переключается клавишей L
 
 	data    *Data
 	err     error
@@ -123,7 +127,31 @@ func New(opt Options) *App {
 	if opt.Refresh <= 0 {
 		opt.Refresh = 5 * time.Second
 	}
-	return &App{src: opt.Source, out: opt.Out, refresh: opt.Refresh, focus: pSusp, expanded: pSusp, byKey: map[string]view.Summary{}}
+	if _, ok := i18n.Parse(string(opt.Lang)); !ok {
+		opt.Lang = i18n.Default()
+	}
+	return &App{src: opt.Source, out: opt.Out, refresh: opt.Refresh, lang: opt.Lang, focus: pSusp, expanded: pSusp, byKey: map[string]view.Summary{}}
+}
+
+// tr — строка каталога на языке интерфейса.
+func (a *App) tr(key string, args ...any) string { return i18n.T(key, args...).In(a.lang) }
+
+// txt — серверное сообщение на языке интерфейса.
+func (a *App) txt(m i18n.Msg) string { return m.In(a.lang) }
+
+func (a *App) panelTitle(p panelID) string { return a.tr(panelKeys[p]) }
+func (a *App) sortName(i int) string       { return a.tr(sortKeys[i]) }
+
+// toggleLang переключает язык на следующий из i18n.Langs.
+func (a *App) toggleLang() {
+	for i, l := range i18n.Langs {
+		if l == a.lang {
+			a.lang = i18n.Langs[(i+1)%len(i18n.Langs)]
+			break
+		}
+	}
+	a.rebuild() // фильтры ищут по переведённому тексту
+	a.flash(a.tr("tui.lang_switched"), false)
 }
 
 // Run запускает интерфейс в текущем терминале и возвращается после выхода.
@@ -218,10 +246,10 @@ func matches(filter string, fields ...string) bool {
 	return false
 }
 
-func procMatches(f string, p view.Summary) bool {
+func procMatches(l i18n.Lang, f string, p view.Summary) bool {
 	fields := []string{strconv.Itoa(p.PID), p.Name, p.User, p.Exe, p.Cmdline, p.Risk.String(), p.Container}
 	for _, fb := range p.Findings {
-		fields = append(fields, fb.Title, fb.ID)
+		fields = append(fields, fb.Title.In(l), fb.ID)
 	}
 	return matches(f, fields...)
 }
@@ -239,7 +267,7 @@ func (a *App) rebuild() {
 
 	a.susp = a.susp[:0]
 	for _, p := range a.data.Procs {
-		if p.Risk >= model.RiskLow && procMatches(a.lists[pSusp].filter, p) {
+		if p.Risk >= model.RiskLow && procMatches(a.lang, a.lists[pSusp].filter, p) {
 			a.susp = append(a.susp, p)
 		}
 	}
@@ -255,7 +283,7 @@ func (a *App) rebuild() {
 	} else {
 		a.procs, a.procPrefix = a.procs[:0], nil
 		for _, p := range a.data.Procs {
-			if (a.showKernel || !p.Kernel) && procMatches(a.lists[pProcs].filter, p) {
+			if (a.showKernel || !p.Kernel) && procMatches(a.lang, a.lists[pProcs].filter, p) {
 				a.procs = append(a.procs, p)
 			}
 		}
@@ -282,13 +310,13 @@ func (a *App) rebuild() {
 	}
 	a.events = a.events[:0]
 	for _, e := range a.data.Events {
-		if matches(a.lists[pHist].filter, e.Type, eventName(e.Type), strconv.Itoa(e.PID), e.Name, e.User, e.Details, e.Risk.String()) {
+		if matches(a.lists[pHist].filter, e.Type, eventName(a.lang, e.Type), strconv.Itoa(e.PID), e.Name, e.User, a.txt(e.Details), e.Risk.String()) {
 			a.events = append(a.events, e)
 		}
 	}
 	a.system = a.system[:0]
 	for _, f := range a.data.System {
-		if matches(a.lists[pSys].filter, f.Title, f.Path, f.ID, f.Risk.String()) {
+		if matches(a.lists[pSys].filter, a.txt(f.Title), f.Path, f.ID, f.Risk.String()) {
 			a.system = append(a.system, f)
 		}
 	}
@@ -317,7 +345,7 @@ func (a *App) buildTree() {
 	include := map[int]bool{}
 	f := a.lists[pProcs].filter
 	for _, p := range procs {
-		if (!a.showKernel && p.Kernel) || !procMatches(f, p) {
+		if (!a.showKernel && p.Kernel) || !procMatches(a.lang, f, p) {
 			continue
 		}
 		for cur, ok := p, true; ok && !include[cur.PID]; cur, ok = byPID[cur.PPID] {
@@ -481,44 +509,46 @@ func (a *App) runeKey(r rune, list panelID) bool {
 		}
 	case 's':
 		if a.focus == pProcs {
-			a.sortMode = (a.sortMode + 1) % len(sortNames)
+			a.sortMode = (a.sortMode + 1) % len(sortKeys)
 			a.treeMode = false
 			a.rebuild()
-			a.flash("Сортировка: "+sortNames[a.sortMode], false)
+			a.flash(a.tr("tui.flash.sort", a.sortName(a.sortMode)), false)
 		}
 	case 't':
 		a.treeMode = !a.treeMode
 		a.focusPanel(pProcs)
 		a.rebuild()
 		if a.treeMode {
-			a.flash("Дерево процессов", false)
+			a.flash(a.tr("tui.flash.tree"), false)
 		} else {
-			a.flash("Список процессов", false)
+			a.flash(a.tr("tui.flash.list"), false)
 		}
 	case 'K':
 		a.showKernel = !a.showKernel
 		a.rebuild()
 		if a.showKernel {
-			a.flash("Потоки ядра показаны", false)
+			a.flash(a.tr("tui.flash.kernel_shown"), false)
 		} else {
-			a.flash("Потоки ядра скрыты", false)
+			a.flash(a.tr("tui.flash.kernel_hidden"), false)
 		}
 	case 'r':
 		if err := a.src.Rescan(); err != nil {
-			a.flash("Ошибка: "+err.Error(), true)
+			a.flash(a.tr("tui.error", err.Error()), true)
 		} else {
-			a.flash("Сканирование запущено", false)
+			a.flash(a.tr("tui.flash.scan_started"), false)
 			time.Sleep(300 * time.Millisecond)
 			a.load()
 		}
 	case 'p':
 		a.paused = !a.paused
 		if a.paused {
-			a.flash("Автообновление на паузе", false)
+			a.flash(a.tr("tui.flash.paused"), false)
 		} else {
-			a.flash("Автообновление включено", false)
+			a.flash(a.tr("tui.flash.resumed"), false)
 			a.load()
 		}
+	case 'L':
+		a.toggleLang()
 	case '+', 'z':
 		a.zoom = !a.zoom
 	case 'y':
@@ -638,10 +668,10 @@ func (a *App) mouse(k Key) {
 func (a *App) copyCmdline() {
 	if p, ok := a.selectedProc(); ok {
 		a.osc52(p.Cmdline)
-		a.flash("Командная строка скопирована (OSC 52)", false)
+		a.flash(a.tr("tui.flash.cmd_copied"), false)
 		return
 	}
-	a.flash("Выберите процесс", true)
+	a.flash(a.tr("tui.flash.select_process"), true)
 }
 
 func (a *App) copyJSON() {
@@ -665,12 +695,12 @@ func (a *App) copyJSON() {
 		}
 	}
 	if v == nil {
-		a.flash("Нечего копировать", true)
+		a.flash(a.tr("tui.flash.nothing"), true)
 		return
 	}
 	b, _ := json.MarshalIndent(v, "", "  ")
 	a.osc52(string(b))
-	a.flash("JSON скопирован (OSC 52)", false)
+	a.flash(a.tr("tui.flash.json_copied"), false)
 }
 
 func (a *App) osc52(s string) {
@@ -737,26 +767,12 @@ func (a *App) expandedOrFocus() panelID {
 	return a.focus
 }
 
-func eventName(t string) string {
+// eventName — короткое название типа события для узких колонок.
+func eventName(l i18n.Lang, t string) string {
 	switch t {
-	case model.EvBaseline:
-		return "Начало"
-	case model.EvStarted:
-		return "Запуск"
-	case model.EvExited:
-		return "Завершение"
-	case model.EvChanged:
-		return "Изменение"
-	case model.EvRiskUp:
-		return "Риск ↑"
-	case model.EvRiskDown:
-		return "Риск ↓"
-	case model.EvFinding:
-		return "Признак"
-	case model.EvListen:
-		return "Порт"
-	case model.EvSystem:
-		return "Система"
+	case model.EvBaseline, model.EvStarted, model.EvExited, model.EvChanged, model.EvRiskUp,
+		model.EvRiskDown, model.EvFinding, model.EvListen, model.EvSystem:
+		return i18n.T("tui.event." + t).In(l)
 	}
 	return t
 }

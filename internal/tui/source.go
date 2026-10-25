@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
@@ -32,7 +33,7 @@ type Source interface {
 	Detail(key string) (*view.Detail, error)
 	Rescan() error
 	// Describe — короткое описание источника для строки состояния.
-	Describe() string
+	Describe() i18n.Msg
 	Close()
 }
 
@@ -48,11 +49,11 @@ type LocalSource struct {
 	cancel  context.CancelFunc
 	version string
 	demo    bool
-	note    string
+	note    i18n.Msg
 }
 
 // NewLocalSource запускает сканер в фоне и ждёт первого снимка.
-func NewLocalSource(sc *scanner.Scanner, version string, demo bool, note string) (*LocalSource, error) {
+func NewLocalSource(sc *scanner.Scanner, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
 	if _, err := sc.ScanOnce(); err != nil {
 		return nil, err
 	}
@@ -73,7 +74,7 @@ func NewLocalSource(sc *scanner.Scanner, version string, demo bool, note string)
 func (l *LocalSource) Fetch() (*Data, error) {
 	snap := l.sc.Snapshot()
 	if snap == nil {
-		return nil, errors.New("первое сканирование ещё выполняется")
+		return nil, i18n.Errorf("err.first_scan_running")
 	}
 	st := view.BuildStatus(view.Status{Version: l.version, Demo: l.demo, Interval: l.sc.Interval().Seconds()}, snap)
 	ev := l.sc.History().Events(2000)
@@ -84,11 +85,11 @@ func (l *LocalSource) Fetch() (*Data, error) {
 func (l *LocalSource) Detail(key string) (*view.Detail, error) {
 	snap := l.sc.Snapshot()
 	if snap == nil {
-		return nil, errors.New("нет данных")
+		return nil, i18n.Errorf("err.no_data")
 	}
 	d, ok := view.BuildDetail(snap, l.sc.History(), key)
 	if !ok {
-		return nil, errors.New("процесс не найден")
+		return nil, i18n.Errorf("err.process_not_found")
 	}
 	return &d, nil
 }
@@ -98,7 +99,7 @@ func (l *LocalSource) Rescan() error {
 	return err
 }
 
-func (l *LocalSource) Describe() string { return l.note }
+func (l *LocalSource) Describe() i18n.Msg { return l.note }
 
 func (l *LocalSource) Close() { l.cancel() }
 
@@ -159,7 +160,7 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 		return nil, err
 	}
 	if !d.Status.Ready {
-		return nil, errors.New("служба выполняет первое сканирование")
+		return nil, i18n.Errorf("err.service_first_scan")
 	}
 	var procs struct {
 		Processes []view.Summary `json:"processes"`
@@ -205,6 +206,6 @@ func (r *RemoteSource) Rescan() error {
 	return nil
 }
 
-func (r *RemoteSource) Describe() string { return "служба · " + r.path }
+func (r *RemoteSource) Describe() i18n.Msg { return i18n.T("tui.source_service", r.path) }
 
 func (r *RemoteSource) Close() { r.client.CloseIdleConnections() }

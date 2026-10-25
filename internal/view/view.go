@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -37,8 +38,8 @@ type Summary struct {
 	Risk            model.Risk     `json:"risk"`
 	Score           int            `json:"score"`
 	Findings        []FindingBrief `json:"findings"`
-	Explanation     string         `json:"explanation,omitempty"`
-	Recommendations []string       `json:"recommendations,omitempty"`
+	Explanation     i18n.Msg       `json:"explanation,omitzero"`
+	Recommendations []i18n.Msg     `json:"recommendations,omitempty"`
 	FirstSeen       time.Time      `json:"firstSeen"`
 	LastSeen        time.Time      `json:"lastSeen"`
 	Sockets         int            `json:"sockets"`
@@ -47,12 +48,12 @@ type Summary struct {
 
 // FindingBrief — признак без доказательств (для списков).
 type FindingBrief struct {
-	ID         string `json:"id"`
-	Title      string `json:"title"`
-	Category   string `json:"category"`
-	Weight     int    `json:"weight"`
-	Strong     bool   `json:"strong"`
-	Suppressed bool   `json:"suppressed,omitempty"`
+	ID         string   `json:"id"`
+	Title      i18n.Msg `json:"title"`
+	Category   string   `json:"category"`
+	Weight     int      `json:"weight"`
+	Strong     bool     `json:"strong"`
+	Suppressed bool     `json:"suppressed,omitempty"`
 }
 
 // Summarize строит сводку процесса. Справочные признаки (info) в
@@ -191,7 +192,7 @@ type Status struct {
 	DurationMs     int64          `json:"durationMs"`
 	Host           model.HostInfo `json:"host"`
 	Stats          model.Stats    `json:"stats"`
-	Warnings       []string       `json:"warnings"`
+	Warnings       []i18n.Msg     `json:"warnings"`
 	SystemFindings int            `json:"systemFindings"`
 }
 

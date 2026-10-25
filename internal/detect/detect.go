@@ -18,9 +18,9 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -138,8 +138,8 @@ const (
 	thrCritical = 60
 )
 
-// Score вычисляет баллы, уровень и текстовое объяснение оценки.
-func Score(findings []model.Finding) (int, model.Risk, string) {
+// Score вычисляет баллы, уровень и объяснение оценки.
+func Score(findings []model.Finding) (int, model.Risk, i18n.Msg) {
 	score := 0
 	cats := map[string]bool{}
 	strong := 0
@@ -178,92 +178,85 @@ func Score(findings []model.Finding) (int, model.Risk, string) {
 	// Ограничение по числу независимых категорий: «громкий» признак
 	// одного типа не должен давать HIGH/CRITICAL без подтверждения.
 	limit := model.RiskCritical
-	limitReason := ""
+	var limitReason i18n.Msg
 	switch n := len(cats); {
 	case n == 1 && strong == 0:
-		limit, limitReason = model.RiskLow, "все признаки одной категории и ни одного сильного — не выше LOW"
+		limit, limitReason = model.RiskLow, i18n.T("score.limit_one_weak")
 	case n == 1:
-		limit, limitReason = model.RiskMedium, "признаки только одной категории — не выше MEDIUM"
+		limit, limitReason = model.RiskMedium, i18n.T("score.limit_one")
 	case n == 2 && strong < 2:
-		limit, limitReason = model.RiskHigh, "признаки двух категорий — не выше HIGH (для CRITICAL нужны 3 категории или 2 сильных признака)"
+		limit, limitReason = model.RiskHigh, i18n.T("score.limit_two")
 	}
 	capped := false
 	if risk > limit {
 		risk, capped = limit, true
 	}
 
-	var b strings.Builder
+	var out []i18n.Msg
 	if len(active) == 0 {
-		b.WriteString("Подозрительных признаков не обнаружено.")
+		out = append(out, i18n.T("score.none"))
 		if suppressed > 0 {
-			fmt.Fprintf(&b, " Подавлено правилами allowlist: %d.", suppressed)
+			out = append(out, i18n.T("score.suppressed", suppressed))
 		}
-		return 0, model.RiskInfo, b.String()
+		return 0, model.RiskInfo, i18n.Join(" ", out...)
 	}
-	catNames := make([]string, 0, len(cats))
+	catIDs := make([]string, 0, len(cats))
 	for k := range cats {
-		catNames = append(catNames, CategoryTitle(k))
+		catIDs = append(catIDs, k)
 	}
-	sort.Strings(catNames)
-	fmt.Fprintf(&b, "Итог %s: %d балл(ов), признаков — %d, категорий — %d (%s), сильных — %d. ",
-		risk, score, len(active), len(cats), strings.Join(catNames, ", "), strong)
-	parts := make([]string, 0, len(active))
+	sort.Strings(catIDs)
+	catNames := make([]i18n.Msg, len(catIDs))
+	for i, k := range catIDs {
+		catNames[i] = CategoryTitle(k)
+	}
+	out = append(out, i18n.T("score.total", risk, score, len(active), len(cats), i18n.Join(", ", catNames...), strong))
+	parts := make([]i18n.Msg, 0, len(active))
 	for _, f := range active {
-		s := fmt.Sprintf("«%s» +%d", f.Title, f.Weight)
 		if f.Strong {
-			s += " (сильный)"
+			parts = append(parts, i18n.T("score.part_strong", f.Title, f.Weight))
+		} else {
+			parts = append(parts, i18n.T("score.part", f.Title, f.Weight))
 		}
-		parts = append(parts, s)
 	}
-	b.WriteString("Сработали: " + strings.Join(parts, "; ") + ". ")
-	fmt.Fprintf(&b, "Шкала: LOW от %d, MEDIUM от %d, HIGH от %d, CRITICAL от %d баллов.", thrLow, thrMedium, thrHigh, thrCritical)
+	out = append(out, i18n.T("score.fired", i18n.Join("; ", parts...)))
+	out = append(out, i18n.T("score.scale", thrLow, thrMedium, thrHigh, thrCritical))
 	if capped {
-		b.WriteString(" Уровень ограничен: " + limitReason + ".")
+		out = append(out, i18n.T("score.capped", limitReason))
 	}
 	if suppressed > 0 {
-		fmt.Fprintf(&b, " Подавлено правилами allowlist: %d.", suppressed)
+		out = append(out, i18n.T("score.suppressed", suppressed))
 	}
-	b.WriteString(" Это оценка по косвенным признакам, а не доказательство компрометации.")
-	return score, risk, b.String()
+	out = append(out, i18n.T("score.disclaimer"))
+	return score, risk, i18n.Join(" ", out...)
 }
 
-// CategoryTitle — русское название категории.
-func CategoryTitle(c string) string {
-	switch c {
-	case model.CatLocation:
-		return "расположение"
-	case model.CatIntegrity:
-		return "целостность файла"
-	case model.CatMasquerade:
-		return "маскировка/имя"
-	case model.CatChain:
-		return "цепочка запуска"
-	case model.CatNetwork:
-		return "сеть"
-	case model.CatContent:
-		return "командная строка"
-	case model.CatBehavior:
-		return "поведение"
-	case model.CatEnvironment:
-		return "окружение"
-	case model.CatPrivilege:
-		return "привилегии"
-	case model.CatPersistence:
-		return "закрепление"
-	default:
-		return "справка"
+// categories — известные категории признаков (ключи каталога cat.<id>).
+var categories = map[string]bool{
+	model.CatLocation: true, model.CatIntegrity: true, model.CatMasquerade: true, model.CatChain: true,
+	model.CatNetwork: true, model.CatContent: true, model.CatBehavior: true, model.CatEnvironment: true,
+	model.CatPrivilege: true, model.CatPersistence: true, model.CatInfo: true,
+}
+
+// CategoryTitle — переводимое название категории; неизвестная
+// категория считается справочной.
+func CategoryTitle(c string) i18n.Msg {
+	if !categories[c] {
+		c = model.CatInfo
 	}
+	return i18n.T("cat." + c)
 }
 
 // recommendations собирает уникальные рекомендации из признаков и
 // добавляет общие шаги проверки для процессов с риском от MEDIUM.
-func recommendations(p *model.Process, findings []model.Finding) []string {
-	var out []string
+func recommendations(p *model.Process, findings []model.Finding) []i18n.Msg {
+	var out []i18n.Msg
 	seen := map[string]bool{}
-	add := func(s string) {
-		if s != "" && !seen[s] {
+	add := func(m i18n.Msg) {
+		// Сравнение по русскому тексту: одинаковые рекомендации разных
+		// признаков совпадают на любом языке.
+		if s := m.In(i18n.RU); s != "" && !seen[s] {
 			seen[s] = true
-			out = append(out, s)
+			out = append(out, m)
 		}
 	}
 	for _, f := range findings {
@@ -272,9 +265,9 @@ func recommendations(p *model.Process, findings []model.Finding) []string {
 		}
 	}
 	if p.Risk >= model.RiskMedium {
-		add(fmt.Sprintf("Сохраните сведения до любых действий: ls -l /proc/%d/exe /proc/%d/cwd; cat /proc/%d/maps; ss -tunap | grep 'pid=%d,'", p.PID, p.PID, p.PID, p.PID))
-		add(fmt.Sprintf("Снимите копию исполняемого файла для анализа: cp /proc/%d/exe /root/evidence-%d.bin && sha256sum /root/evidence-%d.bin", p.PID, p.PID, p.PID))
-		add("Приложение ничего не завершает и не удаляет. Решение о действиях (изоляция, остановка, расследование) принимает администратор.")
+		add(i18n.T("rec.preserve", p.PID))
+		add(i18n.T("rec.copy_exe", p.PID))
+		add(i18n.T("rec.admin_decides"))
 	}
 	return out
 }
@@ -337,14 +330,12 @@ func WeakAllowRules(rules []AllowRule) []string {
 		if a.Exe != "" || (a.Name == "" && a.User == "") {
 			continue
 		}
-		what := fmt.Sprintf("№%d (name=%q user=%q)", i+1, a.Name, a.User)
-		switch {
-		case a.Name == "":
-			what += ": только пользователь — подавляет признаки всего, что он запустит"
-		default:
-			what += ": без exe — сработает, только если имя совпадёт и с именем исполняемого файла; надёжнее указать exe"
+		what := fmt.Sprintf("(name=%q user=%q)", a.Name, a.User)
+		if a.Name == "" {
+			out = append(out, i18n.S("allow.weak_user_only", i+1, what))
+		} else {
+			out = append(out, i18n.S("allow.weak_no_exe", i+1, what))
 		}
-		out = append(out, what)
 	}
 	return out
 }

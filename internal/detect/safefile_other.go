@@ -2,10 +2,7 @@
 
 package detect
 
-import (
-	"errors"
-	"os"
-)
+import "os"
 
 // openForRead — запасной вариант для систем без O_NOFOLLOW/O_NONBLOCK:
 // тип файла проверяется до открытия. Сканер рассчитан на Linux, здесь
@@ -20,7 +17,7 @@ func openForRead(path string, follow bool) (*os.File, error) {
 		return nil, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, errors.New("не обычный файл")
+		return nil, errNotRegular
 	}
 	return os.Open(path)
 }

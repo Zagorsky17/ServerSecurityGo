@@ -6,12 +6,13 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 )
 
 // Формат хеша пароля: pbkdf2-sha256:<итерации>:<соль>:<хеш>, соль и хеш
@@ -27,7 +28,7 @@ const (
 // HashPassword вычисляет хеш пароля для SSG_AUTH_PASSWORD_HASH.
 func HashPassword(password string) (string, error) {
 	if len(password) < 12 {
-		return "", errors.New("пароль должен быть не короче 12 символов")
+		return "", i18n.Errorf("err.password_short")
 	}
 	salt := make([]byte, hashSaltLen)
 	if _, err := rand.Read(salt); err != nil {

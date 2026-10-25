@@ -10,7 +10,7 @@ document.getElementById('login').addEventListener('submit', async (ev) => {
   try {
     const r = await fetch('/api/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-SSG-Lang': I18N.lang },
       body: JSON.stringify({ password: input.value }),
       credentials: 'same-origin',
     });
@@ -19,10 +19,17 @@ document.getElementById('login').addEventListener('submit', async (ev) => {
       return;
     }
     const data = await r.json().catch(() => ({}));
-    err.textContent = data.error || ('Ошибка ' + r.status);
+    err.textContent = data.error || tr('web.err.status', r.status);
   } catch (e) {
-    err.textContent = 'Сервер недоступен';
+    err.textContent = tr('web.err.unavailable');
   }
   input.value = '';
   err.classList.remove('hidden');
 });
+
+document.getElementById('btn-lang').addEventListener('click', () => {
+  switchLang().catch(() => {});
+});
+
+// Без каталога остаётся русская разметка страницы — вход всё равно работает.
+loadLang(detectLang()).catch(() => {});

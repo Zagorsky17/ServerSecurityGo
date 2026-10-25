@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -177,5 +179,30 @@ func TestScanBudget(t *testing.T) {
 	}
 	if truncated < n/4 || flagged != truncated {
 		t.Errorf("обрезано %d, признаков %d", truncated, flagged)
+	}
+}
+
+// TestEnglishTexts: все тексты снимка и истории (признаки, доказательства,
+// объяснения, рекомендации, события, предупреждения) на английском не
+// содержат русских слов — так ловятся строки, не прошедшие через каталог.
+func TestEnglishTexts(t *testing.T) {
+	sc, _, _ := newDemoScanner(t)
+	var snap *model.Snapshot
+	for range 3 { // несколько сканирований: длительная нагрузка и события
+		var err error
+		if snap, err = sc.ScanOnce(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := i18n.RenderJSON(map[string]any{"snap": snap, "events": sc.History().Events(0)}, i18n.EN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(v)
+	if i := strings.IndexFunc(string(b), func(r rune) bool { return r >= 0x400 && r <= 0x4FF }); i >= 0 {
+		t.Errorf("русский текст в английском выводе: …%s…", string(b)[max(0, i-200):min(len(b), i+200)])
+	}
+	if !strings.Contains(string(b), "Executable in a temporary directory") {
+		t.Error("в выводе нет переведённых признаков")
 	}
 }

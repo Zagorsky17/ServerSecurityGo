@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -121,8 +122,8 @@ func isInterpreter(p *model.Process) bool {
 func cmdText(p *model.Process) string { return strings.Join(p.Args, " ") }
 
 // exeRef — как ссылаться на exe в доказательствах.
-func exeRef(p *model.Process) string {
-	return fmt.Sprintf("/proc/%d/exe → %s", p.PID, p.Exe)
+func exeRef(p *model.Process) i18n.Msg {
+	return i18n.L(fmt.Sprintf("/proc/%d/exe → %s", p.PID, p.Exe))
 }
 
 func inTemp(path string) bool { return path != "" && hasAnyPrefix(path, tempDirs) }
@@ -144,9 +145,9 @@ func ruleExeLocation(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "exe_in_temp", Title: "Исполняемый файл во временном каталоге", Category: model.CatLocation, Weight: 15,
-		Evidence:       []string{exeRef(p), "каталог доступен на запись всем пользователям"},
-		Recommendation: fmt.Sprintf("Проверьте происхождение файла: ls -la %q; sha256sum /proc/%d/exe; dpkg -S %q (штатные пакеты туда не ставятся).", filepath.Dir(p.Exe), p.PID, p.Exe),
+		ID: "exe_in_temp", Title: i18n.T("rule.exe_in_temp.title"), Category: model.CatLocation, Weight: 15,
+		Evidence:       []i18n.Msg{exeRef(p), i18n.T("ev.dir_world_writable")},
+		Recommendation: i18n.T("rule.exe_in_temp.rec", quote(filepath.Dir(p.Exe)), p.PID, quote(p.Exe)),
 	})
 }
 
@@ -160,9 +161,9 @@ func ruleHiddenPath(p *model.Process, _ *Context) []model.Finding {
 		}
 	}
 	return one(model.Finding{
-		ID: "exe_hidden_path", Title: "Исполняемый файл в скрытом каталоге или со скрытым именем", Category: model.CatLocation, Weight: 10,
-		Evidence:       []string{exeRef(p), "компонент пути начинается с точки — такие файлы не видны в обычном ls"},
-		Recommendation: fmt.Sprintf("Осмотрите каталог: ls -la %q; выясните, какой пакет или пользователь его создал.", filepath.Dir(p.Exe)),
+		ID: "exe_hidden_path", Title: i18n.T("rule.exe_hidden_path.title"), Category: model.CatLocation, Weight: 10,
+		Evidence:       []i18n.Msg{exeRef(p), i18n.T("ev.hidden_component")},
+		Recommendation: i18n.T("rule.exe_hidden_path.rec", quote(filepath.Dir(p.Exe))),
 	})
 }
 
@@ -171,9 +172,9 @@ func ruleCwdTemp(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "cwd_in_temp", Title: "Рабочий каталог во временном каталоге", Category: model.CatLocation, Weight: 4,
-		Evidence:       []string{fmt.Sprintf("/proc/%d/cwd → %s", p.PID, p.Cwd)},
-		Recommendation: fmt.Sprintf("Посмотрите содержимое рабочего каталога: ls -la %q.", p.Cwd),
+		ID: "cwd_in_temp", Title: i18n.T("rule.cwd_in_temp.title"), Category: model.CatLocation, Weight: 4,
+		Evidence:       []i18n.Msg{i18n.L(fmt.Sprintf("/proc/%d/cwd → %s", p.PID, p.Cwd))},
+		Recommendation: i18n.T("rule.cwd_in_temp.rec", quote(p.Cwd)),
 	})
 }
 
@@ -186,17 +187,17 @@ func ruleExeDeleted(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	f := model.Finding{
-		ID: "exe_deleted", Title: "Исполняемый файл удалён после запуска", Category: model.CatIntegrity, Weight: 20,
-		Evidence:       []string{exeRef(p) + " (deleted)"},
-		Recommendation: fmt.Sprintf("Скопируйте бинарник, пока процесс жив: cp /proc/%d/exe /root/deleted-%d.bin; проверьте хеш.", p.PID, p.PID),
+		ID: "exe_deleted", Title: i18n.T("rule.exe_deleted.title"), Category: model.CatIntegrity, Weight: 20,
+		Evidence:       []i18n.Msg{i18n.L(exeRef(p).Lit + " (deleted)")},
+		Recommendation: i18n.T("rule.exe_deleted.rec", p.PID),
 	}
 	if inSystem(p.Exe) || strings.HasPrefix(p.Exe, "/opt/") {
 		// После apt upgrade у долгоживущих служб старый бинарник числится
 		// удалённым — это норма до перезапуска службы.
 		f.Weight = 4
-		f.Title = "Исполняемый файл в системном каталоге заменён или удалён"
-		f.Evidence = append(f.Evidence, "путь системный: типично после обновления пакетов до перезапуска службы")
-		f.Recommendation = "Сверьте с журналом обновлений (/var/log/apt/history.log, /var/log/dpkg.log) и перезапустите службу, если обновление было."
+		f.Title = i18n.T("rule.exe_deleted.title_system")
+		f.Evidence = append(f.Evidence, i18n.T("ev.system_path_after_upgrade"))
+		f.Recommendation = i18n.T("rule.exe_deleted.rec_system")
 	}
 	return one(f)
 }
@@ -206,14 +207,14 @@ func ruleMemfd(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	f := model.Finding{
-		ID: "exe_memfd", Title: "Процесс запущен из памяти (memfd), без файла на диске", Category: model.CatIntegrity, Weight: 35, Strong: true,
-		Evidence:       []string{exeRef(p), "memfd_create позволяет выполнять код, не оставляя файла в файловой системе"},
-		Recommendation: fmt.Sprintf("Сохраните образ: cp /proc/%d/exe /root/memfd-%d.bin; проверьте родителя и сетевые соединения процесса.", p.PID, p.PID),
+		ID: "exe_memfd", Title: i18n.T("rule.exe_memfd.title"), Category: model.CatIntegrity, Weight: 35, Strong: true,
+		Evidence:       []i18n.Msg{exeRef(p), i18n.T("ev.memfd_no_file")},
+		Recommendation: i18n.T("rule.exe_memfd.rec", p.PID),
 	}
 	if strings.Contains(p.Exe, "runc") || p.Name == "runc" || strings.HasPrefix(p.Name, "runc:") {
 		// Старые версии runc штатно перезапускают себя через memfd.
 		f.Weight, f.Strong = 8, false
-		f.Evidence = append(f.Evidence, "имя связано с runc — старые версии runc используют memfd штатно")
+		f.Evidence = append(f.Evidence, i18n.T("ev.memfd_runc"))
 	}
 	return one(f)
 }
@@ -226,23 +227,23 @@ func ruleExePerms(p *model.Process, _ *Context) []model.Finding {
 	fi := p.ExeInfo
 	if fi.WorldWritable {
 		out = append(out, model.Finding{
-			ID: "exe_world_writable", Title: "Исполняемый файл доступен на запись всем", Category: model.CatIntegrity, Weight: 15,
-			Evidence:       []string{exeRef(p), "права: " + fi.Mode},
-			Recommendation: fmt.Sprintf("Любой пользователь может подменить файл. Проверьте целостность и права: stat %q.", p.Exe),
+			ID: "exe_world_writable", Title: i18n.T("rule.exe_world_writable.title"), Category: model.CatIntegrity, Weight: 15,
+			Evidence:       []i18n.Msg{exeRef(p), i18n.T("ev.mode", fi.Mode)},
+			Recommendation: i18n.T("rule.exe_world_writable.rec", quote(p.Exe)),
 		})
 	}
 	if (fi.SetUID || fi.SetGID) && !inSystem(p.Exe) {
 		out = append(out, model.Finding{
-			ID: "exe_setuid_nonstd", Title: "SUID/SGID-файл вне системных каталогов", Category: model.CatIntegrity, Weight: 15,
-			Evidence:       []string{exeRef(p), "права: " + fi.Mode},
-			Recommendation: "Найдите все такие файлы: find / -xdev -perm /6000 -type f 2>/dev/null — и сравните со списком пакетов.",
+			ID: "exe_setuid_nonstd", Title: i18n.T("rule.exe_setuid_nonstd.title"), Category: model.CatIntegrity, Weight: 15,
+			Evidence:       []i18n.Msg{exeRef(p), i18n.T("ev.mode", fi.Mode)},
+			Recommendation: i18n.T("rule.exe_setuid_nonstd.rec"),
 		})
 	}
 	if inSystem(p.Exe) && fi.UID > 0 {
 		out = append(out, model.Finding{
-			ID: "exe_system_nonroot", Title: "Файл в системном каталоге принадлежит не root", Category: model.CatIntegrity, Weight: 10,
-			Evidence:       []string{exeRef(p), fmt.Sprintf("владелец UID %d", fi.UID)},
-			Recommendation: fmt.Sprintf("Проверьте пакет и контрольные суммы: dpkg -S %q && dpkg --verify $(dpkg -S %q | cut -d: -f1).", p.Exe, p.Exe),
+			ID: "exe_system_nonroot", Title: i18n.T("rule.exe_system_nonroot.title"), Category: model.CatIntegrity, Weight: 10,
+			Evidence:       []i18n.Msg{exeRef(p), i18n.T("ev.owner_uid", fi.UID)},
+			Recommendation: i18n.T("rule.exe_system_nonroot.rec", quote(p.Exe)),
 		})
 	}
 	return out
@@ -261,15 +262,14 @@ func ruleKthreadMasquerade(p *model.Process, _ *Context) []model.Finding {
 	if !kthreadLike.MatchString(strings.TrimSpace(p.Args[0])) {
 		return nil
 	}
-	ev := []string{fmt.Sprintf("argv[0] = %q — так выглядят только потоки ядра в ps", p.Args[0]),
-		"флаг PF_KTHREAD в /proc/PID/stat не установлен — это пользовательский процесс"}
+	ev := []i18n.Msg{i18n.T("ev.argv0_kthread", quote(p.Args[0])), i18n.T("ev.no_pf_kthread")}
 	if p.Exe != "" {
 		ev = append(ev, exeRef(p))
 	}
 	return one(model.Finding{
-		ID: "kthread_masquerade", Title: "Пользовательский процесс маскируется под поток ядра", Category: model.CatMasquerade, Weight: 30, Strong: true,
+		ID: "kthread_masquerade", Title: i18n.T("rule.kthread_masquerade.title"), Category: model.CatMasquerade, Weight: 30, Strong: true,
 		Evidence:       ev,
-		Recommendation: fmt.Sprintf("У настоящих потоков ядра нет exe и cmdline. Изучите файл: ls -l /proc/%d/exe; sha256sum /proc/%d/exe.", p.PID, p.PID),
+		Recommendation: i18n.T("rule.kthread_masquerade.rec", p.PID),
 	})
 }
 
@@ -290,9 +290,9 @@ func ruleSystemNameMasquerade(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "system_name_masquerade", Title: "Имя системной службы, но файл вне системных каталогов", Category: model.CatMasquerade, Weight: 25,
-		Evidence:       []string{fmt.Sprintf("имя процесса %q совпадает с системной службой", p.Name), exeRef(p)},
-		Recommendation: fmt.Sprintf("Сравните с настоящим файлом службы (command -v %s) и проверьте, как процесс был запущен (родитель PID %d).", name, p.PPID),
+		ID: "system_name_masquerade", Title: i18n.T("rule.system_name_masquerade.title"), Category: model.CatMasquerade, Weight: 25,
+		Evidence:       []i18n.Msg{i18n.T("ev.name_is_daemon", quote(p.Name)), exeRef(p)},
+		Recommendation: i18n.T("rule.system_name_masquerade.rec", name, p.PPID),
 	})
 }
 
@@ -327,9 +327,9 @@ func ruleNameMismatch(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "name_mismatch", Title: "Имя процесса не совпадает с именем исполняемого файла", Category: model.CatMasquerade, Weight: 6,
-		Evidence:       []string{fmt.Sprintf("comm = %q", p.Name), exeRef(p)},
-		Recommendation: "Некоторые программы штатно переименовывают процесс; если эта программа к ним не относится, выясните, зачем она скрывает настоящее имя.",
+		ID: "name_mismatch", Title: i18n.T("rule.name_mismatch.title"), Category: model.CatMasquerade, Weight: 6,
+		Evidence:       []i18n.Msg{i18n.L("comm = " + quote(p.Name)), exeRef(p)},
+		Recommendation: i18n.T("rule.name_mismatch.rec"),
 	})
 }
 
@@ -337,21 +337,21 @@ func ruleUnusualName(p *model.Process, _ *Context) []model.Finding {
 	if skipUserRules(p) || p.Name == "" {
 		return nil
 	}
-	var reason string
+	var reason i18n.Msg
 	switch {
 	case strings.HasPrefix(p.Name, "."):
-		reason = "имя начинается с точки"
+		reason = i18n.T("ev.name_dot")
 	case strings.TrimSpace(p.Name) == "":
-		reason = "имя состоит из пробелов"
+		reason = i18n.T("ev.name_spaces")
 	case strings.HasSuffix(p.Name, " ") || strings.HasPrefix(p.Name, " "):
-		reason = "имя начинается или заканчивается пробелом"
+		reason = i18n.T("ev.name_edge_space")
 	default:
 		return nil
 	}
 	return one(model.Finding{
-		ID: "unusual_name", Title: "Необычное имя процесса", Category: model.CatMasquerade, Weight: 8,
-		Evidence:       []string{fmt.Sprintf("comm = %q: %s", p.Name, reason)},
-		Recommendation: "Такие имена затрудняют поиск процесса в ps/top. Проверьте файл и родителя.",
+		ID: "unusual_name", Title: i18n.T("rule.unusual_name.title"), Category: model.CatMasquerade, Weight: 8,
+		Evidence:       []i18n.Msg{i18n.T("ev.comm_reason", quote(p.Name), reason)},
+		Recommendation: i18n.T("rule.unusual_name.rec"),
 	})
 }
 
@@ -360,9 +360,9 @@ func ruleEmptyCmdline(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "empty_cmdline", Title: "Пустая командная строка у пользовательского процесса", Category: model.CatMasquerade, Weight: 6,
-		Evidence:       []string{fmt.Sprintf("/proc/%d/cmdline пуст, но exe есть: %s", p.PID, p.Exe)},
-		Recommendation: "Процесс мог затереть argv, чтобы скрыть параметры запуска. Сверьте с exe и родителем.",
+		ID: "empty_cmdline", Title: i18n.T("rule.empty_cmdline.title"), Category: model.CatMasquerade, Weight: 6,
+		Evidence:       []i18n.Msg{i18n.T("ev.cmdline_empty", p.PID, p.Exe)},
+		Recommendation: i18n.T("rule.empty_cmdline.rec"),
 	})
 }
 
@@ -374,30 +374,30 @@ func ruleUnicodeControl(p *model.Process, _ *Context) []model.Finding {
 	if p.Kernel {
 		return nil
 	}
-	var ev []string
-	check := func(field, s string) {
+	var ev []i18n.Msg
+	check := func(field i18n.Msg, s string) {
 		for _, r := range s {
 			if model.InvisibleRune(r) {
-				ev = append(ev, fmt.Sprintf("%s: символ U+%04X", field, r))
+				ev = append(ev, i18n.T("ev.unicode_char", field, fmt.Sprintf("U+%04X", r)))
 				return
 			}
 		}
 	}
-	check("имя", p.Name)
-	check("путь", p.Exe)
+	check(i18n.T("ev.field_name"), p.Name)
+	check(i18n.T("ev.field_path"), p.Exe)
 	for i, a := range p.Args {
 		if len(ev) >= 5 {
 			break
 		}
-		check(fmt.Sprintf("argv[%d]", i), a)
+		check(i18n.L(fmt.Sprintf("argv[%d]", i)), a)
 	}
 	if len(ev) == 0 {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "unicode_control", Title: "Невидимые символы Unicode в имени или командной строке", Category: model.CatMasquerade, Weight: 15,
+		ID: "unicode_control", Title: i18n.T("rule.unicode_control.title"), Category: model.CatMasquerade, Weight: 15,
 		Evidence:       ev,
-		Recommendation: fmt.Sprintf("Так маскируют настоящую команду. Посмотрите байты: od -c /proc/%d/comm; tr '\\0' ' ' < /proc/%d/cmdline | od -c | head.", p.PID, p.PID),
+		Recommendation: i18n.T("rule.unicode_control.rec", p.PID),
 	})
 }
 
@@ -413,9 +413,9 @@ func ruleCmdlineTruncated(p *model.Process, _ *Context) []model.Finding {
 		w = 2 // длинный classpath — обычное дело
 	}
 	return one(model.Finding{
-		ID: "cmdline_truncated", Title: "Очень длинная командная строка (прочитана не полностью)", Category: model.CatMasquerade, Weight: w,
-		Evidence:       []string{fmt.Sprintf("прочитано %d байт, остальное правила не проверяли", len(p.Cmdline))},
-		Recommendation: fmt.Sprintf("Посмотрите полную строку: tr '\\0' ' ' < /proc/%d/cmdline | less. Команду могли спрятать в конце, за длинным заполнением.", p.PID),
+		ID: "cmdline_truncated", Title: i18n.T("rule.cmdline_truncated.title"), Category: model.CatMasquerade, Weight: w,
+		Evidence:       []i18n.Msg{i18n.T("ev.cmdline_read_bytes", len(p.Cmdline))},
+		Recommendation: i18n.T("rule.cmdline_truncated.rec", p.PID),
 	})
 }
 
@@ -451,14 +451,14 @@ func ruleWebShellChain(p *model.Process, c *Context) []model.Finding {
 		return nil
 	}
 	f := model.Finding{
-		ID: "web_spawns_shell", Title: "Сетевой сервис запустил оболочку или сетевую утилиту", Category: model.CatChain, Weight: 30, Strong: true,
-		Evidence: []string{fmt.Sprintf("родитель PID %d %q (%s) → потомок PID %d %q", par.PID, par.Name, par.Exe, p.PID, p.Name),
-			"командная строка потомка: " + truncate(p.Cmdline, 200)},
-		Recommendation: "Проверьте журналы веб-сервера (access/error log) около времени запуска, поищите недавно изменённые файлы в каталоге сайта (find /var/www -mmin -1440 -type f).",
+		ID: "web_spawns_shell", Title: i18n.T("rule.web_spawns_shell.title"), Category: model.CatChain, Weight: 30, Strong: true,
+		Evidence: []i18n.Msg{i18n.T("ev.parent_child", par.PID, quote(par.Name), par.Exe, p.PID, quote(p.Name)),
+			i18n.T("ev.child_cmdline", truncate(p.Cmdline, 200))},
+		Recommendation: i18n.T("rule.web_spawns_shell.rec"),
 	}
 	if !strong {
 		f.Weight, f.Strong = 12, false
-		f.Evidence = append(f.Evidence, "родитель — среда выполнения, которая иногда штатно запускает shell (сборка, скрипты)")
+		f.Evidence = append(f.Evidence, i18n.T("ev.parent_runtime"))
 	}
 	return one(f)
 }
@@ -476,9 +476,9 @@ func ruleSchedulerChain(p *model.Process, c *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "scheduler_suspicious", Title: "Планировщик запускает программу из временного каталога или загрузку из сети", Category: model.CatPersistence, Weight: 15,
-		Evidence:       []string{fmt.Sprintf("родитель PID %d %q", par.PID, par.Name), "командная строка: " + truncate(p.Cmdline, 200)},
-		Recommendation: "Проверьте задания: crontab -l -u <user>; ls -la /etc/cron* /var/spool/cron/crontabs; atq.",
+		ID: "scheduler_suspicious", Title: i18n.T("rule.scheduler_suspicious.title"), Category: model.CatPersistence, Weight: 15,
+		Evidence:       []i18n.Msg{i18n.T("ev.parent", par.PID, quote(par.Name)), i18n.T("ev.cmdline", truncate(p.Cmdline, 200))},
+		Recommendation: i18n.T("rule.scheduler_suspicious.rec"),
 	})
 }
 
@@ -531,9 +531,9 @@ func ruleStdioSocket(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "stdio_socket", Title: "Ввод/вывод оболочки или интерпретатора подключён к сетевому сокету", Category: model.CatNetwork, Weight: 40, Strong: true,
-		Evidence:       append(ev, "так выглядит reverse/bind shell: команды приходят по сети прямо в оболочку"),
-		Recommendation: fmt.Sprintf("Определите удалённую сторону: ss -tnp | grep 'pid=%d,'; проверьте, кто запустил процесс (родитель PID %d).", p.PID, p.PPID),
+		ID: "stdio_socket", Title: i18n.T("rule.stdio_socket.title"), Category: model.CatNetwork, Weight: 40, Strong: true,
+		Evidence:       append(i18n.Ls(ev), i18n.T("ev.reverse_shell_like")),
+		Recommendation: i18n.T("rule.stdio_socket.rec", p.PID, p.PPID),
 	})
 }
 
@@ -570,9 +570,9 @@ func ruleShellOutbound(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "shell_network", Title: "Оболочка или netcat/socat держит внешнее TCP-соединение", Category: model.CatNetwork, Weight: 15,
-		Evidence:       ev,
-		Recommendation: "Оболочки обычно не открывают сетевые соединения сами. Выясните назначение удалённого адреса (whois, журналы файрвола).",
+		ID: "shell_network", Title: i18n.T("rule.shell_network.title"), Category: model.CatNetwork, Weight: 15,
+		Evidence:       i18n.Ls(ev),
+		Recommendation: i18n.T("rule.shell_network.rec"),
 	})
 }
 
@@ -587,9 +587,9 @@ func rulePoolPort(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "pool_port", Title: "Соединение на порт, типичный для пулов майнинга или Metasploit", Category: model.CatNetwork, Weight: 12,
-		Evidence:       append(ev, "порты 3333/4444/5555/7777/14444 и др. часто используют пулы Monero; 4444 — порт Metasploit по умолчанию"),
-		Recommendation: "Порт сам по себе ничего не доказывает. Проверьте, что за сервис на удалённой стороне и нужна ли процессу эта связь.",
+		ID: "pool_port", Title: i18n.T("rule.pool_port.title"), Category: model.CatNetwork, Weight: 12,
+		Evidence:       append(i18n.Ls(ev), i18n.T("ev.pool_ports")),
+		Recommendation: i18n.T("rule.pool_port.rec"),
 	})
 }
 
@@ -611,9 +611,9 @@ func ruleSuspiciousListen(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "suspicious_listen", Title: "Подозрительный процесс принимает входящие соединения", Category: model.CatNetwork, Weight: 15,
-		Evidence:       append(ev, "процесс запущен из временного каталога/удалён/является оболочкой или netcat"),
-		Recommendation: "Так может выглядеть bind shell или бэкдор. Проверьте, кто подключался: ss -tnp state established.",
+		ID: "suspicious_listen", Title: i18n.T("rule.suspicious_listen.title"), Category: model.CatNetwork, Weight: 15,
+		Evidence:       append(i18n.Ls(ev), i18n.T("ev.risky_listener")),
+		Recommendation: i18n.T("rule.suspicious_listen.rec"),
 	})
 }
 
@@ -634,9 +634,9 @@ func ruleReverseShellPattern(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "revshell_pattern", Title: "Командная строка содержит конструкцию reverse shell", Category: model.CatContent, Weight: 35, Strong: true,
-		Evidence:       []string{fmt.Sprintf("совпадение: %q", m), "командная строка: " + truncate(p.Cmdline, 300)},
-		Recommendation: "Определите удалённый адрес из командной строки и соединений процесса, проверьте журналы входа и веб-сервера на момент запуска.",
+		ID: "revshell_pattern", Title: i18n.T("rule.revshell_pattern.title"), Category: model.CatContent, Weight: 35, Strong: true,
+		Evidence:       []i18n.Msg{i18n.T("ev.match", quote(m)), i18n.T("ev.cmdline", truncate(p.Cmdline, 300))},
+		Recommendation: i18n.T("rule.revshell_pattern.rec"),
 	})
 }
 
@@ -647,9 +647,9 @@ func ruleDownloadExec(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "download_exec", Title: "Загрузка из сети с немедленным выполнением", Category: model.CatContent, Weight: 25,
-		Evidence:       []string{fmt.Sprintf("совпадение: %q", truncate(m, 200)), "командная строка: " + truncate(p.Cmdline, 300)},
-		Recommendation: "Установщики иногда так работают, но это и типичный способ доставки вредоносов. Скачайте скрипт отдельно (без выполнения) и изучите.",
+		ID: "download_exec", Title: i18n.T("rule.download_exec.title"), Category: model.CatContent, Weight: 25,
+		Evidence:       []i18n.Msg{i18n.T("ev.match", quote(truncate(m, 200))), i18n.T("ev.cmdline", truncate(p.Cmdline, 300))},
+		Recommendation: i18n.T("rule.download_exec.rec"),
 	})
 }
 
@@ -660,9 +660,9 @@ func ruleMinerPattern(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "miner_pattern", Title: "Параметры командной строки характерны для майнера", Category: model.CatContent, Weight: 30, Strong: true,
-		Evidence:       []string{fmt.Sprintf("совпадение: %q", m), "командная строка: " + truncate(p.Cmdline, 300)},
-		Recommendation: "Проверьте загрузку CPU (top -p PID), соединения процесса и способ запуска (cron, systemd, родитель).",
+		ID: "miner_pattern", Title: i18n.T("rule.miner_pattern.title"), Category: model.CatContent, Weight: 30, Strong: true,
+		Evidence:       []i18n.Msg{i18n.T("ev.match", quote(m)), i18n.T("ev.cmdline", truncate(p.Cmdline, 300))},
+		Recommendation: i18n.T("rule.miner_pattern.rec"),
 	})
 }
 
@@ -676,9 +676,9 @@ func ruleMinerName(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "miner_name", Title: "Имя совпадает с известной программой-майнером", Category: model.CatMasquerade, Weight: 15,
-		Evidence:       []string{fmt.Sprintf("comm = %q, exe = %q", p.Name, p.Exe)},
-		Recommendation: "Само имя ничего не доказывает (майнинг может быть разрешён). Проверьте, согласован ли запуск.",
+		ID: "miner_name", Title: i18n.T("rule.miner_name.title"), Category: model.CatMasquerade, Weight: 15,
+		Evidence:       []i18n.Msg{i18n.L(fmt.Sprintf("comm = %q, exe = %q", p.Name, p.Exe))},
+		Recommendation: i18n.T("rule.miner_name.rec"),
 	})
 }
 
@@ -693,9 +693,10 @@ func ruleCPUSustained(p *model.Process, c *Context) []model.Finding {
 	}
 	dur := c.Cfg.ScanInterval * timeMul(n)
 	return one(model.Finding{
-		ID: "cpu_sustained", Title: "Длительная высокая загрузка CPU", Category: model.CatBehavior, Weight: 8,
-		Evidence:       []string{fmt.Sprintf("CPU ≥ %.0f%% в %d сканированиях подряд (≈ %s), сейчас %.1f%%", c.Cfg.CPUThreshold, n, dur.Round(time.Second), p.CPUPercent)},
-		Recommendation: "Высокая нагрузка бывает у легитимных задач (сборки, БД). Подозрительна в сочетании с другими признаками: майнинг, неизвестный файл.",
+		ID: "cpu_sustained", Title: i18n.T("rule.cpu_sustained.title"), Category: model.CatBehavior, Weight: 8,
+		Evidence: []i18n.Msg{i18n.T("ev.cpu_sustained", fmt.Sprintf("%.0f", c.Cfg.CPUThreshold), n,
+			dur.Round(time.Second).String(), fmt.Sprintf("%.1f", p.CPUPercent))},
+		Recommendation: i18n.T("rule.cpu_sustained.rec"),
 	})
 }
 
@@ -705,9 +706,10 @@ func ruleMemSustained(p *model.Process, c *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "mem_sustained", Title: "Длительное высокое потребление памяти", Category: model.CatBehavior, Weight: 4,
-		Evidence:       []string{fmt.Sprintf("RAM ≥ %.0f%% в %d сканированиях подряд, сейчас %.1f%%", c.Cfg.MemThreshold, n, p.MemPercent)},
-		Recommendation: "Сверьте с ожидаемым поведением программы; проверьте утечки памяти или нецелевое использование.",
+		ID: "mem_sustained", Title: i18n.T("rule.mem_sustained.title"), Category: model.CatBehavior, Weight: 4,
+		Evidence: []i18n.Msg{i18n.T("ev.mem_sustained", fmt.Sprintf("%.0f", c.Cfg.MemThreshold), n,
+			fmt.Sprintf("%.1f", p.MemPercent))},
+		Recommendation: i18n.T("rule.mem_sustained.rec"),
 	})
 }
 
@@ -729,9 +731,9 @@ func ruleLDPreload(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "ld_preload", Title: "Задана переменная подгрузки библиотек (LD_PRELOAD/LD_AUDIT)", Category: model.CatEnvironment, Weight: 20,
-		Evidence:       []string{fmt.Sprintf("в /proc/%d/environ есть %s (значение не сохраняется)", p.PID, strings.Join(vars, ", ")), "через подгружаемую библиотеку руткиты перехватывают системные вызовы"},
-		Recommendation: fmt.Sprintf("Посмотрите значение вручную: tr '\\0' '\\n' < /proc/%d/environ | grep -E '^LD_(PRELOAD|AUDIT)='; проверьте библиотеку (dpkg -S, sha256sum).", p.PID),
+		ID: "ld_preload", Title: i18n.T("rule.ld_preload.title"), Category: model.CatEnvironment, Weight: 20,
+		Evidence:       []i18n.Msg{i18n.T("ev.environ_has", p.PID, strings.Join(vars, ", ")), i18n.T("ev.preload_rootkits")},
+		Recommendation: i18n.T("rule.ld_preload.rec", p.PID),
 	})
 }
 
@@ -743,9 +745,9 @@ func ruleRootFromWritable(p *model.Process, _ *Context) []model.Finding {
 		return nil
 	}
 	return one(model.Finding{
-		ID: "root_from_writable", Title: "Процесс root запущен из каталога, доступного на запись пользователям", Category: model.CatPrivilege, Weight: 10,
-		Evidence:       []string{fmt.Sprintf("EUID = 0, %s", exeRef(p))},
-		Recommendation: "Подмена такого файла непривилегированным пользователем даёт ему права root. Проверьте, кто владеет файлом и каталогом.",
+		ID: "root_from_writable", Title: i18n.T("rule.root_from_writable.title"), Category: model.CatPrivilege, Weight: 10,
+		Evidence:       []i18n.Msg{i18n.L("EUID = 0, " + exeRef(p).Lit)},
+		Recommendation: i18n.T("rule.root_from_writable.rec"),
 	})
 }
 
@@ -757,15 +759,15 @@ func ruleInfoContainer(p *model.Process, _ *Context) []model.Finding {
 	if p.ContainerRuntime == "" {
 		return nil
 	}
-	ev := []string{fmt.Sprintf("среда: %s", p.ContainerRuntime)}
+	ev := []i18n.Msg{i18n.T("ev.container_runtime", p.ContainerRuntime)}
 	if p.Container != "" {
-		ev = append(ev, "контейнер: "+p.Container)
+		ev = append(ev, i18n.T("ev.container_id", p.Container))
 	}
 	if len(p.NSPID) > 1 {
-		ev = append(ev, fmt.Sprintf("PID внутри контейнера: %d", p.NSPID[len(p.NSPID)-1]))
+		ev = append(ev, i18n.T("ev.container_pid", p.NSPID[len(p.NSPID)-1]))
 	}
-	return one(model.Finding{ID: "info_container", Title: "Процесс работает в контейнере", Category: model.CatInfo, Evidence: ev,
-		Recommendation: "Пути exe/cwd указаны внутри файловой системы контейнера."})
+	return one(model.Finding{ID: "info_container", Title: i18n.T("rule.info_container.title"), Category: model.CatInfo, Evidence: ev,
+		Recommendation: i18n.T("rule.info_container.rec")})
 }
 
 func ruleInfoListen(p *model.Process, _ *Context) []model.Finding {
@@ -778,16 +780,16 @@ func ruleInfoListen(p *model.Process, _ *Context) []model.Finding {
 	if len(ev) == 0 {
 		return nil
 	}
-	return one(model.Finding{ID: "info_listen", Title: "Процесс слушает сетевые порты", Category: model.CatInfo, Evidence: ev})
+	return one(model.Finding{ID: "info_listen", Title: i18n.T("rule.info_listen.title"), Category: model.CatInfo, Evidence: i18n.Ls(ev)})
 }
 
 func ruleInfoAccess(p *model.Process, _ *Context) []model.Finding {
 	if len(p.Access) == 0 {
 		return nil
 	}
-	return one(model.Finding{ID: "info_access", Title: "Часть данных недоступна из-за прав", Category: model.CatInfo,
-		Evidence:       []string{"не прочитано: " + strings.Join(p.Access, ", ")},
-		Recommendation: "Запустите сканер от root, чтобы правила, зависящие от этих данных, могли сработать."})
+	return one(model.Finding{ID: "info_access", Title: i18n.T("rule.info_access.title"), Category: model.CatInfo,
+		Evidence:       []i18n.Msg{i18n.T("ev.not_read", strings.Join(p.Access, ", "))},
+		Recommendation: i18n.T("rule.info_access.rec")})
 }
 
 func truncate(s string, n int) string {
@@ -797,3 +799,7 @@ func truncate(s string, n int) string {
 	}
 	return string(r[:n]) + "…"
 }
+
+// quote — строка в кавычках Go (%q): так в доказательствах и командах
+// видны пробелы и управляющие символы в именах и путях.
+func quote(s string) string { return strconv.Quote(s) }

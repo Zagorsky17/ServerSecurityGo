@@ -21,11 +21,11 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 )
@@ -95,7 +95,7 @@ func Open(opt Options) (*Store, error) {
 		return s, nil
 	}
 	if err := os.MkdirAll(opt.Dir, 0o700); err != nil {
-		return nil, fmt.Errorf("каталог данных: %w", err)
+		return nil, i18n.Errorf("err.data_dir", err)
 	}
 	if data, err := os.ReadFile(s.statePath()); err == nil {
 		var st stateFile
@@ -223,37 +223,38 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 			newCount++
 			e := base
 			e.Type = model.EvStarted
-			e.Details = "Новый процесс: " + truncate(p.Cmdline, 200)
 			if p.PPID > 0 {
-				e.Details += fmt.Sprintf(" (родитель PID %d)", p.PPID)
+				e.Details = i18n.T("hist.started_parent", truncate(p.Cmdline, 200), p.PPID)
+			} else {
+				e.Details = i18n.T("hist.started", truncate(p.Cmdline, 200))
 			}
 			evs = append(evs, e)
 		case !isNew:
-			var ch []string
+			var ch []i18n.Msg
 			if t.Exe != p.Exe {
-				ch = append(ch, fmt.Sprintf("exe: %s → %s", t.Exe, p.Exe))
+				ch = append(ch, i18n.L(fmt.Sprintf("exe: %s → %s", t.Exe, p.Exe)))
 			}
 			if t.Cmdline != p.Cmdline {
-				ch = append(ch, fmt.Sprintf("cmdline: %s → %s", truncate(t.Cmdline, 120), truncate(p.Cmdline, 120)))
+				ch = append(ch, i18n.L(fmt.Sprintf("cmdline: %s → %s", truncate(t.Cmdline, 120), truncate(p.Cmdline, 120))))
 			}
 			if t.User != p.User {
-				ch = append(ch, fmt.Sprintf("пользователь: %s → %s", t.User, p.User))
+				ch = append(ch, i18n.T("hist.user_changed", t.User, p.User))
 			}
 			if len(ch) > 0 {
 				e := base
 				e.Type = model.EvChanged
-				e.Details = strings.Join(ch, "; ")
+				e.Details = i18n.Join("; ", ch...)
 				evs = append(evs, e)
 			}
 			if p.Risk > t.Risk {
 				e := base
 				e.Type = model.EvRiskUp
-				e.Details = fmt.Sprintf("Риск %s → %s", t.Risk, p.Risk)
+				e.Details = i18n.T("hist.risk", t.Risk, p.Risk)
 				evs = append(evs, e)
 			} else if p.Risk < t.Risk {
 				e := base
 				e.Type = model.EvRiskDown
-				e.Details = fmt.Sprintf("Риск %s → %s", t.Risk, p.Risk)
+				e.Details = i18n.T("hist.risk", t.Risk, p.Risk)
 				evs = append(evs, e)
 			}
 		}
@@ -264,7 +265,7 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 			if !slices.Contains(t.Findings, fid.id) && (p.Risk >= model.RiskLow) {
 				e := base
 				e.Type = model.EvFinding
-				e.Details = "Признак: " + fid.title
+				e.Details = i18n.T("hist.finding", fid.title)
 				evs = append(evs, e)
 			}
 		}
@@ -273,7 +274,7 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 				if !slices.Contains(t.Listen, l) {
 					e := base
 					e.Type = model.EvListen
-					e.Details = "Начал слушать " + l
+					e.Details = i18n.T("hist.listen", l)
 					evs = append(evs, e)
 				}
 			}
@@ -295,7 +296,7 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 		}
 		t.Exited = true
 		evs = append(evs, model.Event{Time: now, Type: model.EvExited, Key: k, PID: t.PID, Name: t.Name, User: t.User, Exe: t.Exe, Risk: t.Risk,
-			Details: fmt.Sprintf("Процесс завершился (наблюдался с %s)", t.FirstSeen.Format("2006-01-02 15:04:05"))})
+			Details: i18n.T("hist.exited", t.FirstSeen.Format("2006-01-02 15:04:05"))})
 	}
 	// Удаляем старые треки завершённых процессов.
 	for k, t := range s.tracks {
@@ -310,14 +311,14 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 		if !s.systemSet[k] {
 			s.systemSet[k] = true
 			if sf.Risk >= model.RiskLow {
-				evs = append(evs, model.Event{Time: now, Type: model.EvSystem, Exe: sf.Path, Risk: sf.Risk, Details: sf.Title + ": " + sf.Path})
+				evs = append(evs, model.Event{Time: now, Type: model.EvSystem, Exe: sf.Path, Risk: sf.Risk, Details: i18n.T("hist.system", sf.Title, sf.Path)})
 			}
 		}
 	}
 
 	if first {
 		evs = append([]model.Event{{Time: now, Type: model.EvBaseline,
-			Details: fmt.Sprintf("Первое сканирование: зафиксировано процессов — %d. Далее отслеживаются изменения.", len(procs))}}, evs...)
+			Details: i18n.T("hist.baseline", len(procs))}}, evs...)
 		s.baseline = true
 	}
 	s.appendEvents(evs)
@@ -334,7 +335,10 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 	return evs
 }
 
-type fidTitle struct{ id, title string }
+type fidTitle struct {
+	id    string
+	title i18n.Msg
+}
 
 func activeFindings(p *model.Process) []fidTitle {
 	var out []fidTitle

@@ -2,14 +2,14 @@
 
 package tui
 
-import "errors"
+import "github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 
 // На остальных ОС терминальный интерфейс не поддерживается (приложение
 // рассчитано на Linux; macOS — для разработки и демо).
 
 type termState struct{}
 
-var errUnsupported = errors.New("терминальный интерфейс поддерживается только в Linux и macOS")
+var errUnsupported = i18n.Errorf("err.tui_unsupported")
 
 func isTerminal(int) bool             { return false }
 func makeRaw(int) (*termState, error) { return nil, errUnsupported }
