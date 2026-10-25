@@ -115,11 +115,17 @@ type App struct {
 
 	editing bool
 	help    bool
-	paused  bool
-	zoom    bool
-	msg     string
-	msgErr  bool
-	msgTime time.Time
+	// menu — открытое меню копирования (c); plain — показан текстовый
+	// режим (v), интерфейс не рисуется до нажатия клавиши; mouseOff —
+	// мышь выключена (m), работает выделение терминала.
+	menu     *copyMenu
+	plain    bool
+	mouseOff bool
+	paused   bool
+	zoom     bool
+	msg      string
+	msgErr   bool
+	msgTime  time.Time
 
 	rects   [nPanels + 1]rect // области панелей для мыши; [nPanels] — подробности
 	headers [nPanels]int      // сколько строк заголовка у списка
@@ -168,9 +174,9 @@ func (a *App) Run() error {
 		return err
 	}
 	// Альтернативный экран, скрытый курсор, мышь (SGR 1006).
-	io.WriteString(a.out, "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
+	io.WriteString(a.out, "\x1b[?1049h\x1b[?25l"+mouseOnSeq)
 	defer func() {
-		io.WriteString(a.out, "\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l")
+		io.WriteString(a.out, mouseOffSeq+"\x1b[?25h\x1b[?1049l")
 		st.restore()
 	}()
 
@@ -196,7 +202,11 @@ func (a *App) Run() error {
 	defer tick.Stop()
 
 	for {
-		a.draw()
+		// В текстовом режиме (v) на экране обычный текст для выделения:
+		// кадр не рисуется, пока не нажата клавиша.
+		if !a.plain {
+			a.draw()
+		}
 		select {
 		case ks, ok := <-keys:
 			if !ok {
@@ -507,6 +517,19 @@ func (a *App) handleKey(k Key) bool {
 	if k.Kind == KeyCtrlC {
 		return true
 	}
+	if a.plain {
+		// Любая клавиша (кроме событий мыши — она выключена) — назад.
+		if k.Kind != KeyMouse {
+			a.leavePlain()
+		}
+		return false
+	}
+	if a.menu != nil {
+		if k.Kind != KeyMouse {
+			a.menuKey(k)
+		}
+		return false
+	}
 	if a.editing {
 		a.editKey(k)
 		return false
@@ -647,7 +670,13 @@ func (a *App) runeKey(r rune, list panelID) bool {
 	case '+', 'z':
 		a.zoom = !a.zoom
 	case 'y':
-		a.copyCmdline()
+		a.copyMain()
+	case 'c':
+		a.openCopyMenu()
+	case 'v':
+		a.showPlain()
+	case 'm':
+		a.toggleMouse()
 	case 'Y':
 		a.copyJSON()
 	case '?':
@@ -756,37 +785,6 @@ func (a *App) mouse(k Key) {
 			}
 		}
 	}
-}
-
-// copyCmdline копирует командную строку выбранного процесса через
-// OSC 52 — работает и в SSH-сессии, если терминал это поддерживает.
-func (a *App) copyCmdline() {
-	if a.focus == pF2B {
-		// На панели fail2ban y копирует команду разбана.
-		if b, ok := a.selBan(); ok && b.UnbanCommand != "" {
-			a.osc52(b.UnbanCommand)
-			a.flash(a.tr("tui.flash.unban_copied"), false)
-		} else {
-			a.flash(a.tr("tui.flash.nothing"), true)
-		}
-		return
-	}
-	if a.focus == pAudit {
-		// На панели результатов аудита y копирует команду исправления.
-		if c, ok := a.selCheck(); ok && c.FixCommand != "" {
-			a.osc52(c.FixCommand)
-			a.flash(a.tr("tui.flash.fix_copied"), false)
-		} else {
-			a.flash(a.tr("tui.flash.nothing"), true)
-		}
-		return
-	}
-	if p, ok := a.selectedProc(); ok {
-		a.osc52(p.Cmdline)
-		a.flash(a.tr("tui.flash.cmd_copied"), false)
-		return
-	}
-	a.flash(a.tr("tui.flash.select_process"), true)
 }
 
 func (a *App) copyJSON() {

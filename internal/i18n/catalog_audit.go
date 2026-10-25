@@ -117,7 +117,6 @@ func init() {
 		"tui.audit.when":          {"Последняя проверка {0} ({1} мс) · r — проверить сейчас · y — копировать команду", "Last check {0} ({1} ms) · r — check now · y — copy the command"},
 		"tui.h.fix":               {"Команда исправления (y — копировать; выполняете вы)", "Fix command (y — copy; you run it)"},
 		"tui.flash.audit_started": {"Аудит запущен", "Audit started"},
-		"tui.flash.fix_copied":    {"Команда исправления скопирована", "Fix command copied"},
 
 		// Журнал службы.
 		"log.audit_done":         {"аудит конфигурации завершён", "configuration audit finished"},
