@@ -340,6 +340,12 @@ How updates are protected against failures:
 
 Backups are not deleted, even with `--purge`.
 
+**Updating to v0.3.0 (English language).** Run `update.sh` as usual; no migration is needed, and the existing history is kept. After the update:
+
+- the web dashboard opens in the browser language and has an **English / Русский** switch; in the terminal UI the language is switched with `L`;
+- the service log stays in Russian unless you add `SSG_LANG=en` to `/opt/serversecuritygo/.env` and run `systemctl restart serversecuritygo`;
+- if your own scripts read the JSON API, note that text fields may now be message objects (see [Language](#language)); `scan --format json` still outputs plain text.
+
 ### Complete removal
 
 This removes the application as if it had never been on the server: the service and its traces in systemd, the link `/usr/local/bin/serversecuritygo`, `/opt/serversecuritygo`, the history in `/var/lib/serversecuritygo` and the backups in `/var/backups/serversecuritygo`. This cannot be undone.
