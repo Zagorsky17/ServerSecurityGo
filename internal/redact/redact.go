@@ -29,7 +29,7 @@ var (
 	// KEY=value внутри строк (sh -c "PGPASSWORD=... psql"), в том числе
 	// составные имена вроде DB_PASSWORD, GITHUB_TOKEN.
 	kvSecret = regexp.MustCompile(`(?i)\b([a-z0-9_]*(?:password|passwd|pwd|secret|token|api_?key|access_?key)[a-z0-9_]*)=([^\s&;'"]+)`)
-	// Узнаваемые форматы ключей: AWS, GitHub, Slack, JWT, токен Telegram-бота.
+	// Узнаваемые форматы ключей: AWS, GitHub, Slack, JWT, токен бота вида «123456789:…».
 	knownTokens = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}\b|\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b|\b\d{8,10}:[A-Za-z0-9_-]{35}\b`)
 )
 

@@ -450,7 +450,7 @@ ls -d /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecurit
 | `text`（默认） | 终端 |
 | `json` | 脚本和 Ansible：带 `schema_version`、`verdict`、`incomplete` 的稳定结构 |
 | `html` | 服务器所有者：单个自包含文件（内置 CSS、无脚本、亮色和暗色主题），包含结论、概要、发现和建议 |
-| `md` | 工单、GitLab 或 Telegram：Markdown 表格，所有来自系统的内容都已转义 |
+| `md` | 文档或工单：Markdown 表格，所有来自系统的内容都已转义 |
 
 `--output 文件` 把报告写入权限为 600 的文件（报告中包含命令行和路径），而不是输出到屏幕。文件以原子方式替换；拒绝写入符号链接，而对 `/dev/null` 这类设备则直接写入：
 
@@ -532,7 +532,7 @@ API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`G
 - 默认情况下，Web 面板只监听 `127.0.0.1`。没有密码、`SSG_ALLOWED_HOSTS` 和 HTTPS 时，网络地址不会启动。
 - 未设置密码时，面板只对 `SSG_LOCAL_UIDS` 中列出的用户开放（默认是 root）：每个回环连接的所有者都会在 `/proc/net/tcp` 中查找，其他人一律收到 403。否则任何本地用户都能读取服务以 root 身份收集的内容：其他用户进程的路径、打开的文件和套接字，以及检查结果。
 - `Host` 请求头检查防御 DNS rebinding，CSRF 令牌保护每个 POST 请求，CSP 禁止内联脚本。进程名和命令行只以纯文本渲染，因此攻击者无法通过自己进程的名称注入 HTML。
-- 命令行中的密钥会在分析、存储和输出**之前**被遮蔽：`--password=…`、mysql 的 `-pPASSWORD`、URL 中的 `user:pass@`、`*_TOKEN=…`、AWS 和 GitHub 密钥、JWT、Telegram 令牌。环境变量的值永远不会进入历史。密码、cookie 和命令行永远不会写入日志。
+- 命令行中的密钥会在分析、存储和输出**之前**被遮蔽：`--password=…`、mysql 的 `-pPASSWORD`、URL 中的 `user:pass@`、`*_TOKEN=…`、AWS 和 GitHub 密钥、JWT、机器人令牌。环境变量的值永远不会进入历史。密码、cookie 和命令行永远不会写入日志。
 - 服务以 root 身份运行（否则看不到其他用户的进程），但权限受到削减：只有 `CAP_SYS_PTRACE` 和 `CAP_DAC_READ_SEARCH`。除 `/var/lib/serversecuritygo` 外，文件系统对服务是只读的；服务以 `NoNewPrivileges` 和系统调用过滤器运行，并受 `MemoryMax=256M` 和 `CPUQuota=50%` 限制。
 
 ## 参与贡献
