@@ -28,7 +28,7 @@ func init() {
 		"tui.event.finding":   {"Признак", "Indicator"},
 		"tui.event.listen":    {"Порт", "Port"},
 		"tui.event.system":    {"Система", "System"},
-		"tui.event.audit":     {"Настройки", "Settings"},
+		"tui.event.audit":     {"Аудит", "Audit"},
 
 		"tui.cols.susp":    {"РИСК    PID ПОЛЬЗ.   ИМЯ", "RISK    PID USER     NAME"},
 		"tui.cols.procs":   {"   PID ПОЛЬЗ.     CPU%    RAM РИСК ИМЯ", "   PID USER       CPU%    RAM RISK NAME"},
@@ -181,7 +181,7 @@ func init() {
 
 		"tui.help.title":      {"Клавиши · Esc — закрыть", "Keys · Esc — close"},
 		"tui.help.nav":        {"Навигация", "Navigation"},
-		"tui.help.panels":     {"перейти к панели (сводка, подозрительные, процессы, сеть, порты, настройки, fail2ban — если установлен, история, система)", "go to a panel (summary, suspicious, processes, network, ports, settings, fail2ban — if installed, history, system)"},
+		"tui.help.panels":     {"перейти к панели (сводка, подозрительные, процессы, сеть, порты, результаты аудита, fail2ban — если установлен, история, система)", "go to a panel (summary, suspicious, processes, network, ports, audit results, fail2ban — if installed, history, system)"},
 		"tui.help.next_panel": {"следующая / предыдущая панель", "next / previous panel"},
 		"tui.help.select":     {"выбор строки (в подробностях — прокрутка)", "select a row (scroll in details)"},
 		"tui.help.page":       {"страница вверх / вниз", "page up / down"},
