@@ -30,23 +30,11 @@ var (
 // между проверкой и чтением ничего не даёт. FileInfo возвращается и при
 // ErrNotRegular/ErrTooLarge — чтобы вызывающий мог объяснить причину.
 func ReadRegular(path string, max int64, follow bool) ([]byte, fs.FileInfo, error) {
-	f, err := openForRead(path, follow)
+	f, fi, err := Open(path, follow)
 	if err != nil {
-		// Открыть не удалось из-за типа (симлинк при follow = false):
-		// сообщаем об этом отдельно от «файла нет».
-		if fi, lerr := os.Lstat(path); lerr == nil && !fi.Mode().IsRegular() {
-			return nil, fi, ErrNotRegular
-		}
-		return nil, nil, err
+		return nil, fi, err
 	}
 	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, nil, err
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, fi, ErrNotRegular
-	}
 	if fi.Size() > max {
 		return nil, fi, ErrTooLarge
 	}
@@ -59,4 +47,30 @@ func ReadRegular(path string, max int64, follow bool) ([]byte, fs.FileInfo, erro
 		return nil, fi, ErrTooLarge
 	}
 	return data, fi, nil
+}
+
+// Open открывает обычный файл для потокового чтения — для журналов,
+// которые не читаются в память целиком. Проверки те же, что в
+// ReadRegular, кроме размера: ограничивать объём чтения должен
+// вызывающий. Файл закрывает вызывающий.
+func Open(path string, follow bool) (*os.File, fs.FileInfo, error) {
+	f, err := openForRead(path, follow)
+	if err != nil {
+		// Открыть не удалось из-за типа (симлинк при follow = false):
+		// сообщаем об этом отдельно от «файла нет».
+		if fi, lerr := os.Lstat(path); lerr == nil && !fi.Mode().IsRegular() {
+			return nil, fi, ErrNotRegular
+		}
+		return nil, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fi, ErrNotRegular
+	}
+	return f, fi, nil
 }

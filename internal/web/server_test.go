@@ -29,7 +29,12 @@ import (
 
 func newTestServer(t *testing.T, passwordHash string) *Server {
 	t.Helper()
-	tree := fakeproc.Demo(time.Now())
+	return newTreeServer(t, fakeproc.Demo(time.Now()), passwordHash)
+}
+
+// newTreeServer — панель над заданным поддельным деревом.
+func newTreeServer(t *testing.T, tree *fakeproc.Tree, passwordHash string) *Server {
+	t.Helper()
 	procRoot, hostRoot, err := tree.Write(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -638,5 +643,59 @@ func TestAuditAPI(t *testing.T) {
 	sa.opt.Audit = fa
 	if w := do(sa, "GET", "/api/audit", "127.0.0.1:8090", "", nil); w.Code != http.StatusUnauthorized {
 		t.Errorf("без входа: %d", w.Code)
+	}
+}
+
+// TestFail2banAPI: /api/fail2ban отдаёт баны и статистику демо-системы,
+// /api/status — краткую сводку; без fail2ban — только installed: false и
+// никакой сводки в статусе (раздел не показывается).
+func TestFail2banAPI(t *testing.T) {
+	s := newTestServer(t, "")
+	w := do(s, "GET", "/api/fail2ban", "127.0.0.1:8090", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("код %d: %s", w.Code, w.Body)
+	}
+	var rep model.Fail2banReport
+	if err := json.Unmarshal(w.Body.Bytes(), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Installed || !rep.Running || len(rep.Bans) == 0 || rep.Bans[0].UnbanCommand == "" || len(rep.Hourly) == 0 || len(rep.Jails) == 0 {
+		t.Errorf("ответ: installed=%v running=%v bans=%d hourly=%d", rep.Installed, rep.Running, len(rep.Bans), len(rep.Hourly))
+	}
+	w = do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil)
+	var st view.Status
+	if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil || st.Fail2ban == nil || !st.Fail2ban.Installed || st.Fail2ban.Banned != len(rep.Bans) {
+		t.Errorf("статус: %v %+v", err, st.Fail2ban)
+	}
+	hash, _ := HashPassword("correct horse battery")
+	if w := do(newTestServer(t, hash), "GET", "/api/fail2ban", "127.0.0.1:8090", "", nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("без входа: %d", w.Code)
+	}
+	if w := do(s, "GET", "/api/fail2ban", "evil.example", "", nil); w.Code == 200 {
+		t.Error("чужой Host пропущен")
+	}
+
+	// Сервер без fail2ban.
+	tree := fakeproc.Demo(time.Now())
+	for k := range tree.HostFiles {
+		if strings.Contains(k, "fail2ban") {
+			delete(tree.HostFiles, k)
+		}
+	}
+	procs := tree.Procs[:0]
+	for _, p := range tree.Procs {
+		if p.Comm != "fail2ban-server" {
+			procs = append(procs, p)
+		}
+	}
+	tree.Procs = procs
+	s = newTreeServer(t, tree, "")
+	w = do(s, "GET", "/api/fail2ban", "127.0.0.1:8090", "", nil)
+	if strings.TrimSpace(w.Body.String()) != `{"installed":false}` {
+		t.Errorf("без fail2ban: %s", w.Body)
+	}
+	w = do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil)
+	if strings.Contains(w.Body.String(), `"fail2ban"`) {
+		t.Errorf("сводка fail2ban в статусе без fail2ban: %s", w.Body)
 	}
 }

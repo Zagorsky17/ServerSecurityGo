@@ -72,6 +72,10 @@ func Demo(now time.Time) *Tree {
 			"etc/sudoers": 0o440, "etc/sudoers.d/90-cloud-init-users": 0o440, "etc/sudoers.d/deploy": 0o440},
 	}
 
+	for k, v := range demoFail2banFiles(now) {
+		t.HostFiles[k] = v
+	}
+
 	t.Procs = []*Proc{
 		// --- Легитимные процессы ---
 		{PID: 1, PPID: 0, Comm: "systemd", Args: []string{"/sbin/init"}, Exe: "/usr/lib/systemd/systemd", StartTicks: 5, UTime: 900, STime: 600, RSSKB: 12000,
@@ -81,6 +85,9 @@ func Demo(now time.Time) *Tree {
 		{PID: 410, PPID: 1, Comm: "systemd-journal", Args: []string{"/usr/lib/systemd/systemd-journald"}, Exe: "/usr/lib/systemd/systemd-journald", StartTicks: 200, RSSKB: 30000},
 		{PID: 650, PPID: 1, Comm: "sshd", Args: []string{"sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups"}, Exe: "/usr/sbin/sshd", StartTicks: 900, RSSKB: 8000,
 			FDs: map[int]string{0: "/dev/null", 3: sock(1001)}},
+		// fail2ban — скрипт Python: comm совпадает с именем скрипта.
+		{PID: 640, PPID: 1, Comm: "fail2ban-server", Args: []string{"/usr/bin/python3", "/usr/bin/fail2ban-server", "-xf", "start"}, Exe: "/usr/bin/python3.12",
+			StartTicks: 880, UTime: 3000, STime: 900, RSSKB: 42000, Threads: 5},
 		{PID: 700, PPID: 1, Comm: "cron", Args: []string{"/usr/sbin/cron", "-f", "-P"}, Exe: "/usr/sbin/cron", StartTicks: 950, RSSKB: 3000},
 		{PID: 720, PPID: 1, Comm: "nginx", Args: []string{"nginx: master process /usr/sbin/nginx -g daemon on; master_process on;"}, Exe: "/usr/sbin/nginx", StartTicks: 1000, RSSKB: 6000,
 			FDs: map[int]string{6: sock(1002), 7: sock(1003)}},
@@ -206,6 +213,7 @@ func (a *Animator) Step() {
 			_ = a.tree.UpdateStat(a.procRoot, p)
 		}
 	}
+	appendFail2ban(filepath.Join(filepath.Dir(a.procRoot), "host"), a.step, time.Now())
 	// Короткоживущий процесс: появляется на нечётных шагах, исчезает на
 	// чётных.
 	const tmpPID = 3701

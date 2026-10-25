@@ -45,6 +45,8 @@
   <button role="tab" data-tab="net"><span data-i18n="web.tab.net">Сеть</span> <span class="badge" id="cnt-net">0</span></button>
   <button role="tab" data-tab="ports"><span data-i18n="web.tab.ports">Открытые порты</span> <span class="badge" id="cnt-ports">0</span></button>
   <button role="tab" data-tab="audit"><span data-i18n="web.tab.audit">Настройки безопасности</span> <span class="badge" id="cnt-audit">0</span></button>
+  <!-- Вкладка fail2ban видна, только если fail2ban установлен (status.fail2ban). -->
+  <button role="tab" data-tab="fail2ban" id="tabbtn-fail2ban" class="hidden"><span data-i18n="web.tab.fail2ban">fail2ban</span> <span class="badge" id="cnt-fail2ban">0</span></button>
   <button role="tab" data-tab="history" data-i18n="web.tab.history">История</button>
   <button role="tab" data-tab="system"><span data-i18n="web.tab.system">Система</span> <span class="badge" id="cnt-system">0</span></button>
 </nav>
@@ -147,6 +149,46 @@
     <div class="table-wrap"><table id="t-audit"></table></div>
   </section>
 
+  <section id="tab-fail2ban" class="tab">
+    <p class="hint" data-i18n="web.f2b.hint">Блокировки fail2ban и интенсивность подбора паролей по журналу fail2ban. Перебор на публичном сервере идёт постоянно — это фон, а не признак взлома. Приложение ничего не банит и не разбанивает: команды выполняете вы.</p>
+    <div class="audit-head">
+      <b id="f2b-state"></b>
+      <span id="f2b-log" class="muted"></span>
+    </div>
+    <ul id="f2b-warn" class="plain warn-list"></ul>
+    <form class="filters" id="f2b-filters" autocomplete="off">
+      <select id="f2b-range" title="Период графика" data-i18n-title="web.f2b.range_title">
+        <option value="days" data-i18n="web.f2b.range_days">По дням</option>
+        <option value="hours" data-i18n="web.f2b.range_hours">По часам за 48 ч</option>
+      </select>
+      <input type="search" id="b-q" placeholder="IP, подсеть, jail" data-i18n-placeholder="web.f2b.q">
+      <button type="reset" class="secondary" data-i18n="web.btn.reset">Сбросить</button>
+    </form>
+    <div class="grid2">
+      <div class="card">
+        <h3 data-i18n="web.f2b.chart_found">Попытки подбора пароля</h3>
+        <div id="f2b-chart-found" class="chart" role="img"></div>
+        <h3 data-i18n="web.f2b.chart_bans">Баны</h3>
+        <div id="f2b-chart-bans" class="chart" role="img"></div>
+        <div id="f2b-axis" class="chart-axis muted"></div>
+        <dl id="f2b-totals" class="kv"></dl>
+      </div>
+      <div class="card">
+        <h3 data-i18n="web.f2b.jails">Включённые jail</h3>
+        <div class="table-wrap"><table id="t-f2b-jails"></table></div>
+      </div>
+    </div>
+    <h3 data-i18n="web.f2b.bans">Текущие баны</h3>
+    <p class="hint" data-i18n="web.f2b.bans_hint">Восстановлены по журналу. Точный список — команда fail2ban-client status sshd на сервере.</p>
+    <div class="table-wrap"><table id="t-f2b-bans"></table></div>
+    <div class="grid2">
+      <div><h3 data-i18n="web.f2b.top">Самые активные адреса</h3><div class="table-wrap"><table id="t-f2b-top"></table></div></div>
+      <div><h3 data-i18n="web.f2b.nets">Подсети с несколькими адресами</h3><div class="table-wrap"><table id="t-f2b-nets"></table></div></div>
+    </div>
+    <h3 data-i18n="web.f2b.recent">Последние события</h3>
+    <div class="table-wrap"><table id="t-f2b-recent"></table></div>
+  </section>
+
   <section id="tab-history" class="tab">
     <form class="filters" id="hist-filters" autocomplete="off">
       <input type="search" id="h-q" placeholder="PID, имя, подробности" data-i18n-placeholder="web.hist.q">
@@ -194,5 +236,6 @@
   </div>
 </div>
 <div id="toast" class="toast hidden"></div>
+<div id="chart-tip" class="chart-tip hidden" role="tooltip"></div>
 </body>
 </html>

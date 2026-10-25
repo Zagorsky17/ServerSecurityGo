@@ -83,6 +83,7 @@ Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
 		"err.env_lang":               {"SSG_LANG: ожидается ru или en, получено {0}", "SSG_LANG: expected ru or en, got {0}"},
 		"err.env_interval_min":       {"SSG_SCAN_INTERVAL: минимум 2s", "SSG_SCAN_INTERVAL: minimum is 2s"},
 		"err.env_audit_interval_min": {"SSG_AUDIT_INTERVAL: минимум 1m", "SSG_AUDIT_INTERVAL: minimum is 1m"},
+		"err.env_log_days":           {"SSG_AUTH_LOG_DAYS: от 1 до 365", "SSG_AUTH_LOG_DAYS: from 1 to 365"},
 		"err.tls_pair":               {"SSG_TLS_CERT и SSG_TLS_KEY задаются только вместе", "SSG_TLS_CERT and SSG_TLS_KEY must be set together"},
 		"err.proxy_needs_password":   {"SSG_TRUST_PROXY_TLS=true означает доступ через reverse proxy — задайте SSG_AUTH_PASSWORD_HASH (serversecuritygo hash-password)", "SSG_TRUST_PROXY_TLS=true means access through a reverse proxy — set SSG_AUTH_PASSWORD_HASH (serversecuritygo hash-password)"},
 		"err.network_needs_password": {"адрес {0} доступен из сети, но SSG_AUTH_PASSWORD_HASH не задан. Задайте пароль (serversecuritygo hash-password) или используйте 127.0.0.1 и SSH-туннель", "address {0} is reachable from the network, but SSG_AUTH_PASSWORD_HASH is not set. Set a password (serversecuritygo hash-password) or use 127.0.0.1 and an SSH tunnel"},

@@ -40,13 +40,14 @@ const (
 	pNet
 	pPorts
 	pAudit
+	pF2B // только при установленном fail2ban
 	pHist
 	pSys
 	nPanels
 )
 
 // panelKeys — ключи каталога для названий панелей.
-var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports", "tui.panel.audit", "tui.panel.hist", "tui.panel.sys"}
+var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports", "tui.panel.audit", "tui.panel.f2b", "tui.panel.hist", "tui.panel.sys"}
 
 // sortKeys — режимы сортировки списка процессов (ключи каталога).
 var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
@@ -94,6 +95,7 @@ type App struct {
 	socks      []model.Socket
 	ports      []model.Exposure
 	checks     []model.AuditCheck
+	bans       []model.Fail2banBan
 	events     []model.Event
 	system     []model.SystemFinding
 	byKey      map[string]view.Summary
@@ -258,6 +260,43 @@ func procMatches(l i18n.Lang, f string, p view.Summary) bool {
 	return matches(f, fields...)
 }
 
+// visible — панели, которые сейчас есть на экране, по порядку. Панель
+// fail2ban есть, только если fail2ban установлен; без неё номера
+// остальных панелей сдвигаются, и клавиши 1…N всегда идут подряд.
+func (a *App) visible() []panelID {
+	out := make([]panelID, 0, nPanels)
+	for p := pStatus; p < nPanels; p++ {
+		if p == pF2B && !a.hasF2B() {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// hasF2B — fail2ban установлен (данные о нём пришли).
+func (a *App) hasF2B() bool {
+	return a.data != nil && a.data.Fail2ban != nil && a.data.Fail2ban.Installed
+}
+
+// panelNum — номер панели на экране (и клавиша для перехода к ней).
+func (a *App) panelNum(p panelID) int {
+	for i, v := range a.visible() {
+		if v == p {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// cyclePanel переходит к следующей (d = 1) или предыдущей (d = -1)
+// видимой панели.
+func (a *App) cyclePanel(d int) {
+	vis := a.visible()
+	i := max(a.panelNum(a.focus)-1, 0)
+	a.focusPanel(vis[(i+d+len(vis))%len(vis)])
+}
+
 // rebuild пересобирает списки панелей после загрузки данных или смены
 // фильтра/сортировки.
 func (a *App) rebuild() {
@@ -326,6 +365,23 @@ func (a *App) rebuild() {
 			if matches(a.lists[pAudit].filter, c.ID, c.Group, c.Status, a.txt(c.Title), c.Severity.String(), i18n.Join(" ", c.Evidence...).In(a.lang)) {
 				a.checks = append(a.checks, c)
 			}
+		}
+	}
+	a.bans = a.bans[:0]
+	if f := a.data.Fail2ban; f != nil {
+		for _, b := range f.Bans {
+			if matches(a.lists[pF2B].filter, b.IP, b.Jail) {
+				a.bans = append(a.bans, b)
+			}
+		}
+	}
+	// fail2ban удалили, пока была открыта его панель.
+	if !a.hasF2B() {
+		if a.focus == pF2B {
+			a.focus, a.inMain = pSusp, false
+		}
+		if a.expanded == pF2B {
+			a.expanded = pSusp
 		}
 	}
 	a.events = a.events[:0]
@@ -421,6 +477,8 @@ func (a *App) count(p panelID) int {
 		return len(a.ports)
 	case pAudit:
 		return len(a.checks)
+	case pF2B:
+		return len(a.bans)
 	case pHist:
 		return len(a.events)
 	case pSys:
@@ -481,9 +539,9 @@ func (a *App) handleKey(k Key) bool {
 	case KeyEnd:
 		a.move(1 << 30)
 	case KeyTab:
-		a.focusPanel((a.focus + 1) % nPanels)
+		a.cyclePanel(1)
 	case KeyBackTab:
-		a.focusPanel((a.focus + nPanels - 1) % nPanels)
+		a.cyclePanel(-1)
 	case KeyRight, KeyEnter:
 		if !a.inMain {
 			a.inMain, a.mainOffset = true, 0
@@ -521,11 +579,13 @@ func (a *App) runeKey(r rune, list panelID) bool {
 	case 'h':
 		a.inMain = false
 	case ']':
-		a.focusPanel((a.focus + 1) % nPanels)
+		a.cyclePanel(1)
 	case '[':
-		a.focusPanel((a.focus + nPanels - 1) % nPanels)
-	case '1', '2', '3', '4', '5', '6', '7', '8':
-		a.focusPanel(panelID(r - '1'))
+		a.cyclePanel(-1)
+	case '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		if vis := a.visible(); int(r-'1') < len(vis) {
+			a.focusPanel(vis[r-'1'])
+		}
 	case '/':
 		if a.focus >= pSusp {
 			a.inMain = false
@@ -701,6 +761,16 @@ func (a *App) mouse(k Key) {
 // copyCmdline копирует командную строку выбранного процесса через
 // OSC 52 — работает и в SSH-сессии, если терминал это поддерживает.
 func (a *App) copyCmdline() {
+	if a.focus == pF2B {
+		// На панели fail2ban y копирует команду разбана.
+		if b, ok := a.selBan(); ok && b.UnbanCommand != "" {
+			a.osc52(b.UnbanCommand)
+			a.flash(a.tr("tui.flash.unban_copied"), false)
+		} else {
+			a.flash(a.tr("tui.flash.nothing"), true)
+		}
+		return
+	}
 	if a.focus == pAudit {
 		// На панели настроек y копирует команду исправления.
 		if c, ok := a.selCheck(); ok && c.FixCommand != "" {
@@ -733,6 +803,12 @@ func (a *App) copyJSON() {
 	case pAudit:
 		if c, ok := a.selCheck(); ok {
 			v = c
+		}
+	case pF2B:
+		if b, ok := a.selBan(); ok {
+			v = b
+		} else if a.data.Fail2ban != nil {
+			v = a.data.Fail2ban
 		}
 	case pHist:
 		if e, ok := a.selEvent(); ok {
@@ -794,6 +870,13 @@ func (a *App) selCheck() (model.AuditCheck, bool) {
 		return a.checks[c], true
 	}
 	return model.AuditCheck{}, false
+}
+
+func (a *App) selBan() (model.Fail2banBan, bool) {
+	if c := a.lists[pF2B].cursor; c < len(a.bans) {
+		return a.bans[c], true
+	}
+	return model.Fail2banBan{}, false
 }
 
 func (a *App) selEvent() (model.Event, bool) {

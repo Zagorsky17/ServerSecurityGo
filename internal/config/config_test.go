@@ -139,3 +139,19 @@ func TestAuditSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestLogDays(t *testing.T) {
+	if d := Default(); d.LogDays != 14 {
+		t.Errorf("по умолчанию: %d", d.LogDays)
+	}
+	t.Setenv("SSG_AUTH_LOG_DAYS", "30")
+	if c, err := FromEnv(); err != nil || c.LogDays != 30 {
+		t.Fatalf("%v %d", err, c.LogDays)
+	}
+	for _, v := range []string{"0", "366", "-1", "abc"} {
+		t.Setenv("SSG_AUTH_LOG_DAYS", v)
+		if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "SSG_AUTH_LOG_DAYS") {
+			t.Errorf("SSG_AUTH_LOG_DAYS=%s принят: %v", v, err)
+		}
+	}
+}

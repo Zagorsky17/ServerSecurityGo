@@ -49,6 +49,9 @@ type Config struct {
 	// учётные записи, sudo) при запуске и затем каждые AuditInterval.
 	AuditEnabled  bool
 	AuditInterval time.Duration
+	// LogDays — глубина разбора журналов (SSG_AUTH_LOG_DAYS): сейчас —
+	// журнала fail2ban.
+	LogDays int
 	// Lang — язык по умолчанию (SSG_LANG): вывод CLI, журнал и первое
 	// открытие панели. Пусто — определяется автоматически (локаль
 	// терминала, язык браузера).
@@ -81,6 +84,7 @@ func Default() Config {
 		LogLevel:        "info",
 		AuditEnabled:    true,
 		AuditInterval:   time.Hour,
+		LogDays:         14,
 	}
 }
 
@@ -212,6 +216,7 @@ func FromEnv() (Config, error) {
 	num("SSG_CPU_SUSTAIN_SCANS", &c.CPUSustainScans)
 	flt("SSG_MEM_THRESHOLD", &c.MemThreshold)
 	num("SSG_RECENT_DAYS", &c.RecentDays)
+	num("SSG_AUTH_LOG_DAYS", &c.LogDays)
 	str("SSG_ALLOWLIST_FILE", &c.AllowlistFile)
 	num("SSG_MAX_FILES_PER_PROCESS", &c.MaxFiles)
 	str("SSG_LOG_LEVEL", &c.LogLevel)
@@ -227,6 +232,9 @@ func FromEnv() (Config, error) {
 	}
 	if c.AuditInterval < time.Minute {
 		errs = append(errs, i18n.Errorf("err.env_audit_interval_min"))
+	}
+	if c.LogDays < 1 || c.LogDays > 365 {
+		errs = append(errs, i18n.Errorf("err.env_log_days"))
 	}
 	return c, errors.Join(errs...)
 }

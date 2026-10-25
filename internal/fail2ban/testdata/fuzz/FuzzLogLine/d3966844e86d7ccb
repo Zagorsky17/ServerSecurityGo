@@ -1,0 +1,2 @@
+go test fuzz v1
+string("2000-10-01 00:04:00fail2ban: A [0]Ban ::%\"00")

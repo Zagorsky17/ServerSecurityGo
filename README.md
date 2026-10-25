@@ -23,6 +23,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
 - [Features](#features)
   - [Open ports](#open-ports)
   - [Security settings](#security-settings)
+  - [fail2ban](#fail2ban)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
 - [Detection limitations](#detection-limitations)
@@ -113,17 +114,17 @@ serversecuritygo
 ↑↓ выбор  1-8/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
 ```
 
-On the left are eight panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, security settings, history and system checks. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
+On the left are eight panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, security settings, history and system checks. If fail2ban is installed, a ninth panel, fail2ban, appears before history, and the panels after it are renumbered. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
 
 | Keys | Action |
 |---|---|
-| `1`…`8`, `Tab` / `Shift+Tab` | switch panel |
+| `1`…`8` (`9` with fail2ban), `Tab` / `Shift+Tab` | switch panel |
 | `↑` `↓` / `j` `k`, `PgUp` `PgDn`, `g` `G` | select a row; scroll in the details |
 | `Enter` / `→`, `Esc` / `←` | go to the details and back |
 | `/` | filter the panel by name, PID, path, user, indicator or risk level |
 | `s`, `t`, `K` | sort processes (risk, CPU, memory, PID, name), tree view, kernel threads |
 | `r`, `p` | scan now (on the Settings panel — check settings now), pause auto-refresh |
-| `y`, `Y` | copy the command line (on the Settings panel — the fix command) or JSON to your computer's clipboard (OSC 52, works over SSH) |
+| `y`, `Y` | copy the command line (on the Settings panel — the fix command, on the fail2ban panel — the unban command) or JSON to your computer's clipboard (OSC 52, works over SSH) |
 | `+` | expand the active side to full screen |
 | `L` | interface language: English / Russian |
 | `?`, `q` | help, quit |
@@ -227,6 +228,30 @@ The sshd configuration is parsed the way sshd reads it: `Include` is expanded in
 
 **Changes.** The service remembers user names and UIDs, privileged group members and SHA-256 checksums of sudoers files in `/var/lib/serversecuritygo/audit-baseline.json` (mode 600, no passwords or file contents). A new user, a new member of a privileged group or a sudoers change makes `acct_new`, `acct_priv_groups` or `sudo_changed` fail for 24 hours, so the next run does not quietly clear the alert. If a file cannot be read during a run, its part of the baseline is kept, so nothing is reported as new afterwards. Every change of a result ("was pass, now fail", "fixed") is recorded in the History tab and in the log. A one-off `serversecuritygo audit` has nothing to compare with, so change checks are n/a there.
 
+### fail2ban
+
+The **fail2ban** tab (a panel in the terminal UI, `GET /api/fail2ban`) appears only when fail2ban is installed: there is `/etc/fail2ban` and `fail2ban-server` (or the dpkg package), or the `fail2ban-server` process is running. Without fail2ban there is no tab, no panel and no empty placeholder; the API answers `{"installed": false}`.
+
+What it shows, for the last `SSG_AUTH_LOG_DAYS` days (14 by default):
+
+- status: running or not, version, enabled jails with `maxretry`, `findtime`, `bantime` (and `bantime.increment`) and the file that enabled each jail; the configuration is read like fail2ban does it: `jail.conf`, `jail.d/*.conf`, `jail.local`, `jail.d/*.local`, with `[DEFAULT]` and `%(name)s` substitution;
+- current bans: IP, jail, since, until (or permanent), how many times the address has been banned (repeat offenders), and a ready-made `fail2ban-client set <jail> unbanip <IP>` command — the application never runs it;
+- password brute-force intensity: attempts (`Found` lines) and bans per day and per hour (charts in the dashboard, block-character sparklines in the terminal), totals for 24 hours and for the period, the peak hour;
+- the most active addresses and /24 subnets (/64 for IPv6) with several attacking addresses; addresses from `ignoreip` that keep trying are marked;
+- recent events: bans, unbans, restored and extended bans, fail2ban and jail restarts.
+
+Data comes only from files: `/var/log/fail2ban.log` (the path is taken from `logtarget` in `fail2ban.conf`/`fail2ban.local`) and its rotated copies, including `.gz`. `fail2ban-client` is not called. Rotated files are parsed once and the current file is read incrementally; the summary is recalculated only when the log, the configuration or the fail2ban state changes (and at most once a minute otherwise). Counters older than the period are dropped. Current bans are reconstructed from the log (a ban without a later unban, taking `bantime` into account; a fail2ban restart lifts all bans until `Restore Ban`); the exact list is `fail2ban-client status sshd`. IP addresses are personal data: they stay in the service's memory and are not written to `state.json` or the event history. The amount of data read is limited (256 MB per file, 200,000 distinct addresses in total), so the log of a heavily attacked server cannot exhaust the service's memory.
+
+Brute force on a public server never stops, so the statistics are informational and do not affect process scores. System checks:
+
+| ID | Level | When |
+|---|---|---|
+| `fail2ban_not_running` | MEDIUM | fail2ban is installed but `fail2ban-server` is not running: brute-force protection is off |
+| `fail2ban_sshd_disabled` | LOW | SSH is reachable from the internet, but no enabled jail protects it |
+| `fail2ban_log_unavailable` | INFO | the log is written to journald/syslog (`logtarget = SYSTEMD-JOURNAL`) or the file cannot be read |
+
+`fail2ban_sshd_disabled` can be suppressed with an allowlist rule for the `sshd` process.
+
 ## How risk is scored
 
 Each rule produces an **indicator**: a set of facts saying what was read and where, for example `/proc/3101/exe → /dev/shm/.x/kworkerds`. An indicator by itself makes no claim about maliciousness. It has a weight, a category, and a "strong" flag if it is rarely legitimate on its own.
@@ -265,7 +290,7 @@ All examples are included in the demo data (`serversecuritygo demo`) and in the 
 | Recently modified `authorized_keys` | recent SSH key change | LOW (system) |
 
 Full list of rule IDs for the allowlist:
-`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`, `exposed_database`, `exposed_docker_api`, `exposed_admin_panel`, `exposed_remote_access`, `exposed_file_sharing`, `exposed_info_service`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`, `fw_docker_bypass` and the `exposed_*` IDs above for dangerous public ports.
+`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`, `exposed_database`, `exposed_docker_api`, `exposed_admin_panel`, `exposed_remote_access`, `exposed_file_sharing`, `exposed_info_service`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`, `fw_docker_bypass`, the `exposed_*` IDs above for dangerous public ports, `fail2ban_not_running`, `fail2ban_sshd_disabled`, `fail2ban_log_unavailable`.
 
 ## Detection limitations
 
@@ -313,6 +338,7 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 | `SSG_LANG` | — (auto) | default language: `ru` or `en` |
 | `SSG_AUDIT_ENABLED` | `true` | security settings audit in the service |
 | `SSG_AUDIT_INTERVAL` | `1h` | how often to repeat the audit (minimum `1m`) |
+| `SSG_AUTH_LOG_DAYS` | `14` | how many days of the fail2ban log to analyze (1–365) |
 
 After editing `.env`, run `systemctl restart serversecuritygo`.
 
@@ -504,6 +530,7 @@ internal/
   detect/                 rules, risk scoring, explanations, allowlist, system checks
   exposure/               open ports: reachability, dangerous services, ufw, published Docker ports
   audit/                  security settings audit: sshd_config, accounts, sudoers; background runner
+  fail2ban/               fail2ban: jail configuration, log parsing (incl. .gz), current bans, brute-force statistics
   report/                 scan and audit reports: text, JSON, HTML, Markdown; exit codes
   safefile/               safe reading of files an attacker may control (no symlinks, FIFOs, size limit)
   redact/                 masking secrets in command lines
@@ -523,7 +550,7 @@ allowlist.example.json    allowlist example
 .github/workflows/        CI and releases
 ```
 
-API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/audit`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` and `POST /api/audit/run` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
+API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/audit`, `/api/fail2ban`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` and `POST /api/audit/run` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
 
 ## Security
 

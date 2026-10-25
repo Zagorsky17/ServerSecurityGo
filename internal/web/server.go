@@ -200,6 +200,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/tree", s.api(s.handleTree))
 	s.mux.HandleFunc("GET /api/connections", s.api(s.handleConnections))
 	s.mux.HandleFunc("GET /api/exposure", s.api(s.handleExposure))
+	s.mux.HandleFunc("GET /api/fail2ban", s.api(s.handleFail2ban))
 	s.mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	s.mux.HandleFunc("GET /api/system", s.api(s.handleSystem))
 	s.mux.HandleFunc("POST /api/rescan", s.api(s.handleRescan))
@@ -523,6 +524,22 @@ func (s *Server) handleExposure(w http.ResponseWriter, r *http.Request, _ sessio
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"time": snap.Time, "seq": snap.Seq, "exposure": view.Exposure(snap)})
+}
+
+// handleFail2ban отдаёт состояние fail2ban и статистику перебора паролей.
+// Если fail2ban не установлен — только {"installed": false}: панель и
+// терминал по этому флагу раздел не показывают.
+func (s *Server) handleFail2ban(w http.ResponseWriter, r *http.Request, _ session) {
+	snap := s.snapshot(w, r)
+	if snap == nil {
+		return
+	}
+	rep := view.Fail2ban(snap)
+	if !rep.Installed {
+		writeJSON(w, http.StatusOK, map[string]bool{"installed": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, _ session) {

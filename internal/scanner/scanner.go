@@ -20,6 +20,7 @@ import (
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/fail2ban"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
@@ -41,6 +42,9 @@ type Options struct {
 	Hostname string
 	// Demo — данные поддельные: предупреждения о правах неактуальны.
 	Demo bool
+	// LogDays — за сколько дней разбирать журнал fail2ban
+	// (SSG_AUTH_LOG_DAYS); 0 — fail2ban.DefaultDays.
+	LogDays int
 }
 
 // Scanner — периодический сканер процессов.
@@ -51,6 +55,7 @@ type Scanner struct {
 	seq    atomic.Uint64
 	rescan chan struct{}
 	scanMu sync.Mutex // сканирования не должны пересекаться
+	f2b    *fail2ban.Collector
 }
 
 // New создаёт сканер.
@@ -62,7 +67,7 @@ func New(opt Options) *Scanner {
 		opt.Logger = slog.Default()
 	}
 	opt.Detect.ScanInterval = opt.Interval
-	return &Scanner{opt: opt, rescan: make(chan struct{}, 1)}
+	return &Scanner{opt: opt, rescan: make(chan struct{}, 1), f2b: fail2ban.NewCollector()}
 }
 
 // Snapshot возвращает последний снимок (nil до первого сканирования).
@@ -126,6 +131,13 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	ctx := &detect.Context{Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
 	detect.Analyze(snap.Processes, ctx)
 	snap.System = append(detect.SystemChecks(s.opt.FS.HostRoot, start, s.opt.Detect), exposure.SystemFindings(snap.Exposure)...)
+	// fail2ban: из журнала читаются только новые строки, а сводка
+	// пересчитывается, лишь когда что-то изменилось (и не чаще раза в
+	// минуту без изменений).
+	var f2bFindings []model.SystemFinding
+	snap.Fail2ban, f2bFindings = s.f2b.Build(fail2ban.Input{HostRoot: s.opt.FS.HostRoot, Procs: snap.Processes, Exposure: snap.Exposure,
+		Now: start, Days: s.opt.LogDays, Allowed: s.opt.Detect.Allowed})
+	snap.System = append(snap.System, f2bFindings...)
 	events := hist.Record(start, snap.Processes, snap.System)
 
 	snap.Stats = stats(snap)
