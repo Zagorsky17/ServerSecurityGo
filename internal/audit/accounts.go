@@ -444,6 +444,15 @@ func (a *auditor) rootPath(c *model.AuditCheck) {
 		file   string
 		follow bool
 	}
+	// Строка с PATH показывается один раз, даже если в ней несколько
+	// плохих каталогов.
+	shownLine := map[string]bool{}
+	lineEv := func(file string, n int, line string) {
+		if k := fmt.Sprintf("%s:%d", file, n); !shownLine[k] {
+			shownLine[k] = true
+			addEv(c, at(file, n, strings.TrimSpace(line)))
+		}
+	}
 	for _, s := range []src{{"/etc/environment", true}, {"/etc/login.defs", true}, {"/root/.profile", false}, {"/root/.bashrc", false}} {
 		data, err := a.read(s.file, s.follow)
 		if err != nil {
@@ -468,12 +477,12 @@ func (a *auditor) rootPath(c *model.AuditCheck) {
 				switch {
 				case dir == "" || dir == "." || !strings.HasPrefix(dir, "/"):
 					c.Status = model.AuditFail
-					addEv(c, at(s.file, i+1, strings.TrimSpace(line)))
+					lineEv(s.file, i+1, line)
 					addEv(c, i18n.T("ev.audit_path_relative", dir))
 				default:
 					if fi, err := a.stat(dir); err == nil && fi.IsDir() && a.writableByOthers(fi) && fi.Mode()&os.ModeSticky == 0 {
 						c.Status = model.AuditFail
-						addEv(c, at(s.file, i+1, strings.TrimSpace(line)))
+						lineEv(s.file, i+1, line)
 						addEv(c, i18n.T("ev.audit_writable", dir, describe(fi)))
 					}
 				}

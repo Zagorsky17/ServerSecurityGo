@@ -9,6 +9,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
 
 // seg — кусок строки с одним стилем; line — строка из кусков.
@@ -863,34 +864,10 @@ func auditStyle(s string) Style {
 }
 
 // statusName — подпись статуса проверки.
-func (a *App) statusName(s string) string {
-	switch s {
-	case model.AuditPass:
-		return a.tr("audit.status.pass")
-	case model.AuditFail:
-		return a.tr("audit.status.fail")
-	case model.AuditWarn:
-		return a.tr("audit.status.warn")
-	case model.AuditInfo:
-		return a.tr("audit.status.info")
-	case model.AuditNA:
-		return a.tr("audit.status.na")
-	}
-	return a.tr("audit.status.unknown")
-}
+func (a *App) statusName(s string) string { return a.txt(view.AuditStatusText(s)) }
 
 // groupName — подпись группы проверок.
-func (a *App) groupName(g string) string {
-	switch g {
-	case model.AuditGroupSSH:
-		return a.tr("audit.group.ssh")
-	case model.AuditGroupAccounts:
-		return a.tr("audit.group.accounts")
-	case model.AuditGroupSudo:
-		return a.tr("audit.group.sudo")
-	}
-	return g
-}
+func (a *App) groupName(g string) string { return a.txt(view.AuditGroupText(g)) }
 
 // auditHeader — когда была проверка и сколько пройдено.
 func (a *App) auditHeader(b *lb) {

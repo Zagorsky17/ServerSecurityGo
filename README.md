@@ -443,6 +443,38 @@ A one-off check of the security settings (SSH, accounts, sudo); `--all` also sho
 /opt/serversecuritygo/bin/serversecuritygo audit --format json > audit.json
 ```
 
+**Report formats.** `scan` and `audit` take `--format`:
+
+| Format | For |
+|---|---|
+| `text` (default) | the terminal |
+| `json` | scripts and Ansible: a stable schema with `schema_version`, `verdict`, `incomplete` |
+| `html` | the server owner: one self-contained file (built-in CSS, no scripts, light and dark themes) with the verdict, summary, findings and recommendations |
+| `md` | a ticket, GitLab or Telegram: Markdown tables, everything taken from the system is escaped |
+
+`--output FILE` writes the report to a file with mode 600 (the report contains command lines and paths) instead of the screen. The file is replaced atomically; a symbolic link is refused, and a device such as `/dev/null` is written to directly:
+
+```bash
+serversecuritygo audit --format html --output /root/audit.html
+serversecuritygo scan --format md --output /root/scan.md
+```
+
+**Exit codes** let you run the checks from cron, CI, Ansible or monitoring:
+
+| Code | Meaning |
+|---|---|
+| `0` | no findings of the `--fail-on` level or higher |
+| `1` | there are findings of the `--fail-on` level or higher (default `HIGH`) |
+| `2` | error: `/proc` cannot be read at all, broken configuration, wrong flag |
+| `3` | no such findings, but the check is incomplete: some data could not be read (run as root) |
+
+`--fail-on` takes `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` or `none`. Findings take precedence over incompleteness: code 1 is returned even if some data was not read. `--fail-on none` makes the code independent of findings (only 2 and 3 remain). **Note for existing scripts:** `scan` used to always exit with 0; now it exits with 1 when there are HIGH or CRITICAL findings — add `--fail-on none` where the old behavior is needed. For `scan`, the level is the highest risk of a process or system finding (`--min-risk` only filters the output); for `audit`, the highest severity of a "fail" or "warning" check.
+
+```bash
+# daily at 6:00: the audit report into a file, a mail from cron if something is wrong
+0 6 * * * /opt/serversecuritygo/bin/serversecuritygo audit --fail-on HIGH --format md --output /root/audit.md || echo "security settings need attention: /root/audit.md"
+```
+
 Demo mode with fictional data runs on Linux and macOS:
 
 ```bash
@@ -472,6 +504,7 @@ internal/
   detect/                 rules, risk scoring, explanations, allowlist, system checks
   exposure/               open ports: reachability, dangerous services, ufw, published Docker ports
   audit/                  security settings audit: sshd_config, accounts, sudoers; background runner
+  report/                 scan and audit reports: text, JSON, HTML, Markdown; exit codes
   safefile/               safe reading of files an attacker may control (no symlinks, FIFOs, size limit)
   redact/                 masking secrets in command lines
   history/                process history and event log (state.json, events.jsonl)

@@ -296,7 +296,8 @@ func TestAccounts(t *testing.T) {
 	if c := expect(t, m, "acct_home_perms", model.AuditFail); !strings.Contains(evText(c), "/home/deploy") {
 		t.Errorf("домашние каталоги: %s", evText(c))
 	}
-	if c := expect(t, m, "acct_root_path", model.AuditFail); !strings.Contains(evText(c), "/etc/environment:1") || !strings.Contains(evText(c), "/opt/tools") {
+	if c := expect(t, m, "acct_root_path", model.AuditFail); !strings.Contains(evText(c), "/etc/environment:1") || !strings.Contains(evText(c), "/opt/tools") ||
+		strings.Count(evText(c), "/root/.profile:1") != 1 {
 		t.Errorf("PATH: %s", evText(c))
 	}
 	expect(t, m, "acct_new", model.AuditNA) // разовый запуск без базовой линии

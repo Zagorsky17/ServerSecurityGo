@@ -10,11 +10,15 @@ func init() {
   serversecuritygo                                  терминальный интерфейс (то же, что tui)
   serversecuritygo tui [--local] [--socket PATH]    терминальный интерфейс
   serversecuritygo serve [--env-file PATH]          запустить сканер и веб-панель
-  serversecuritygo scan [--format table|json] [--min-risk LOW] [--env-file PATH]
-  serversecuritygo audit [--format table|json] [--env-file PATH]   проверка настроек SSH, учётных записей, sudo
+  serversecuritygo scan [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--min-risk LOW] [--env-file PATH]
+  serversecuritygo audit [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--all] [--env-file PATH]
+                                                    проверка настроек SSH, учётных записей, sudo
   serversecuritygo demo [--tui] [--listen ADDR]     демонстрационные данные (веб или терминал)
   serversecuritygo hash-password                    хеш пароля для SSG_AUTH_PASSWORD_HASH
   serversecuritygo version
+
+Коды выхода scan и audit: 0 — нет находок уровня --fail-on и выше, 1 — есть,
+2 — ошибка, 3 — находок нет, но проверка неполная (нет прав на часть данных).
 
 Настройки задаются переменными окружения SSG_* (см. .env.example).
 Язык: SSG_LANG=ru или SSG_LANG=en (по умолчанию — по локали терминала).
@@ -24,11 +28,15 @@ Usage:
   serversecuritygo                                  terminal interface (same as tui)
   serversecuritygo tui [--local] [--socket PATH]    terminal interface
   serversecuritygo serve [--env-file PATH]          run the scanner and the web panel
-  serversecuritygo scan [--format table|json] [--min-risk LOW] [--env-file PATH]
-  serversecuritygo audit [--format table|json] [--env-file PATH]   check SSH, account and sudo settings
+  serversecuritygo scan [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--min-risk LOW] [--env-file PATH]
+  serversecuritygo audit [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--all] [--env-file PATH]
+                                                    check SSH, account and sudo settings
   serversecuritygo demo [--tui] [--listen ADDR]     demo data (web or terminal)
   serversecuritygo hash-password                    password hash for SSG_AUTH_PASSWORD_HASH
   serversecuritygo version
+
+Exit codes of scan and audit: 0 — no findings of the --fail-on level or higher, 1 — there are,
+2 — error, 3 — no findings, but the check is incomplete (no permission to read some data).
 
 Settings are taken from SSG_* environment variables (see .env.example).
 Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
@@ -42,7 +50,7 @@ Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
 		"cli.flag.local":           {"не подключаться к службе, сканировать самостоятельно", "do not connect to the service, scan locally"},
 		"cli.flag.interval_local":  {"период сканирования в локальном режиме", "scan interval in local mode"},
 		"cli.flag.refresh":         {"период обновления экрана", "screen refresh interval"},
-		"cli.flag.format":          {"формат вывода: table или json", "output format: table or json"},
+		"cli.flag.format":          {"формат отчёта: text, json, html или md", "report format: text, json, html or md"},
 		"cli.flag.all_checks":      {"показывать и пройденные проверки", "show passed checks too"},
 		"cli.audit.header":         {"Настройки безопасности: пройдено {0} из {1} · опасно {2} · требует внимания {3} · советов {4}", "Security settings: {0} of {1} passed · fail {2} · warning {3} · tips {4}"},
 		"cli.audit.footer":         {"Изменения (новые пользователи, правка sudoers) отслеживает служба. Команды исправления только предлагаются — выполните их сами, проверив вход по ключу в отдельной сессии.", "The service tracks changes (new users, sudoers edits). Fix commands are only suggestions — run them yourself after checking key login in a separate session."},

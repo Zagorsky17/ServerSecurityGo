@@ -523,7 +523,11 @@ func (a *auditor) sudoChecks() []model.AuditCheck {
 				if p, fi, ok := a.writableChain(c.Path); ok {
 					writable.Status = model.AuditFail
 					specEv(&writable, si, spec)
-					addEv(&writable, i18n.T("ev.audit_writable", p, describe(fi)))
+					// Один каталог на пути у нескольких команд — один факт.
+					if !seenWritable["dir:"+p] {
+						seenWritable["dir:"+p] = true
+						addEv(&writable, i18n.T("ev.audit_writable", p, describe(fi)))
+					}
 				}
 			}
 		}

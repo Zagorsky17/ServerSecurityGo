@@ -31,9 +31,21 @@ jobs:
       - name: Разовое сканирование настоящей системы
         run: |
           go build -o /tmp/ssg ./cmd/serversecuritygo
-          sudo /tmp/ssg scan --min-risk INFO | head -40
-          sudo /tmp/ssg scan --format json --min-risk INFO > /tmp/scan.json
-          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
+          # --fail-on none: находки на раннере CI (сборки из /tmp) не должны
+          # ронять шаг; коды выхода проверяет отдельный тест.
+          sudo /tmp/ssg scan --min-risk INFO --fail-on none | head -40
+          sudo /tmp/ssg scan --format json --min-risk INFO --fail-on none > /tmp/scan.json
+          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
+      - name: Аудит настроек настоящей системы
+        run: |
+          sudo /tmp/ssg audit --all --fail-on none | head -80
+          sudo /tmp/ssg audit --format json --fail-on none > /tmp/audit.json
+          python3 -c "import json; d=json.load(open('/tmp/audit.json')); assert d['schema_version']==1 and len(d['checks'])>20 and d['summary']['unknown']==0, d['summary']; print('проверок:', len(d['checks']), d['summary'])"
+          sudo /tmp/ssg audit --format html --output /tmp/audit.html --fail-on none
+          test "$(sudo stat -c %a /tmp/audit.html)" = 600
+          # Код выхода: ошибка неверного флага — 2.
+          set +e; /tmp/ssg audit --fail-on bogus; code=$?; set -e
+          test "$code" = 2
       - name: Кросс-сборка
         run: make build-linux
       - name: shellcheck

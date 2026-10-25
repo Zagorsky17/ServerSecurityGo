@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="{{.Lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Отчёт самодостаточный: без скриптов и внешних ресурсов. CSP запрещает
+     всё, кроме встроенного CSS, даже если в данные попадёт разметка. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>{{.Title}}</title>
+<style>
+:root { --bg:#f5f6f8; --panel:#fff; --text:#1d2330; --muted:#677085; --border:#dde1e8; --code:#f0f2f6;
+  --info:#7a8396; --low:#2f7d4f; --medium:#b07a00; --high:#d0571b; --critical:#c4213a;
+  --info-bg:#eef0f4; --low-bg:#e4f4ea; --medium-bg:#fdf1d6; --high-bg:#fde6da; --critical-bg:#fbdde2; }
+@media (prefers-color-scheme: dark) { :root { --bg:#12151c; --panel:#1b1f29; --text:#e3e6ee; --muted:#9098aa; --border:#2c3240; --code:#232837;
+  --info:#9aa2b4; --low:#57c785; --medium:#f0b73a; --high:#ff8a4c; --critical:#ff5a72;
+  --info-bg:#262b37; --low-bg:#17301f; --medium-bg:#382b0d; --high-bg:#3d2215; --critical-bg:#40161f; } }
+html, body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+main { max-width:1400px; margin:0 auto; padding:16px; }
+h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:24px 0 8px; }
+.muted { color:var(--muted); }
+.verdict { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:12px 0; padding:12px; background:var(--panel); border:1px solid var(--border); border-radius:8px; }
+.notes { margin:8px 0; padding:8px 12px; border-radius:8px; background:var(--medium-bg); }
+.wrap { overflow-x:auto; background:var(--panel); border:1px solid var(--border); border-radius:8px; }
+table { border-collapse:collapse; width:100%; }
+th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+th { color:var(--muted); font-size:12.5px; font-weight:600; white-space:nowrap; }
+td { word-break:break-word; min-width:5em; }
+ul { margin:0; padding-left:16px; }
+pre { background:var(--code); padding:6px 8px; border-radius:6px; white-space:pre-wrap; word-break:break-all; margin:4px 0 0; font-size:12.5px; }
+.b { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11.5px; font-weight:700; white-space:nowrap; }
+.risk-INFO, .st-info, .st-na, .st-unknown { color:var(--info); background:var(--info-bg); }
+.risk-LOW, .st-pass { color:var(--low); background:var(--low-bg); }
+.risk-MEDIUM, .st-warn { color:var(--medium); background:var(--medium-bg); }
+.risk-HIGH { color:var(--high); background:var(--high-bg); }
+.risk-CRITICAL, .st-fail { color:var(--critical); background:var(--critical-bg); }
+footer { margin:24px 0 8px; color:var(--muted); font-size:12.5px; }
+</style>
+</head>
+<body>
+<main>
+<h1>{{.Title}}</h1>
+<div class="muted">{{.Subtitle}}</div>
+<div class="verdict"><span class="b {{.Class}}">{{.Verdict}}</span><span>{{.Summary}}</span></div>
+{{if .Notes}}<div class="notes">{{range .Notes}}<div>⚠ {{.}}</div>{{end}}</div>{{end}}
+{{range .Sections}}
+<h2>{{.Title}}</h2>
+{{if .Rows}}
+<div class="wrap"><table>
+<thead><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr></thead>
+<tbody>
+{{range .Rows}}<tr>{{range .}}<td>{{if .Badge}}<span class="b {{.Badge}}">{{.Text}}</span>{{else}}{{.Text}}{{end}}{{if .List}}<ul>{{range .List}}<li>{{.}}</li>{{end}}</ul>{{end}}{{if .Code}}<pre>{{.Code}}</pre>{{end}}</td>{{end}}</tr>
+{{end}}
+</tbody>
+</table></div>
+{{else}}<p class="muted">{{.Empty}}</p>{{end}}
+{{end}}
+<footer>{{.Footer}}</footer>
+</main>
+</body>
+</html>
