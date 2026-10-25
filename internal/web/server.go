@@ -188,6 +188,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/process/{key}", s.api(s.handleProcess))
 	s.mux.HandleFunc("GET /api/tree", s.api(s.handleTree))
 	s.mux.HandleFunc("GET /api/connections", s.api(s.handleConnections))
+	s.mux.HandleFunc("GET /api/exposure", s.api(s.handleExposure))
 	s.mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	s.mux.HandleFunc("GET /api/system", s.api(s.handleSystem))
 	s.mux.HandleFunc("POST /api/rescan", s.api(s.handleRescan))
@@ -495,6 +496,16 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request, _ ses
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sockets": snap.Sockets})
+}
+
+// handleExposure отдаёт внешнюю поверхность атаки: слушающие порты с
+// областью видимости, узнанные сервисы, состояние ufw и порты Docker.
+func (s *Server) handleExposure(w http.ResponseWriter, r *http.Request, _ session) {
+	snap := s.snapshot(w, r)
+	if snap == nil {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"time": snap.Time, "seq": snap.Seq, "exposure": view.Exposure(snap)})
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, _ session) {

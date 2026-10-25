@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
@@ -117,9 +118,14 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 
 	hist := s.opt.History
 	hist.Observe(start, snap.Processes)
-	ctx := &detect.Context{Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start}
+	// Поверхность атаки оценивается до анализа процессов: правило
+	// exposure берёт из неё опасные публичные порты.
+	snap.Exposure = exposure.Build(exposure.Input{Procs: snap.Processes, Sockets: snap.Sockets, Addrs: s.opt.FS.LocalAddrs(),
+		HostRoot: s.opt.FS.HostRoot, Allowed: s.opt.Detect.Allowed})
+	snap.Warnings = append(snap.Warnings, snap.Exposure.Warnings...)
+	ctx := &detect.Context{Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
 	detect.Analyze(snap.Processes, ctx)
-	snap.System = detect.SystemChecks(s.opt.FS.HostRoot, start, s.opt.Detect)
+	snap.System = append(detect.SystemChecks(s.opt.FS.HostRoot, start, s.opt.Detect), exposure.SystemFindings(snap.Exposure)...)
 	events := hist.Record(start, snap.Processes, snap.System)
 
 	snap.Stats = stats(snap)
@@ -138,6 +144,19 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	s.snap = snap
 	s.mu.Unlock()
 	return snap, nil
+}
+
+// exposedByInode — опасные публичные порты по inode сокета (для правила
+// exposure). Указатели ссылаются на элементы rep.Entries, которые после
+// построения отчёта не меняются.
+func exposedByInode(rep *model.ExposureReport) map[uint64]*model.Exposure {
+	m := map[uint64]*model.Exposure{}
+	for i := range rep.Entries {
+		if e := &rep.Entries[i]; e.Inode != 0 && e.FindingID != "" {
+			m[e.Inode] = e
+		}
+	}
+	return m
 }
 
 func pidMap(procs []*model.Process) map[int]*model.Process {
@@ -401,6 +420,7 @@ func stats(snap *model.Snapshot) model.Stats {
 	for _, r := range []model.Risk{model.RiskInfo, model.RiskLow, model.RiskMedium, model.RiskHigh, model.RiskCritical} {
 		st.ByRisk[r.String()] = 0
 	}
+	st.PublicPorts, st.DangerousPorts = exposure.Stats(snap.Exposure)
 	for _, p := range snap.Processes {
 		if p.Kernel {
 			st.Kernel++

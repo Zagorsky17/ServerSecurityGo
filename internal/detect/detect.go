@@ -51,6 +51,9 @@ type Context struct {
 	ByPID    map[int]*model.Process
 	Counters func(key string) Counters
 	Now      time.Time
+	// Exposed — опасные публичные порты (exposure.Build) по inode сокета.
+	// nil — доступность портов не оценивалась.
+	Exposed map[uint64]*model.Exposure
 }
 
 func (c *Context) parent(p *model.Process) *model.Process {
@@ -92,6 +95,7 @@ var Rules = []Rule{
 	ruleMemSustained,
 	ruleLDPreload,
 	ruleRootFromWritable,
+	ruleExposure,
 	ruleInfoContainer,
 	ruleInfoListen,
 	ruleInfoAccess,
@@ -234,7 +238,7 @@ func Score(findings []model.Finding) (int, model.Risk, i18n.Msg) {
 var categories = map[string]bool{
 	model.CatLocation: true, model.CatIntegrity: true, model.CatMasquerade: true, model.CatChain: true,
 	model.CatNetwork: true, model.CatContent: true, model.CatBehavior: true, model.CatEnvironment: true,
-	model.CatPrivilege: true, model.CatPersistence: true, model.CatInfo: true,
+	model.CatPrivilege: true, model.CatPersistence: true, model.CatExposure: true, model.CatInfo: true,
 }
 
 // CategoryTitle — переводимое название категории; неизвестная
@@ -282,6 +286,11 @@ type AllowRule struct {
 	Rules   []string `json:"rules"` // ID правил; пусто — все правила
 	Comment string   `json:"comment"`
 }
+
+// Allowed сообщает, что правило allowlist подавляет признак ruleID для
+// процесса p. Нужен и вне пакета: так же подавляются системные находки
+// о доступности порта, который держит этот процесс.
+func (cfg Config) Allowed(p *model.Process, ruleID string) bool { return cfg.allowed(p, ruleID) }
 
 func (cfg Config) allowed(p *model.Process, ruleID string) bool {
 	for _, a := range cfg.Allow {

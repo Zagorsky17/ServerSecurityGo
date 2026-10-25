@@ -41,8 +41,23 @@ const riskBadge = (r) => h('span', { class: 'risk risk-' + r }, r);
 // Названия типов событий и категорий признаков — из общего каталога
 // (event.<тип>, cat.<категория>), неизвестное значение выводится как есть.
 const EVENT_TYPES = ['baseline', 'started', 'exited', 'changed', 'risk_up', 'risk_down', 'finding', 'listen', 'system'];
-const CATEGORIES = ['location', 'integrity', 'masquerade', 'chain', 'network', 'content', 'behavior', 'environment', 'privilege', 'persistence', 'info'];
+const CATEGORIES = ['location', 'integrity', 'masquerade', 'chain', 'network', 'content', 'behavior', 'environment', 'privilege', 'persistence', 'exposure', 'info'];
 const eventName = (t) => (EVENT_TYPES.includes(t) ? tr('event.' + t) : t);
+
+// Подписи доступности порта, состояния ufw и межсетевого экрана для порта.
+// Явные вызовы tr('…'), а не склейка ключа: keys_test сверяет их с каталогом.
+const SCOPE_NAMES = {
+  public: () => tr('tui.scope.public'), private: () => tr('tui.scope.private'),
+  loopback: () => tr('tui.scope.loopback'), netns: () => tr('tui.scope.netns'),
+};
+const FW_NAMES = {
+  open: () => tr('tui.fw.open'), filtered: () => tr('tui.fw.filtered'), bypassed: () => tr('tui.fw.bypassed'),
+};
+const UFW_NAMES = {
+  absent: () => tr('tui.ufw.absent'), inactive: () => tr('tui.ufw.inactive'), active: () => tr('tui.ufw.active'),
+};
+const label = (names, v) => (names[v] ? names[v]() : (v || '—'));
+const endpoint = (addr, port) => (addr.includes(':') ? `[${addr}]:${port}` : `${addr}:${port}`);
 const categoryName = (c) => (CATEGORIES.includes(c) ? tr('cat.' + c) : c);
 
 function fmtBytes(n) {
@@ -97,7 +112,7 @@ async function copyText(text) {
 // ---------------------------------------------------------------------
 
 const state = {
-  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null,
+  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null,
   tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
 
@@ -247,6 +262,47 @@ function renderNet() {
     { t: tr('tui.k.user'), v: (s) => s.user || '', r: (s) => s.user || '' },
     { t: 'Netns', v: (s) => s.netns || '', r: (s) => s.netns || '', c: 'mono' },
   ], rows, (s) => s.procKey && openCard(s.procKey));
+}
+
+function renderPorts() {
+  const x = state.exposure;
+  if (!x) return;
+  const addrs = (x.addrs || []).filter((a) => a.scope !== 'loopback');
+  $('ports-addrs').replaceChildren(...(addrs.length ? addrs.map((a) => h('li', { class: 'mono' }, a.addr + (a.iface ? ` (${a.iface})` : '') + ' — ' + label(SCOPE_NAMES, a.scope)))
+    : [h('li', { class: 'muted' }, tr('web.ports.no_addrs'))]));
+  const fw = x.firewall || {};
+  $('ports-fw').replaceChildren(
+    ...kv('ufw', label(UFW_NAMES, fw.ufw) + (fw.ufw === 'active' ? ' · ' + tr('tui.ufw.policy', fw.defaultInput, fw.rules) : '')),
+    ...kv('Docker', (x.bindings || []).length ? tr('tui.ports.bindings', x.bindings.length) : tr('tui.ports.no_bindings')),
+  );
+
+  const q = $('p-q').value.trim().toLowerCase();
+  const scope = $('p-scope').value;
+  const risky = $('p-risky').checked;
+  const rows = (x.entries || []).filter((e) => {
+    if (scope && e.scope !== scope) return false;
+    if (risky && (riskNum(e.risk) < 1 || e.suppressed)) return false;
+    if (q) {
+      const hay = [e.proto, e.addr, e.port, e.service && e.service.name, e.procName, e.pid, e.user, e.exe, e.container,
+        e.docker && e.docker.image].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  if (!state.sort['t-ports']) state.sort['t-ports'] = { col: 0, dir: -1 };
+  renderTable('t-ports', [
+    { t: tr('web.col.risk'), v: (e) => riskNum(e.risk) * 10 + (e.scope === 'public' ? 1 : 0), r: (e) => h('span', null, riskBadge(e.risk), e.suppressed ? h('span', { class: 'tag' }, tr('tui.suppressed')) : ''), desc: true },
+    { t: tr('tui.k.proto'), v: (e) => e.proto, r: (e) => e.proto },
+    { t: tr('tui.k.address'), v: (e) => e.port, r: (e) => endpoint(e.addr, e.port), c: 'mono' },
+    { t: tr('tui.k.reach'), v: (e) => e.scope, r: (e) => h('span', null, label(SCOPE_NAMES, e.scope),
+      e.allInterfaces ? h('span', { class: 'tag', title: tr('tui.all_ifaces_title') }, tr('tui.all_ifaces')) : '',
+      e.firewall ? h('span', { class: 'tag' + (e.firewall === 'bypassed' ? ' strong' : '') }, label(FW_NAMES, e.firewall)) : '') },
+    { t: tr('tui.k.service'), v: (e) => (e.service ? e.service.name : ''), r: (e) => (e.service ? e.service.name : '—') },
+    { t: tr('tui.title.process'), v: (e) => e.procName || '', r: (e) => (e.pid ? `${e.procName} (${e.pid}, ${e.user})` : h('span', { class: 'muted' }, e.docker ? 'docker' : tr('tui.unknown'))) },
+    { t: tr('tui.k.container'), v: (e) => e.container || '', r: (e) => (e.docker ? `${e.container} (${e.docker.image || '?'}) → ${e.docker.containerPort}` : (e.container || '')), c: 'wrap' },
+    { t: tr('tui.h.facts'), v: () => 0, r: (e) => h('ul', { class: 'findings' }, (e.evidence || []).slice(1).map((m) => h('li', null, tx(m)))), c: 'wrap' },
+    { t: tr('tui.h.recommendation'), v: () => 0, r: (e) => tx(e.recommendation), c: 'wrap' },
+  ], rows, (e) => e.procKey && openCard(e.procKey), tr('web.ports.empty'));
 }
 
 function renderHistory() {
@@ -481,6 +537,8 @@ function renderSummary() {
     ...['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((r) => h('div', { class: 'stat', onclick: () => { $('f-risk').value = r; switchTab('suspicious'); renderAll(); } },
       h('div', { class: 'num' }, badge(by[r] || 0, r)), h('div', { class: 'lbl' }, r))),
     h('div', { class: 'stat', onclick: () => switchTab('net') }, h('div', { class: 'num' }, s.stats.sockets), h('div', { class: 'lbl' }, tr('web.stat.sockets'))),
+    h('div', { class: 'stat', onclick: () => switchTab('ports') }, h('div', { class: 'num' }, s.stats.publicPorts || 0,
+      s.stats.dangerousPorts ? h('span', { class: 'risk risk-HIGH', title: tr('web.stat.dangerous_title') }, ' ⚠ ' + s.stats.dangerousPorts) : ''), h('div', { class: 'lbl' }, tr('web.stat.public_ports'))),
     h('div', { class: 'stat', onclick: () => switchTab('system') }, h('div', { class: 'num' }, s.systemFindings || 0), h('div', { class: 'lbl' }, tr('web.stat.system'))),
   );
   const banner = $('banner');
@@ -492,6 +550,7 @@ function renderSummary() {
   $('cnt-all').textContent = s.stats.total;
   $('cnt-suspicious').textContent = s.stats.total - (by.INFO || 0);
   $('cnt-net').textContent = s.stats.sockets;
+  $('cnt-ports').textContent = s.stats.publicPorts || 0;
   $('cnt-system').textContent = s.systemFindings || 0;
 }
 
@@ -502,6 +561,7 @@ function renderAll() {
     case 'all': renderAllProcs(); break;
     case 'tree': renderTree(); break;
     case 'net': renderNet(); break;
+    case 'ports': renderPorts(); break;
     case 'history': renderHistory(); break;
     case 'system': renderSystem(); break;
   }
@@ -511,6 +571,7 @@ async function loadTabData() {
   switch (state.tab) {
     case 'tree': state.tree = await api('/api/tree'); break;
     case 'net': state.sockets = (await api('/api/connections')).sockets || []; break;
+    case 'ports': state.exposure = (await api('/api/exposure')).exposure || null; break;
     case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
     case 'system': state.system = await api('/api/system'); break;
   }
@@ -573,7 +634,7 @@ async function init() {
   });
 
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-  for (const id of ['proc-filters', 'net-filters', 'hist-filters']) {
+  for (const id of ['proc-filters', 'net-filters', 'ports-filters', 'hist-filters']) {
     const form = $(id);
     form.addEventListener('input', () => { state.showAll = {}; renderAll(); });
     form.addEventListener('submit', (e) => e.preventDefault());

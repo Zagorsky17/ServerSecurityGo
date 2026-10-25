@@ -80,7 +80,7 @@ func init() {
 		"tui.paused_key":     {"пауза (p)", "paused (p)"},
 		"tui.lang_name":      {"русский (L — English)", "English (L — русский)"},
 		"tui.lang_switched":  {"Язык: русский", "Language: English"},
-		"tui.quickstart":     {"2 — подозрительные процессы, 3 — все процессы (t — дерево, s — сортировка), 4 — сеть, 5 — история, 6 — проверки закрепления. Enter или → — подробности, / — фильтр, L — язык, ? — все клавиши.", "2 — suspicious processes, 3 — all processes (t — tree, s — sort), 4 — network, 5 — history, 6 — persistence checks. Enter or → — details, / — filter, L — language, ? — all keys."},
+		"tui.quickstart":     {"2 — подозрительные процессы, 3 — все процессы (t — дерево, s — сортировка), 4 — сеть, 5 — открытые порты, 6 — история, 7 — системные проверки. Enter или → — подробности, / — фильтр, L — язык, ? — все клавиши.", "2 — suspicious processes, 3 — all processes (t — tree, s — sort), 4 — network, 5 — open ports, 6 — history, 7 — system checks. Enter or → — details, / — filter, L — language, ? — all keys."},
 		"tui.filter_prompt":  {"Фильтр ({0}): ", "Filter ({0}): "},
 		"tui.filter_hint":    {"Enter — применить, Esc — сбросить", "Enter — apply, Esc — clear"},
 		"tui.source_service": {"служба · {0}", "service · {0}"},
@@ -180,7 +180,7 @@ func init() {
 
 		"tui.help.title":      {"Клавиши · Esc — закрыть", "Keys · Esc — close"},
 		"tui.help.nav":        {"Навигация", "Navigation"},
-		"tui.help.panels":     {"перейти к панели (сводка, подозрительные, процессы, сеть, история, система)", "go to a panel (summary, suspicious, processes, network, history, system)"},
+		"tui.help.panels":     {"перейти к панели (сводка, подозрительные, процессы, сеть, порты, история, система)", "go to a panel (summary, suspicious, processes, network, ports, history, system)"},
 		"tui.help.next_panel": {"следующая / предыдущая панель", "next / previous panel"},
 		"tui.help.select":     {"выбор строки (в подробностях — прокрутка)", "select a row (scroll in details)"},
 		"tui.help.page":       {"страница вверх / вниз", "page up / down"},

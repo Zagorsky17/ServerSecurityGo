@@ -1,6 +1,6 @@
 //go:build unix
 
-package detect
+package safefile
 
 import (
 	"os"

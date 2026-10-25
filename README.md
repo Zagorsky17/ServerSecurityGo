@@ -21,6 +21,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
 - [Terminal UI](#terminal-ui)
 - [Web dashboard (optional)](#web-dashboard-optional)
 - [Features](#features)
+  - [Open ports](#open-ports)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
 - [Detection limitations](#detection-limitations)
@@ -104,16 +105,17 @@ serversecuritygo
 ╰──────────────────────────────────────────╯│   ● Командная строка содержит конструкцию reverse …  │
 ╭ [3] Процессы (47) · риск ────────────────╮│ Командная строка  (y — копировать)                   │
 ╭ [4] Сеть (17) ───────────────────────────╮│   bash -i                                            │
-╭ [5] История (25) ────────────────────────╮│ Цепочка запуска                                      │
-╭ [6] Система (2) ─────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
-↑↓ выбор  1-6/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
+╭ [5] Порты (9) ───────────────────────────╮│                                                      │
+╭ [6] История (25) ────────────────────────╮│ Цепочка запуска                                      │
+╭ [7] Система (2) ─────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
+↑↓ выбор  1-7/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
 ```
 
-On the left are six panels: summary, suspicious processes, all processes (as a list or a tree), network connections, history and system checks. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
+On the left are seven panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, history and system checks. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
 
 | Keys | Action |
 |---|---|
-| `1`…`6`, `Tab` / `Shift+Tab` | switch panel |
+| `1`…`7`, `Tab` / `Shift+Tab` | switch panel |
 | `↑` `↓` / `j` `k`, `PgUp` `PgDn`, `g` `G` | select a row; scroll in the details |
 | `Enter` / `→`, `Esc` / `←` | go to the details and back |
 | `/` | filter the panel by name, PID, path, user, indicator or risk level |
@@ -166,6 +168,9 @@ While no password is set, the service lets only root into the dashboard: for eve
 | Namespaces and containers (docker, containerd, kubernetes, podman, lxc) | `/proc/PID/ns/*`, `/proc/PID/cgroup` |
 | Presence of `LD_PRELOAD`/`LD_AUDIT` (names only, values are never stored) | `/proc/PID/environ` |
 | Users | `/etc/passwd` |
+| Server addresses (to tell public ports from private ones) | `/proc/net/fib_trie`, `/proc/net/if_inet6` |
+| ufw state and rules | `/etc/ufw/ufw.conf`, `/etc/default/ufw`, `/etc/ufw/user.rules`, `/etc/ufw/user6.rules` |
+| Published Docker ports, container name and image | `docker-proxy` arguments, `<data-root>/containers/*/config.v2.json` (environment variables are not read into memory structures and never shown) |
 | Boot time, memory, kernel | `/proc/stat`, `/proc/meminfo`, `/proc/sys/kernel/osrelease` |
 
 System persistence checks cover `/etc/ld.so.preload`, cron (`/etc/crontab`, `/etc/cron.*`, `/var/spool/cron`), systemd units in `/etc/systemd/system`, `/etc/rc.local`, `/etc/init.d`, `/etc/profile.d`, `.bashrc`, `update-motd.d` and `authorized_keys`.
@@ -176,11 +181,27 @@ The **terminal UI** is described [above](#terminal-ui). **Web dashboard** (light
 2. **All processes** — search, sorting by any column, filters by PID/PPID, user, name, path and minimum risk level.
 3. **Tree** — parent and child relationships, collapsible branches, highlighting of matches.
 4. **Network** — sockets with their owning processes, filters by protocol, state and external addresses.
-5. **History** — process start and exit, changes of exe, cmdline or user, risk increases and decreases, new indicators, new listening ports, system findings.
-6. **System** — server details, scanning limitations (privileges, container) and persistence checks.
-7. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
+5. **Open ports** — what the server listens on and where it is reachable from; see [Open ports](#open-ports).
+6. **History** — process start and exit, changes of exe, cmdline or user, risk increases and decreases, new indicators, new listening ports, system findings.
+7. **System** — server details, scanning limitations (privileges, container), persistence checks and dangerous open ports.
+8. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
 
 The dashboard refreshes automatically every 5 to 60 seconds, or not at all. Auto-refresh pauses while a process card is open.
+
+### Open ports
+
+The most common real cause of a VPS break-in is a service that accidentally listens on `0.0.0.0`: Redis without a password, MongoDB, the Docker API, an admin panel. The **Open ports** tab (panel `5` in the terminal UI, `GET /api/exposure`, a table at the end of `serversecuritygo scan`) lists every listening TCP socket and bound UDP socket:
+
+- **reachability**: *public* (any address outside the ranges below, including `0.0.0.0` and `::` — all interfaces, the server's public addresses are listed next to them), *private network* (`10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `fc00::/7`, link-local), *local only* (`127.0.0.0/8`, `::1`) or *inside a container* (a socket in its own network namespace, reachable from outside only through a published port);
+- the owning process, user and container; for Docker — the container name, image and port mapping;
+- the **recognized service** from the built-in table: Redis, Docker API, MongoDB, Elasticsearch/OpenSearch, etcd, kubelet, Jupyter, memcached, PostgreSQL, MySQL/MariaDB, RabbitMQ, CouchDB, SMB, RDP, VNC, Telnet, FTP, rpcbind, NFS, SNMP, Prometheus exporters. A service is recognized by port and process name (or container image); a match by port number only lowers the level by one step, because another program may use the port;
+- the **ufw** state for the port: *open* (an allow rule from any address), *blocked* (ufw is active and does not allow the port for everyone) or *bypasses ufw*.
+
+The level is the danger of the service being reachable, not a sign of compromise: Redis reachable from the internet is CRITICAL, PostgreSQL is HIGH, a Prometheus exporter is LOW. If ufw blocks the port, the level drops to LOW with a note that only the firewall protects the service. Every dangerous public port becomes a system finding with that level (it appears in the System tab, in the history and in the log) and an indicator of the `exposure` category in the card of the process holding the port. That indicator is not "strong": on its own it raises a legitimate process no higher than LOW.
+
+**Docker bypasses ufw.** Docker inserts its iptables rules before ufw's, so `ufw deny 6379` does not close a port published as `-p 6379:6379`. If ufw is active and a container port is published on all interfaces without a ufw rule allowing it, the dashboard reports `fw_docker_bypass` (HIGH) and suggests publishing the port as `127.0.0.1:PORT:PORT` or restricting it in the `DOCKER-USER` chain. Published ports are read from `docker-proxy` arguments and from the containers' `config.v2.json`, so they are visible with `userland-proxy: false` as well. The Docker API is not used: its socket grants root, and an observer does not need it.
+
+To silence a deliberately open port, add an allowlist rule for the process with the indicator ID (for example, `{"exe": "/usr/lib/postgresql/16/bin/postgres", "rules": ["exposed_database"]}`): the process indicator and the system finding are both shown as suppressed and no longer count. Ports published by Docker without a listening process (`userland-proxy: false`) cannot be suppressed this way.
 
 ## How risk is scored
 
@@ -220,7 +241,7 @@ All examples are included in the demo data (`serversecuritygo demo`) and in the 
 | Recently modified `authorized_keys` | recent SSH key change | LOW (system) |
 
 Full list of rule IDs for the allowlist:
-`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`.
+`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`, `exposed_database`, `exposed_docker_api`, `exposed_admin_panel`, `exposed_remote_access`, `exposed_file_sharing`, `exposed_info_service`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`, `fw_docker_bypass` and the `exposed_*` IDs above for dangerous public ports.
 
 ## Detection limitations
 
@@ -234,6 +255,7 @@ This is a heuristic tool for initial triage, not an antivirus or an EDR.
 - **False positives** are possible for developer tools (`go run` from `/tmp`, CI builds), custom services in non-standard directories, legitimate mining and `curl | sh` installers. The allowlist exists for these.
 - **CPU%** is computed from the `utime+stime` delta between scans with `CLK_TCK=100`, which is the value on x86_64 and arm64 in Ubuntu and Debian. On first observation the average since process start is shown (marked with `*`).
 - **Sockets** without a known owner (TIME_WAIT, kernel sockets, no privileges) are shown as "unknown". If a socket is shared by several processes (systemd socket activation, nginx master and workers), the Network table names the first owner found, while each process card shows the socket in full.
+- **Open ports** are judged by the address a socket listens on and by ufw only. A service bound to the server's own private address (for example `172.31.5.10` on AWS or GCP) is shown as *private network*, although with the provider's 1:1 NAT it may be reachable from the internet through the public IP; check the provider's security groups. Rules added with `iptables`/`nftables` directly, firewalld and cloud firewalls are not read.
 - Fields missing on older kernels (for example `NSpid` before 4.1) are tolerated: that information is simply not shown.
 
 ## Where it has been tested
@@ -415,6 +437,8 @@ cmd/serversecuritygo/     entry point: tui (default), serve, scan, demo, hash-pa
 internal/
   procfs/                 reading /proc: stat, status, cmdline, exe, fd, ns, cgroup, net
   detect/                 rules, risk scoring, explanations, allowlist, system checks
+  exposure/               open ports: reachability, dangerous services, ufw, published Docker ports
+  safefile/               safe reading of files an attacker may control (no symlinks, FIFOs, size limit)
   redact/                 masking secrets in command lines
   history/                process history and event log (state.json, events.jsonl)
   scanner/                periodic scanning: collect → analyze → history
@@ -432,7 +456,7 @@ allowlist.example.json    allowlist example
 .github/workflows/        CI and releases
 ```
 
-API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
+API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
 
 ## Security
 

@@ -18,6 +18,9 @@ type seg struct {
 }
 type line []seg
 
+// minHeight — минимальная высота окна для раскладки панелей.
+const minHeight = 14
+
 // draw рисует кадр целиком и выводит его.
 func (a *App) draw() {
 	a.render()
@@ -27,7 +30,8 @@ func (a *App) draw() {
 // render раскладывает панели и рисует их в буфер (без вывода — удобно
 // для тестов).
 func (a *App) render() {
-	if a.w < 20 || a.h < 8 {
+	// Меньше 14 строк семь панелей слева не помещаются даже рамками.
+	if a.w < 20 || a.h < minHeight {
 		a.scr = newScreen(max(a.w, 1), max(a.h, 1))
 		a.scr.Text(0, 0, a.w, a.tr("tui.too_small"), stWarn)
 		return
@@ -72,15 +76,28 @@ func (a *App) render() {
 // layoutLeft раскладывает панели слева «гармошкой», как в lazygit:
 // развёрнутая панель получает почти всю высоту, остальные — по
 // несколько строк.
+//
+// В низком окне (80×24) свёрнутые панели сжимаются до рамки с заголовком
+// (2 строки), а если и этого мало — прячется «Сводка»: развёрнутой
+// панели нужно хотя бы несколько строк списка.
 func (a *App) layoutLeft(lw, contentH int) {
+	// Свёрнутые панели-списки: все, кроме развёрнутой.
+	folded := int(nPanels) - 2
+	const bigMin = 6
 	statusH := 6
+	if contentH-statusH < folded*2+bigMin {
+		statusH = max(0, contentH-(folded*2+bigMin))
+		if statusH < 3 {
+			statusH = 0
+		}
+	}
 	a.rects[pStatus] = rect{0, 0, lw, statusH}
 	avail := contentH - statusH
-	small := min(max(avail/7, 3), 7)
-	big := avail - small*4
-	if big < 6 {
-		small = 3
-		big = avail - small*4
+	small := min(max(avail/(folded+3), 3), 7)
+	big := avail - small*folded
+	if big < bigMin {
+		small = max(2, min(3, (avail-bigMin)/folded))
+		big = avail - small*folded
 	}
 	y := statusH
 	for p := pSusp; p < nPanels; p++ {
@@ -94,7 +111,9 @@ func (a *App) layoutLeft(lw, contentH int) {
 		a.rects[p] = rect{0, y, lw, h}
 		y += h
 	}
-	a.drawStatus(a.rects[pStatus])
+	if statusH > 0 {
+		a.drawStatus(a.rects[pStatus])
+	}
 	for p := pSusp; p < nPanels; p++ {
 		a.drawList(p, a.rects[p])
 	}
@@ -241,6 +260,8 @@ func (a *App) columnsHeader(p panelID, w int) string {
 		return fit(h, w)
 	case pNet:
 		return fit(a.tr("tui.cols.net"), w)
+	case pPorts:
+		return fit(a.tr("tui.cols.ports"), w)
 	case pHist:
 		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
@@ -318,6 +339,34 @@ func (a *App) row(p panelID, i, w int) []seg {
 		segs = append(segs, addrSegs(sk.LocalAddr, sk.LocalPort, 21)...)
 		segs = append(segs, remote...)
 		return append(segs, seg{fit(sk.State, 11) + " ", stState}, seg{owner, ost})
+	case pPorts:
+		e := a.ports[i]
+		risk, rst := "    ", stDim
+		if e.Risk != model.RiskInfo {
+			risk, rst = riskShort(e.Risk.String()), riskStyle(e.Risk.String())
+		}
+		if e.Suppressed {
+			rst = stDim
+		}
+		scope, sst := a.scopeName(e.Scope), stDim
+		if e.Scope == model.ScopePublic {
+			sst = stWarn
+		}
+		svc := "—"
+		if e.Service != nil {
+			svc = e.Service.Name
+		}
+		owner := a.tr("tui.unknown")
+		ost := stDim
+		switch {
+		case e.PID != 0:
+			owner, ost = fmt.Sprintf("%s(%d)", e.ProcName, e.PID), stNormal
+		case e.Docker != nil:
+			owner, ost = "docker "+e.Container, stNormal
+		}
+		segs := []seg{{risk + " ", rst}, {fit(e.Proto, 5) + " ", stDim}}
+		segs = append(segs, addrSegs(e.Addr, e.Port, 23)...)
+		return append(segs, seg{fit(scope, 10) + " ", sst}, seg{fit(svc, 14) + " ", stBold}, seg{owner, ost})
 	case pHist:
 		e := a.events[i]
 		who := e.Name
@@ -497,6 +546,14 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.socketDetail(b, sk)
 		return a.tr("tui.title.socket_addr", sk.LocalAddr, sk.LocalPort), b.lines
+	case pPorts:
+		e, ok := a.selPort()
+		if !ok {
+			b.para(a.tr("web.ports.empty"), stDim, 0)
+			return a.tr("tui.panel.ports"), b.lines
+		}
+		a.portDetail(b, e)
+		return a.tr("tui.title.port", exposureEndpoint(e)), b.lines
 	case pSys:
 		f, ok := a.selSystem()
 		if !ok {
@@ -751,6 +808,115 @@ func (a *App) socketDetail(b *lb, sk model.Socket) {
 	a.processDetail(b, sk.ProcKey)
 }
 
+// scopeName — подпись области видимости порта.
+func (a *App) scopeName(s string) string {
+	switch s {
+	case model.ScopePublic:
+		return a.tr("tui.scope.public")
+	case model.ScopePrivate:
+		return a.tr("tui.scope.private")
+	case model.ScopeLoopback:
+		return a.tr("tui.scope.loopback")
+	case model.ScopeNetNS:
+		return a.tr("tui.scope.netns")
+	}
+	return s
+}
+
+// matchName — как узнан сервис (те же тексты, что в фактах).
+func (a *App) matchName(m string) string {
+	switch m {
+	case "port+process":
+		return a.tr("ev.exp_match_port_process")
+	case "port+image":
+		return a.tr("ev.exp_match_port_image")
+	case "process":
+		return a.tr("ev.exp_match_process")
+	case "image":
+		return a.tr("ev.exp_match_image")
+	}
+	return a.tr("ev.exp_match_port")
+}
+
+// fwName — подпись состояния межсетевого экрана для порта.
+func (a *App) fwName(s string) string {
+	switch s {
+	case model.FwOpen:
+		return a.tr("tui.fw.open")
+	case model.FwFiltered:
+		return a.tr("tui.fw.filtered")
+	case model.FwBypassed:
+		return a.tr("tui.fw.bypassed")
+	}
+	return "—"
+}
+
+// ufwName — подпись состояния ufw на сервере.
+func (a *App) ufwName(fw model.FirewallInfo) string {
+	switch fw.UFW {
+	case "active":
+		return a.tr("tui.ufw.active") + " · " + a.tr("tui.ufw.policy", fw.DefaultInput, fw.Rules)
+	case "inactive":
+		return a.tr("tui.ufw.inactive")
+	}
+	return a.tr("tui.ufw.absent")
+}
+
+func exposureEndpoint(e model.Exposure) string {
+	if strings.Contains(e.Addr, ":") {
+		return fmt.Sprintf("[%s]:%d", e.Addr, e.Port)
+	}
+	return fmt.Sprintf("%s:%d", e.Addr, e.Port)
+}
+
+// portDetail — подробности открытого порта; ниже — карточка процесса,
+// который его держит.
+func (a *App) portDetail(b *lb, e model.Exposure) {
+	rs := e.Risk.String()
+	title := exposureEndpoint(e)
+	if e.Service != nil {
+		title = e.Service.Name + " · " + title
+	}
+	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(title), stBold})
+	if e.Suppressed {
+		b.add(seg{"  " + a.tr("tui.suppressed"), stDim})
+	}
+	b.kv(a.tr("tui.k.proto"), e.Proto)
+	b.kvAddr(a.tr("tui.k.address"), e.Addr, e.Port)
+	reach := a.scopeName(e.Scope)
+	if e.AllInterfaces {
+		reach += " · " + a.tr("tui.all_ifaces")
+	}
+	b.kv(a.tr("tui.k.reach"), reach)
+	if e.Firewall != "" {
+		b.kv(a.tr("tui.k.firewall"), a.fwName(e.Firewall))
+	}
+	if e.Service != nil {
+		b.kv(a.tr("tui.k.service"), e.Service.Name+" ("+a.matchName(e.Service.Match)+")")
+	}
+	if e.Container != "" {
+		b.kv(a.tr("tui.k.container"), e.Container)
+	}
+	if d := e.Docker; d != nil {
+		b.kv("Docker", fmt.Sprintf("%s → %d (%s)", exposureEndpoint(model.Exposure{Addr: d.HostIP, Port: d.HostPort}), d.ContainerPort, orDash(d.Image)))
+	}
+	if len(e.Evidence) > 0 {
+		b.header(a.tr("tui.h.facts"))
+		for _, m := range e.Evidence {
+			b.para("· "+a.txt(m), stNormal, 2)
+		}
+	}
+	if !e.Recommendation.IsZero() {
+		b.header(a.tr("tui.h.recommendation"))
+		b.para(a.txt(e.Recommendation), stNormal, 2)
+	}
+	if e.ProcKey == "" {
+		return
+	}
+	b.blank()
+	a.processDetail(b, e.ProcKey)
+}
+
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
 	rs := f.Risk.String()
 	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
@@ -788,6 +954,24 @@ func (a *App) overview(b *lb) {
 	b.header(a.tr("tui.h.risks"))
 	for _, rk := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"} {
 		b.add(seg{"  " + fit(rk, 10), riskStyle(rk)}, seg{strconv.Itoa(st.Stats.ByRisk[rk]), stNormal})
+	}
+	if x := a.data.Exposure; x != nil {
+		b.header(a.tr("tui.h.exposure"))
+		pst := stNormal
+		if st.Stats.DangerousPorts > 0 {
+			pst = stWarn
+		}
+		b.para(a.tr("tui.ports.summary", st.Stats.PublicPorts, st.Stats.DangerousPorts), pst, 2)
+		b.kv(a.tr("tui.k.ufw"), a.ufwName(x.Firewall))
+		var addrs []string
+		for _, ad := range x.Addrs {
+			if ad.Scope != model.ScopeLoopback {
+				addrs = append(addrs, ad.Addr+" ("+a.scopeName(ad.Scope)+")")
+			}
+		}
+		if len(addrs) > 0 {
+			b.kv(a.tr("tui.k.addrs"), strings.Join(addrs, ", "))
+		}
 	}
 	if len(st.Warnings) > 0 {
 		b.header(a.tr("tui.h.limits"))
@@ -834,7 +1018,7 @@ func (a *App) drawBottom() {
 	case a.focus == pProcs:
 		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"s", a.tr("tui.hint.sort")}, {"t", a.tr("tui.tree")}, {"K", a.tr("tui.hint.kernel")}, {"y", a.tr("tui.hint.copy")}}
 	default:
-		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"1-6/Tab", a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y", a.tr("tui.hint.copy")}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"1-7/Tab", a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y", a.tr("tui.hint.copy")}}
 	}
 	hints = append(hints, [2]string{"L", a.tr("tui.hint.lang")}, [2]string{"?", a.tr("tui.hint.help")}, [2]string{"q", a.tr("tui.hint.quit")})
 	cx := 0
@@ -871,7 +1055,7 @@ func (a *App) drawBottom() {
 // Пустая клавиша — заголовок раздела.
 var helpLines = [][2]string{
 	{"", "tui.help.nav"},
-	{"1 … 6", "tui.help.panels"},
+	{"1 … 7", "tui.help.panels"},
 	{"Tab / Shift+Tab, [ ]", "tui.help.next_panel"},
 	{"↑ ↓ / j k", "tui.help.select"},
 	{"PgUp PgDn, Ctrl+U Ctrl+D", "tui.help.page"},

@@ -17,6 +17,7 @@ func init() {
 		"cat.environment": {"окружение", "environment"},
 		"cat.privilege":   {"привилегии", "privileges"},
 		"cat.persistence": {"закрепление", "persistence"},
+		"cat.exposure":    {"доступность из сети", "network exposure"},
 		"cat.info":        {"справка", "info"},
 
 		// Объяснение оценки.
@@ -190,5 +191,32 @@ func init() {
 
 		// Ошибки модели.
 		"err.unknown_risk": {"неизвестный уровень риска {0}", "unknown risk level {0}"},
+
+		// Доступность сервисов из сети (internal/exposure); {0} — имя сервиса.
+		// Признаки по классам сервисов; {0} — имя сервиса.
+		"rule.exposed_database.title": {"{0} доступен из интернета", "{0} is reachable from the internet"},
+		"rule.exposed_database.rec": {"Если доступ снаружи действительно нужен — разрешите его межсетевым экраном только с нужных адресов и включите аутентификацию.",
+			"If outside access is really needed, allow it in the firewall only from the required addresses and enable authentication."},
+		"rule.exposed_docker_api.title": {"API управления контейнерами доступен из интернета: {0}", "Container management API is reachable from the internet: {0}"},
+		"rule.exposed_docker_api.rec": {"Доступ к этому API равен root на сервере. Для удалённого управления используйте SSH-туннель (docker -H ssh://…) вместо открытого порта.",
+			"Access to this API equals root on the server. For remote management use an SSH tunnel (docker -H ssh://…) instead of an open port."},
+		"rule.exposed_admin_panel.title": {"Панель управления доступна из интернета: {0}", "Admin panel is reachable from the internet: {0}"},
+		"rule.exposed_admin_panel.rec": {"Откройте панель через SSH-туннель (ssh -L) или за reverse proxy с паролем и TLS.",
+			"Reach the panel through an SSH tunnel (ssh -L) or behind a reverse proxy with a password and TLS."},
+		"rule.exposed_remote_access.title": {"Удалённый доступ открыт в интернет: {0}", "Remote access is open to the internet: {0}"},
+		"rule.exposed_remote_access.rec": {"Такие порты постоянно перебирают боты: ограничьте доступ адресами или VPN, используйте SSH.",
+			"Bots constantly brute-force such ports: restrict access by address or VPN, use SSH."},
+		"rule.exposed_file_sharing.title": {"Общий доступ к файлам открыт в интернет: {0}", "File sharing is open to the internet: {0}"},
+		"rule.exposed_file_sharing.rec": {"Общие папки не должны быть видны из интернета: ограничьте доступ частной сетью или VPN.",
+			"Shared folders must not be visible from the internet: restrict access to a private network or VPN."},
+		"rule.exposed_info_service.title": {"Служебная информация о сервере доступна из интернета: {0}", "Server information service is reachable from the internet: {0}"},
+		"rule.exposed_info_service.rec": {"Метрики и SNMP раскрывают версии ПО и устройство сервера: отдавайте их только системе мониторинга.",
+			"Metrics and SNMP reveal software versions and server layout: expose them only to the monitoring system."},
+
+		"rule.exposed.title_filtered": {"{0} слушает внешний адрес, от интернета закрыт только ufw", "{0} listens on an external address, only ufw blocks it from the internet"},
+
+		"rule.fw_docker_bypass.title": {"Порт контейнера открыт в обход ufw", "Container port is open despite ufw"},
+		"rule.fw_docker_bypass.rec": {"Опубликуйте порт только на loopback: в docker-compose.yml «ports: \"127.0.0.1:{0}:{1}\"» (или docker run -p 127.0.0.1:{0}:{1}), затем docker compose up -d. Если порт должен быть открыт — закройте лишние адреса правилом в цепочке DOCKER-USER; проверьте: iptables -L DOCKER-USER -n.",
+			"Publish the port on loopback only: in docker-compose.yml “ports: \"127.0.0.1:{0}:{1}\"” (or docker run -p 127.0.0.1:{0}:{1}), then docker compose up -d. If the port must stay open, restrict addresses with a rule in the DOCKER-USER chain; check with: iptables -L DOCKER-USER -n."},
 	})
 }

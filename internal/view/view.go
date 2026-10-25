@@ -222,3 +222,22 @@ func SortedSystem(snap *model.Snapshot) []model.SystemFinding {
 	sort.SliceStable(sys, func(i, j int) bool { return sys[i].Risk > sys[j].Risk })
 	return sys
 }
+
+// Exposure возвращает отчёт о поверхности атаки снимка. Пустой отчёт
+// вместо nil — чтобы в JSON были пустые списки, а не null.
+func Exposure(snap *model.Snapshot) *model.ExposureReport {
+	if snap == nil || snap.Exposure == nil {
+		return &model.ExposureReport{Entries: []model.Exposure{}, Addrs: []model.IfaceAddr{}, Bindings: []model.PortBinding{}, Firewall: model.FirewallInfo{UFW: "absent"}}
+	}
+	r := *snap.Exposure
+	if r.Entries == nil {
+		r.Entries = []model.Exposure{}
+	}
+	if r.Addrs == nil {
+		r.Addrs = []model.IfaceAddr{}
+	}
+	if r.Bindings == nil {
+		r.Bindings = []model.PortBinding{}
+	}
+	return &r
+}

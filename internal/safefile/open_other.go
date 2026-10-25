@@ -1,6 +1,6 @@
 //go:build !unix
 
-package detect
+package safefile
 
 import "os"
 
@@ -17,7 +17,7 @@ func openForRead(path string, follow bool) (*os.File, error) {
 		return nil, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, errNotRegular
+		return nil, ErrNotRegular
 	}
 	return os.Open(path)
 }

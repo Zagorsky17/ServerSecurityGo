@@ -38,13 +38,14 @@ const (
 	pSusp
 	pProcs
 	pNet
+	pPorts
 	pHist
 	pSys
 	nPanels
 )
 
 // panelKeys — ключи каталога для названий панелей.
-var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.hist", "tui.panel.sys"}
+var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports", "tui.panel.hist", "tui.panel.sys"}
 
 // sortKeys — режимы сортировки списка процессов (ключи каталога).
 var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
@@ -90,6 +91,7 @@ type App struct {
 	procs      []view.Summary
 	procPrefix []string // префиксы дерева («├─ ») в режиме дерева
 	socks      []model.Socket
+	ports      []model.Exposure
 	events     []model.Event
 	system     []model.SystemFinding
 	byKey      map[string]view.Summary
@@ -308,6 +310,14 @@ func (a *App) rebuild() {
 			a.socks = append(a.socks, s)
 		}
 	}
+	a.ports = a.ports[:0]
+	if x := a.data.Exposure; x != nil {
+		for _, e := range x.Entries {
+			if a.portMatches(e) {
+				a.ports = append(a.ports, e)
+			}
+		}
+	}
 	a.events = a.events[:0]
 	for _, e := range a.data.Events {
 		if matches(a.lists[pHist].filter, e.Type, eventName(a.lang, e.Type), strconv.Itoa(e.PID), e.Name, e.User, a.txt(e.Details), e.Risk.String()) {
@@ -397,6 +407,8 @@ func (a *App) count(p panelID) int {
 		return len(a.procs)
 	case pNet:
 		return len(a.socks)
+	case pPorts:
+		return len(a.ports)
 	case pHist:
 		return len(a.events)
 	case pSys:
@@ -500,7 +512,7 @@ func (a *App) runeKey(r rune, list panelID) bool {
 		a.focusPanel((a.focus + 1) % nPanels)
 	case '[':
 		a.focusPanel((a.focus + nPanels - 1) % nPanels)
-	case '1', '2', '3', '4', '5', '6':
+	case '1', '2', '3', '4', '5', '6', '7':
 		a.focusPanel(panelID(r - '1'))
 	case '/':
 		if a.focus >= pSusp {
@@ -681,6 +693,10 @@ func (a *App) copyJSON() {
 		if s, ok := a.selSocket(); ok {
 			v = s
 		}
+	case pPorts:
+		if e, ok := a.selPort(); ok {
+			v = e
+		}
 	case pHist:
 		if e, ok := a.selEvent(); ok {
 			v = e
@@ -718,6 +734,24 @@ func (a *App) selSocket() (model.Socket, bool) {
 	return model.Socket{}, false
 }
 
+func (a *App) selPort() (model.Exposure, bool) {
+	if c := a.lists[pPorts].cursor; c < len(a.ports) {
+		return a.ports[c], true
+	}
+	return model.Exposure{}, false
+}
+
+// portMatches — фильтр панели «Порты»: адрес, порт, доступность,
+// сервис, процесс, контейнер, уровень.
+func (a *App) portMatches(e model.Exposure) bool {
+	svc := ""
+	if e.Service != nil {
+		svc = e.Service.Name
+	}
+	return matches(a.lists[pPorts].filter, e.Proto, e.Addr, strconv.Itoa(e.Port), e.Scope, a.scopeName(e.Scope), svc,
+		e.ProcName, strconv.Itoa(e.PID), e.User, e.Container, e.Risk.String())
+}
+
 func (a *App) selEvent() (model.Event, bool) {
 	if c := a.lists[pHist].cursor; c < len(a.events) {
 		return a.events[c], true
@@ -747,6 +781,11 @@ func (a *App) selectedProc() (view.Summary, bool) {
 	case pNet:
 		if s, ok := a.selSocket(); ok && s.ProcKey != "" {
 			p, ok := a.byKey[s.ProcKey]
+			return p, ok
+		}
+	case pPorts:
+		if e, ok := a.selPort(); ok && e.ProcKey != "" {
+			p, ok := a.byKey[e.ProcKey]
 			return p, ok
 		}
 	case pHist:
