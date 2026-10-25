@@ -1,0 +1,457 @@
+# ServerSecurityGo
+
+[English](README.md) | [Русский](README.ru.md) | **简体中文**
+
+[![CI](https://github.com/Zagorsky17/ServerSecurityGo/actions/workflows/ci.yml/badge.svg)](https://github.com/Zagorsky17/ServerSecurityGo/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Zagorsky17/ServerSecurityGo)](https://github.com/Zagorsky17/ServerSecurityGo/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+面向 Linux 服务器（Ubuntu、Debian）的进程监控与分析工具。它查找可疑进程、恶意软件迹象和未经授权的访问。扫描器读取 `/proc`，根据一组可验证的指标为每个进程评分，解释每一项评分，记录变更历史，并在 Web 面板和终端界面中展示全部信息。界面提供英文和俄文两种语言（见[语言](#语言)），暂无中文界面。
+
+**本程序只做观察。** 它从不终止进程、删除文件或阻断连接，所有决定都由管理员做出。
+
+- 类似 lazygit 的终端界面：在服务器上只需输入 `serversecuritygo`。通过 SSH 隧道访问的 Web 面板是可选的。
+- 单个静态二进制文件，没有任何依赖：只使用 Go 标准库，两种界面都内嵌在二进制文件中。
+- 默认情况下，面板只能通过 `127.0.0.1:8090` 访问。
+- 风险等级为 `INFO`、`LOW`、`MEDIUM`、`HIGH` 和 `CRITICAL`。每个等级都附带解释：触发了哪些规则、权重多少、依据哪些事实。
+
+## 目录
+
+- [从 GitHub 安装](#从-github-安装)
+- [终端界面](#终端界面)
+- [可选的 Web 面板](#可选的-web-面板)
+- [功能](#功能)
+- [风险评分方式](#风险评分方式)
+- [可检测的异常示例](#可检测的异常示例)
+- [检测局限](#检测局限)
+- [测试环境](#测试环境)
+- [配置](#配置)
+- [语言](#语言)
+- [远程访问](#远程访问)
+- [更新与卸载](#更新与卸载)
+- [控制台模式与演示](#控制台模式与演示)
+- [构建与测试](#构建与测试)
+- [项目结构](#项目结构)
+- [安全](#安全)
+- [参与贡献](#参与贡献)
+
+## 从 GitHub 安装
+
+在服务器上以 root 身份执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Zagorsky17/ServerSecurityGo/main/scripts/install.sh | bash
+```
+
+安装指定版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Zagorsky17/ServerSecurityGo/main/scripts/install.sh | SSG_VERSION=v0.1.1 bash
+```
+
+安装脚本会执行以下操作：
+
+1. 将仓库克隆到 `/opt/serversecuritygo`。仓库是公开的，不需要 deploy key。
+2. 如果已安装 Go 1.24 或更高版本，则从源码构建二进制文件；否则从 [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) 下载预编译的二进制文件并校验其 SHA256。服务器上不需要安装 Go。
+3. 根据 `.env.example` 创建 `/opt/serversecuritygo/.env`，权限为 `600`。
+4. 安装 `serversecuritygo.service`，设置开机启动并启动服务，然后检查 `/healthz`。
+5. 创建链接 `/usr/local/bin/serversecuritygo`，这样一条命令即可打开界面。
+
+如果缺少 `git` 或 `curl`，安装脚本会用 `apt-get` 安装它们。除此之外，它不会对系统做任何修改，也不会触碰 `/opt` 中的其他目录。
+
+文件位置：
+
+| 内容 | 位置 |
+|---|---|
+| 代码和二进制文件 | `/opt/serversecuritygo`、`/opt/serversecuritygo/bin/serversecuritygo` |
+| 设置 | `/opt/serversecuritygo/.env`（权限 600，不提交到 git） |
+| 白名单（可选） | `/opt/serversecuritygo/allowlist.json` |
+| 历史 | `/var/lib/serversecuritygo`（权限 700）：`state.json`、`events.jsonl` |
+| 备份 | `/var/backups/serversecuritygo`（权限 700） |
+| 日志 | journald：`journalctl -u serversecuritygo` |
+| systemd 单元 | `/etc/systemd/system/serversecuritygo.service` |
+| 启动命令 | `/usr/local/bin/serversecuritygo`（指向二进制文件的链接） |
+| 终端界面套接字 | `/run/serversecuritygo/api.sock`（权限 600，仅 root 可用；服务启动时创建） |
+
+不使用脚本手动安装：
+
+```bash
+git clone https://github.com/Zagorsky17/ServerSecurityGo /opt/serversecuritygo
+cd /opt/serversecuritygo
+make build          # 或者把发布版二进制文件下载到 bin/serversecuritygo
+install -m 600 .env.example .env
+install -m 644 deploy/serversecuritygo.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now serversecuritygo
+```
+
+## 终端界面
+
+这是主要的使用方式。通过 SSH 连接到服务器后输入：
+
+```bash
+serversecuritygo
+```
+
+```
+╭ [1] Summary ─────────────────────────────╮╭ PID 3202 · bash ─────────────────────────────────────╮
+│ web-01 · Ubuntu 24.04 LTS · 6.8.0-147    ││  CRITICAL   102 pts · www-data · bash                │
+│ Scan 21:37:58 (56 ms) · every 30s · …    ││                                                      │
+│ CRIT 4  HIGH 1  MED 1  LOW 3             ││ Risk assessment                                      │
+╰──────────────────────────────────────────╯│   Result CRITICAL: 102 point(s), indicators: 4, …    │
+╭ [2] Suspicious (9) ──────────────────────╮│ Indicators                                           │
+│CRITICAL  3202 www-data bash     /usr/bin…││   ● Shell or interpreter I/O is connected to a netw… │
+│CRITICAL  3101 root     kworkerds /dev/sh…││       · /proc/3202/fd/0 → socket:[2002] tcp … 4444   │
+╰──────────────────────────────────────────╯│   ● Command line contains a reverse shell construct  │
+╭ [3] Processes (47) · risk ───────────────╮│ Command line  (y — copy, secrets are masked)         │
+╭ [4] Network (17) ────────────────────────╮│   bash -i                                            │
+╭ [5] History (25) ────────────────────────╮│ Launch chain                                         │
+╭ [6] System (2) ──────────────────────────╮│   systemd(1) → nginx(720) → nginx(721) → sh(3201) →… │
+↑↓ select  1-6/Tab panels  Enter details  / filter  r scan  y copy  L русский  ? help  q quit
+```
+
+左侧有六个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、历史和系统检查。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
+
+| 按键 | 作用 |
+|---|---|
+| `1`…`6`、`Tab` / `Shift+Tab` | 切换面板 |
+| `↑` `↓` / `j` `k`、`PgUp` `PgDn`、`g` `G` | 选择行；在详情中滚动 |
+| `Enter` / `→`、`Esc` / `←` | 进入详情并返回 |
+| `/` | 按名称、PID、路径、用户、指标或风险等级过滤面板 |
+| `s`、`t`、`K` | 排序进程（风险、CPU、内存、PID、名称）、树形视图、内核线程 |
+| `r`、`p` | 立即扫描、暂停自动刷新 |
+| `y`、`Y` | 把命令行或 JSON 复制到你电脑的剪贴板（OSC 52，可通过 SSH 使用） |
+| `+` | 将当前一侧放大到全屏 |
+| `L` | 界面语言：英文 / 俄文 |
+| `?`、`q` | 帮助、退出 |
+
+也可以使用鼠标：单击选择面板和行，滚轮滚动。
+
+**数据来源。** 如果服务正在运行，界面会通过 Unix 套接字 `/run/serversecuritygo/api.sock` 连接到服务。只有 root 能访问该套接字，因此不需要密码或隧道，并且可以看到已收集的完整历史。如果服务没有运行，或者安装的是没有套接字的旧版本，界面会自己扫描进程，此时历史只在本次会话中保留。数据来源显示在“概要”面板中。
+
+```bash
+serversecuritygo tui --local            # 始终自行扫描
+serversecuritygo tui --refresh 2s       # 更频繁地刷新屏幕
+```
+
+要查看所有用户的进程，请以 root 身份运行界面。在服务模式下，数据已由服务收集。
+
+如果 `y` 复制不起作用：iTerm2、kitty、WezTerm、Alacritty、Windows Terminal 和较新的 xterm 支持 OSC 52。在 tmux 中需要设置 `set -g set-clipboard on`。
+
+## 可选的 Web 面板
+
+Web 面板在浏览器中展示相同的数据。它只监听 `127.0.0.1:8090`。要从自己的电脑打开，请使用 SSH 隧道：
+
+```bash
+ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
+# 然后在浏览器中打开 http://127.0.0.1:8090
+```
+
+如果使用专用密钥连接，请加上 `-i ~/.ssh/<密钥> -o IdentitiesOnly=yes`。
+
+在未设置密码时，服务只允许 root 进入面板：对每个到 `127.0.0.1` 的连接，它都会在 `/proc/net/tcp` 中查找套接字的所有者。以 root 身份打开的隧道可以使用，而服务器上的其他用户（例如被入侵的 `www-data`）会收到 403 错误。如果你以自己的用户身份通过 SSH 登录，请把该用户的 UID 加入 `SSG_LOCAL_UIDS`（例如 `0,1000`），或者设置密码。
+
+## 功能
+
+**数据收集**读取 `/proc` 及相关来源：
+
+| 数据 | 来源 |
+|---|---|
+| PID、PPID、名称、状态、线程、启动时间、CPU（utime+stime） | `/proc/PID/stat` |
+| UID/EUID/GID、RSS、命名空间内的 PID | `/proc/PID/status` |
+| 命令行（密钥会被遮蔽） | `/proc/PID/cmdline` |
+| 可执行文件、删除标记、权限、所有者 | `/proc/PID/exe`（readlink + stat） |
+| 工作目录 | `/proc/PID/cwd` |
+| 打开的文件和套接字 | `/proc/PID/fd/*` |
+| 每个网络命名空间的 TCP/UDP/Unix 套接字 | `/proc/PID/net/{tcp,tcp6,udp,udp6,unix}` |
+| 命名空间和容器（docker、containerd、kubernetes、podman、lxc） | `/proc/PID/ns/*`、`/proc/PID/cgroup` |
+| 是否存在 `LD_PRELOAD`/`LD_AUDIT`（只记录名称，从不保存值） | `/proc/PID/environ` |
+| 用户 | `/etc/passwd` |
+| 启动时间、内存、内核 | `/proc/stat`、`/proc/meminfo`、`/proc/sys/kernel/osrelease` |
+
+系统持久化检查覆盖 `/etc/ld.so.preload`、cron（`/etc/crontab`、`/etc/cron.*`、`/var/spool/cron`）、`/etc/systemd/system` 中的 systemd 单元、`/etc/rc.local`、`/etc/init.d`、`/etc/profile.d`、`.bashrc`、`update-motd.d` 和 `authorized_keys`。
+
+**终端界面**见[上文](#终端界面)。**Web 面板**（浅色和深色主题）：
+
+1. **可疑进程** —— 带有指标的进程，按风险排序。每一行显示指标、分数、首次和最近一次观察时间以及一条建议。
+2. **所有进程** —— 搜索、按任意列排序，可按 PID/PPID、用户、名称、路径和最低风险等级过滤。
+3. **进程树** —— 父子关系，可折叠分支，高亮匹配项。
+4. **网络** —— 套接字及其所属进程，可按协议、状态和外部地址过滤。
+5. **历史** —— 进程启动和退出，exe、cmdline 或用户的变化，风险升高和降低，新指标，新的监听端口，系统发现。
+6. **系统** —— 服务器信息、扫描限制（权限、容器）和持久化检查。
+7. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
+
+面板每 5 到 60 秒自动刷新一次，也可以关闭自动刷新。打开进程卡片时自动刷新会暂停。
+
+## 风险评分方式
+
+每条规则产生一个**指标**：一组说明读取了什么、从哪里读取的事实，例如 `/proc/3101/exe → /dev/shm/.x/kworkerds`。单个指标本身并不断定是否恶意。它有权重、类别，如果它单独出现时很少是合法的，还会带有“强”标记。
+
+1. 权重之和决定基础等级：1 分起为 LOW，15 分起为 MEDIUM，35 分起为 HIGH，60 分起为 CRITICAL。
+2. 等级受**独立类别数量**的限制（位置、文件完整性、伪装、启动链、网络、命令行、行为、环境、权限、持久化）：
+   - 只有一个类别且没有强指标 —— 最高 **LOW**。因此仅凭名称、仅凭路径或仅凭高负载都不会超过 LOW；
+   - 一个类别且有强指标 —— 最高 **MEDIUM**；
+   - 两个类别且强指标少于两个 —— 最高 **HIGH**；
+   - **CRITICAL** 需要三个或更多类别，或者两个强指标。
+3. 信息类指标（运行在容器中、监听端口、权限不足）会显示，但不影响评分。
+4. 白名单用于抑制已知合法进程的指标。被抑制的指标不会被隐藏：它以删除线显示，并在解释中注明。
+5. 已知的合法情况会单独处理。被 `apt upgrade` 删除的 `/usr` 中的二进制文件只得 4 分而不是 20 分；通过 memfd 运行的 `runc` 权重降低；服务 stdout 上的 systemd journal Unix 套接字不会被视为反弹 shell；`node`、`java` 和 `python` 作为 shell 的父进程只产生弱指标。
+
+进程卡片中的解释示例：
+
+> Result CRITICAL: 102 point(s), indicators: 4, categories: 2 (command line, network), strong: 2. Triggered: “Shell or interpreter I/O is connected to a network socket” +40 (strong); “Command line contains a reverse shell construct” +35 (strong); … This is an assessment based on indirect indicators, not proof of compromise.
+
+Web 面板和终端界面会以所选语言显示这段文字。
+
+## 可检测的异常示例
+
+所有示例都包含在演示数据（`serversecuritygo demo`）和自动化测试中。
+
+| 场景 | 触发的指标 | 等级 |
+|---|---|---|
+| 位于 `/dev/shm/.x/` 的挖矿程序，`argv[0]="[kworker/u8:2]"`，连接到 3333 端口，CPU 持续高负载 | exe 位于临时目录、隐藏目录、伪装成内核线程、矿池端口、root 从可写目录运行、CPU 持续高负载 | CRITICAL |
+| `nginx` → `sh -c 'bash -i >& /dev/tcp/…/4444 0>&1'` → fd 0/1/2 连接到 TCP 套接字的 `bash` | 网络服务启动了 shell、反弹 shell 结构、stdin/stdout 连接到套接字、shell 持有外部连接 | CRITICAL |
+| 带 `LD_PRELOAD` 的 `/tmp/.ICE-unix/dbus-daemon (deleted)`，监听 `0.0.0.0:31337` | 临时目录、已删除的二进制文件、系统服务名但不在系统路径中、LD_PRELOAD、可疑监听 | CRITICAL |
+| `cron` → `sh -c 'curl … \| sh'` | 下载后立即执行、计划任务运行下载内容 | HIGH |
+| 从 `memfd:` 运行的进程（无文件执行） | 从内存运行 | MEDIUM |
+| CPU 占用 95% 的编译器 | 只有持续高负载 | LOW |
+| 软件包更新后的 `sshd`（`/usr/sbin/sshd (deleted)`） | 系统二进制文件已被替换 | LOW |
+| 非空的 `/etc/ld.so.preload` | 全局预加载库 | HIGH（系统） |
+| cron 任务 `curl … \| sh` | 可疑的自启动命令 | MEDIUM（系统） |
+| 最近修改过的 `authorized_keys` | SSH 密钥最近被修改 | LOW（系统） |
+
+可用于白名单的完整规则 ID 列表：
+`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`。
+
+## 检测局限
+
+这是一个用于初步排查的启发式工具，不是杀毒软件，也不是 EDR。
+
+- **内核级 rootkit** 可以直接在 `/proc` 中隐藏进程、文件和套接字。扫描器只能看到内核展示的内容。使用 `LD_PRELOAD` 和 `/etc/ld.so.preload` 的用户态 rootkit 不会影响扫描器本身（它是不依赖 libc 的静态 Go 二进制文件），但可能篡改 `ps`、`ls` 等工具的输出。
+- **是快照，而不是事件。** 扫描每隔 `SSG_SCAN_INTERVAL`（默认 30 秒）运行一次，因此存活时间短于该间隔的进程可能被漏掉。要完整审计进程启动，需要 auditd 或 eBPF。
+- **不分析文件内容：** 没有特征码、哈希或 IP 信誉库。命令行模式（`stratum+tcp`、`/dev/tcp/`）通过模板匹配，可以通过改名或混淆绕过。
+- **权限。** 没有 root 权限时，无法读取其他用户进程的 exe、cwd、fd 和 environ。在 `/proc` 使用 `hidepid`、设置 `kernel.yama.ptrace_scope=3` 或使用严格的 AppArmor、SELinux 策略时也是如此。扫描器会在横幅和进程卡片中提示这一点。
+- **容器。** 在容器内部，扫描器只能看到该容器的 PID 命名空间，因此请在宿主机上运行。容器内进程的 exe 和 cwd 路径是相对于容器文件系统的，因此与宿主机系统路径的比较可能不准确。
+- **误报**可能出现在开发工具（从 `/tmp` 执行 `go run`、CI 构建）、位于非标准目录的自定义服务、合法挖矿以及 `curl | sh` 安装脚本上。白名单就是为这些情况准备的。
+- **CPU%** 根据两次扫描之间 `utime+stime` 的差值计算，`CLK_TCK=100`，这是 Ubuntu 和 Debian 在 x86_64 和 arm64 上的取值。首次观察时显示的是自进程启动以来的平均值（以 `*` 标记）。
+- 所有者未知的**套接字**（TIME_WAIT、内核套接字、权限不足）显示为“unknown”。如果一个套接字被多个进程共享（systemd 套接字激活、nginx 主进程和工作进程），“网络”表只显示找到的第一个所有者，而每张进程卡片会完整显示该套接字。
+- 旧内核缺少的字段（例如 4.1 之前没有 `NSpid`）不会导致错误，只是不显示相应信息。
+
+## 测试环境
+
+| 环境 | 验证内容 |
+|---|---|
+| Ubuntu 24.04.4 LTS，内核 6.8.0，x86_64，1 vCPU / 2 GB，Docker（测试 VPS） | 使用 README 中的命令安装；服务在 systemd 限制下运行（读取了所有进程的 exe、fd 和套接字，没有限制）；通过 SSH 隧道使用面板；`update.sh`、`rollback.sh` 和 `logs.sh`；重启后历史保留；密码登录；在没有密码或 TLS 的网络地址上拒绝启动；检测无害的模拟场景（从 `/tmp` 伪装成 kworker、启动后被删除的二进制文件、输入来自 TCP 套接字的 bash）；在 tmux 中以两种模式运行终端界面：自行扫描以及通过套接字连接服务（面板、进程树、过滤、详情、帮助） |
+| GitHub Actions `ubuntu-latest` | 全部测试、以 root 运行的真实 `/proc` 测试、对运行器的一次性扫描、shellcheck |
+| macOS | 基于伪造 `/proc` 的测试、演示模式、Chrome 中的 Web 面板 |
+
+本程序尚未在 Debian 上运行过。它只依赖标准的 `/proc` 和 systemd 接口，但 Debian 上的测试尚待进行。新版本启动失败时 `update.sh` 的自动回滚尚未单独复现过。手动 `rollback.sh` 已经验证。
+
+测试服务器上的负载（约 120 个进程）：一次扫描约 60 毫秒，服务占用约 12 MB 内存。
+
+## 配置
+
+所有变量及其详细注释（俄文）都列在 [`.env.example`](.env.example) 中。主要变量：
+
+| 变量 | 默认值 | 用途 |
+|---|---|---|
+| `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | Web 面板地址 |
+| `SSG_SOCKET_PATH` | `/run/serversecuritygo/api.sock` | 终端界面套接字（`off` 表示关闭） |
+| `SSG_SCAN_INTERVAL` | `30s` | 扫描周期（最小 `2s`） |
+| `SSG_AUTH_PASSWORD_HASH` | — | 密码哈希（`serversecuritygo hash-password`） |
+| `SSG_ALLOWED_HOSTS` | — | 网络访问时允许的主机名 |
+| `SSG_TLS_CERT` / `SSG_TLS_KEY` | — | 内置 HTTPS |
+| `SSG_TRUST_PROXY_TLS` | `false` | HTTPS 由反向代理终止 |
+| `SSG_CPU_THRESHOLD` / `SSG_CPU_SUSTAIN_SCANS` | `80` / `10` | 高负载阈值和持续时间 |
+| `SSG_HISTORY_RETENTION` | `168h` | 已退出进程数据的保留时间 |
+| `SSG_ALLOWLIST_FILE` | `/opt/serversecuritygo/allowlist.json` | 白名单 |
+| `SSG_LANG` | —（自动） | 默认语言：`ru` 或 `en` |
+
+修改 `.env` 后，执行 `systemctl restart serversecuritygo`。
+
+**白名单。** 将 [`allowlist.example.json`](allowlist.example.json) 复制到 `/opt/serversecuritygo/allowlist.json`。一条规则可以设置 `exe` 和 `name`（支持 `*` 和 `?` 通配符）、`user` 以及 `rules` 列表（指标 ID）。没有任何条件的规则会被忽略，以免意外抑制所有指标。进程可以自行设置名称（`comm`），因此没有 `exe` 的规则只有在名称同时与可执行文件名匹配时才生效：自称 `node` 的挖矿程序不会被 `{"name": "node"}` 覆盖。对于运行在解释器上的程序（例如运行在 Python 上的 `gunicorn`），请指定 `exe`。服务启动时会在日志中对没有 `exe` 的规则发出警告。
+
+## 语言
+
+用户看到的所有文字都提供英文和俄文版本：Web 面板和登录页、终端界面、指标标题、事实依据、评分解释、建议、历史事件、扫描警告、`scan` 和 `--help` 的输出、服务日志以及错误信息。目前没有中文界面。
+
+- **Web 面板。** 页眉（以及登录页）中的 **English / Русский** 按钮可立即切换语言，选择会保存在浏览器中。在用户选择语言之前，面板使用 `SSG_LANG`；如果未设置，则使用浏览器语言（`Accept-Language`）。中文浏览器默认显示英文界面。
+- **终端界面。** 按 `L` 键切换语言。初始语言为 `SSG_LANG`，否则取终端的 locale（`LC_ALL`、`LC_MESSAGES`、`LANG`）。中文 locale 默认使用英文。
+- **命令行和服务日志。** 使用 `SSG_LANG`，否则使用 locale。locale 为空、`C` 或 `POSIX` 时（systemd 服务通常如此）输出为俄文，因此要得到英文服务日志，请在 `/opt/serversecuritygo/.env` 中设置 `SSG_LANG=en`。
+
+扫描器把文字保存为消息（目录键和参数），由每个客户端用自己的语言渲染，因此两个用户可以同时用不同语言查看同一台服务器。翻译位于 [`internal/i18n`](internal/i18n)：`catalog_*.go` 中俄文和英文并排存放，测试会检查每个键都有两种翻译并且占位符一致。
+
+**JSON API。** 文本字段（`title`、`evidence`、`recommendation`、`explanation`、`recommendations`、`warnings`、事件的 `details`）要么是普通字符串（来自系统的事实，例如路径），要么是消息对象 `{"key": "…", "args": […]}`（拼接文本为 `{"sep": "…", "parts": […]}`）。单一语言的目录可通过 `GET /i18n/en.json` 或 `/i18n/ru.json` 获取。`scan --format json` 输出的是以进程语言渲染好的文本，而不是消息对象。API 的错误信息语言取决于请求头 `X-SSG-Lang`。
+
+## 远程访问
+
+推荐使用 SSH 隧道（见上文）：不对外暴露任何端口。
+
+如果需要直接访问，只有满足以下所有条件时服务才会启动：
+
+1. 已设置密码：
+   ```bash
+   /opt/serversecuritygo/bin/serversecuritygo hash-password
+   # 把输出的 SSG_AUTH_PASSWORD_HASH=... 这一行粘贴到 .env 中
+   ```
+2. 已设置用于打开面板的主机名：`SSG_ALLOWED_HOSTS=mon.example.com`。
+3. 已启用 HTTPS：要么设置 `SSG_TLS_CERT` 和 `SSG_TLS_KEY`，要么使用带 HTTPS 的反向代理并设置 `SSG_TRUST_PROXY_TLS=true`。第二种情况下最好让程序保持在 `127.0.0.1` 上。
+
+nginx 示例：程序保持在 `127.0.0.1:8090`，由 nginx 通过 HTTPS 提供面板。在 `.env` 中设置 `SSG_TRUST_PROXY_TLS=true` 和密码。设置 `SSG_TRUST_PROXY_TLS=true` 时，没有密码服务将拒绝启动，因为它无法判断代理是否把它暴露到了互联网。
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name mon.example.com;
+    ssl_certificate     /etc/letsencrypt/live/mon.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mon.example.com/privkey.pem;
+    location / {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_set_header Host 127.0.0.1;
+        # 用于登录限速的客户端地址：没有它，所有客户端
+        # 看起来都是 127.0.0.1，共用一个计数器。
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+}
+```
+
+密码只以 PBKDF2-SHA256 哈希（600,000 次迭代）形式保存。连续五次登录失败后，来自该地址（IPv6 为该 /64 网段）的登录会被封锁 15 分钟。尝试次数在校验密码之前计数，因此并行请求无法绕过限制，并且同一时间最多校验两个密码。在反向代理之后，客户端地址取自代理设置的 `X-Forwarded-For`（见上面的示例）。会话保存在内存中，cookie 带有 `HttpOnly`、`SameSite=Strict` 和 `Secure` 标记。
+
+你还可以用防火墙按 IP 限制访问，例如 `ufw allow from <你的 IP> to any port 443`。
+
+## 更新与卸载
+
+```bash
+/opt/serversecuritygo/scripts/update.sh            # 更新到最新发布版
+/opt/serversecuritygo/scripts/update.sh v0.2.0     # 更新到指定版本
+/opt/serversecuritygo/scripts/rollback.sh          # 回到上次更新之前的版本
+/opt/serversecuritygo/scripts/logs.sh              # 日志（最后 100 行，然后持续跟踪）
+/opt/serversecuritygo/scripts/logs.sh -p warning --since today
+/opt/serversecuritygo/scripts/uninstall.sh         # 删除服务，保留文件和历史
+/opt/serversecuritygo/scripts/uninstall.sh --purge # 同时删除 /opt/serversecuritygo 和历史
+/opt/serversecuritygo/scripts/uninstall.sh --full  # 完全卸载（见下文）
+```
+
+更新如何防止失败：
+
+- 更新前，历史、`.env` 和 `allowlist.json` 会被归档到 `/var/backups/serversecuritygo`，保留最近 5 个归档；
+- 新的二进制文件会先经过检查（`version`），旧的会保存为 `bin/serversecuritygo.prev`；
+- 重启后会检查 `/healthz`；如果服务没有启动，会自动恢复之前的版本；
+- 源码切换后，更新由新版本的脚本完成，因此新版本新增的步骤会立即生效。例外是从 v0.1.x 更新：那时新脚本还没有运行，因此需要手动创建链接 `/usr/local/bin/serversecuritygo`（`ln -sfn /opt/serversecuritygo/bin/serversecuritygo /usr/local/bin/serversecuritygo`），或者再执行一次 `update.sh`。
+
+即使使用 `--purge`，备份也不会被删除。
+
+**更新到 v0.3.0（英文界面）。** 照常运行 `update.sh` 即可；无需迁移，已有的历史会保留。更新之后：
+
+- Web 面板以浏览器语言打开，页眉中有 **English / Русский** 切换按钮；在终端界面中按 `L` 切换语言；
+- 服务日志仍为俄文，除非你在 `/opt/serversecuritygo/.env` 中添加 `SSG_LANG=en` 并执行 `systemctl restart serversecuritygo`；
+- 如果你自己的脚本读取 JSON API，请注意文本字段现在可能是消息对象（见[语言](#语言)）；`scan --format json` 仍然输出普通文本。
+
+### 完全卸载
+
+这会把程序彻底移除，就像它从未安装在服务器上一样：服务及其在 systemd 中的痕迹、链接 `/usr/local/bin/serversecuritygo`、`/opt/serversecuritygo`、`/var/lib/serversecuritygo` 中的历史以及 `/var/backups/serversecuritygo` 中的备份。此操作无法撤销。
+
+```bash
+/opt/serversecuritygo/scripts/uninstall.sh --full -y
+```
+
+如果 `/opt/serversecuritygo` 已被删除或损坏，可以用一条命令在不依赖脚本的情况下完成同样的清理：
+
+```bash
+systemctl disable --now serversecuritygo 2>/dev/null; \
+rm -rf /etc/systemd/system/serversecuritygo.service /etc/systemd/system/serversecuritygo.service.d; \
+systemctl daemon-reload; systemctl reset-failed serversecuritygo 2>/dev/null; \
+[ -L /usr/local/bin/serversecuritygo ] && rm -f /usr/local/bin/serversecuritygo; \
+rm -rf /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo /run/serversecuritygo
+```
+
+该命令不会处理以下内容，原因如下：
+
+- **`git`、`curl` 和 `ca-certificates` 软件包。** 安装脚本只在缺少时才会添加它们，但其他程序也需要它们。如果确定不再需要：`apt-get remove git curl`；
+- **journald 记录。** 无法只删除某个服务的记录而不清空整个系统日志。它们会随着日志轮转自行消失。
+
+确认没有残留：
+
+```bash
+systemctl status serversecuritygo        # Unit serversecuritygo.service could not be found.
+ls -d /opt/serversecuritygo /var/lib/serversecuritygo /var/backups/serversecuritygo /usr/local/bin/serversecuritygo   # No such file or directory
+```
+
+服务状态：`systemctl status serversecuritygo`。
+
+## 控制台模式与演示
+
+一次性扫描，不影响服务的历史：
+
+```bash
+/opt/serversecuritygo/bin/serversecuritygo scan --env-file /opt/serversecuritygo/.env
+/opt/serversecuritygo/bin/serversecuritygo scan --min-risk MEDIUM --sample 2s      # 两次采样得到准确的 CPU
+/opt/serversecuritygo/bin/serversecuritygo scan --format json --min-risk INFO > scan.json
+```
+
+使用虚构数据的演示模式可在 Linux 和 macOS 上运行：
+
+```bash
+go run ./cmd/serversecuritygo demo --tui   # 在终端中
+go run ./cmd/serversecuritygo demo         # 在浏览器中：http://127.0.0.1:8090
+```
+
+## 构建与测试
+
+需要 Go 1.24 或更高版本；没有外部模块。
+
+```bash
+make build        # 为当前系统构建 bin/serversecuritygo
+make build-linux  # dist/serversecuritygo-linux-{amd64,arm64} + SHA256SUMS
+make test         # go test -race ./...
+make vet          # gofmt + go vet
+```
+
+测试使用伪造的 `/proc` 树（`internal/fakeproc`），因此可在任何操作系统上通过。在 Linux 上，`TestRealProc` 还会读取真实的 `/proc`。每次 push 和 pull request 时，GitHub Actions 会在 Ubuntu 上运行测试、以 root 运行 `/proc` 测试、对运行器做一次性扫描、对脚本运行 shellcheck 并进行交叉编译。推送 `v*` 标签会构建发布版。
+
+## 项目结构
+
+```
+cmd/serversecuritygo/     入口：tui（默认）、serve、scan、demo、hash-password、version
+internal/
+  procfs/                 读取 /proc：stat、status、cmdline、exe、fd、ns、cgroup、net
+  detect/                 规则、风险评分、解释、白名单、系统检查
+  redact/                 遮蔽命令行中的密钥
+  history/                进程历史和事件日志（state.json、events.jsonl）
+  scanner/                周期性扫描：收集 → 分析 → 历史
+  web/                    HTTP 服务器、认证、API；static/ 中是内嵌的 Web 面板
+  i18n/                   英文和俄文翻译、消息类型、语言检测
+  tui/                    终端界面（无外部库：termios、ANSI、鼠标）
+  view/                   Web 面板和终端界面共用的数据视图
+  config/                 来自环境变量的设置
+  fakeproc/               用于测试和演示数据的伪造 /proc
+  model/                  共享的数据结构
+deploy/serversecuritygo.service   加固的 systemd 单元
+scripts/                  install.sh、update.sh、rollback.sh、uninstall.sh、logs.sh、lib.sh
+.env.example              带注释的全部设置
+allowlist.example.json    白名单示例
+.github/workflows/        CI 和发布
+```
+
+API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
+
+## 安全
+
+- 只读：代码中没有终止进程、删除文件或修改网络规则的调用。
+- 终端界面通过权限为 `600`、位于 `700` 目录中的 Unix 套接字获取数据。文件权限本身就是授权，因此只有 root 能连接。进程名和命令行中的控制字符永远不会写入终端，因此进程名无法在你的终端中执行转义序列。
+- 默认情况下，Web 面板只监听 `127.0.0.1`。没有密码、`SSG_ALLOWED_HOSTS` 和 HTTPS 时，网络地址不会启动。
+- 未设置密码时，面板只对 `SSG_LOCAL_UIDS` 中列出的用户开放（默认是 root）：每个回环连接的所有者都会在 `/proc/net/tcp` 中查找，其他人一律收到 403。否则任何本地用户都能读取服务以 root 身份收集的内容：其他用户进程的路径、打开的文件和套接字，以及检查结果。
+- `Host` 请求头检查防御 DNS rebinding，CSRF 令牌保护每个 POST 请求，CSP 禁止内联脚本。进程名和命令行只以纯文本渲染，因此攻击者无法通过自己进程的名称注入 HTML。
+- 命令行中的密钥会在分析、存储和输出**之前**被遮蔽：`--password=…`、mysql 的 `-pPASSWORD`、URL 中的 `user:pass@`、`*_TOKEN=…`、AWS 和 GitHub 密钥、JWT、Telegram 令牌。环境变量的值永远不会进入历史。密码、cookie 和命令行永远不会写入日志。
+- 服务以 root 身份运行（否则看不到其他用户的进程），但权限受到削减：只有 `CAP_SYS_PTRACE` 和 `CAP_DAC_READ_SEARCH`。除 `/var/lib/serversecuritygo` 外，文件系统对服务是只读的；服务以 `NoNewPrivileges` 和系统调用过滤器运行，并受 `MemoryMax=256M` 和 `CPUQuota=50%` 限制。
+
+## 参与贡献
+
+非常欢迎参与贡献！我们感谢任何错误报告、误报报告、想法和 pull request。
+
+- 开始之前，请阅读[贡献指南](CONTRIBUTING.md#english)和[行为准则](CODE_OF_CONDUCT.md#english)（英文）。
+- 报告错误和提出建议，请[创建 issue](https://github.com/Zagorsky17/ServerSecurityGo/issues/new/choose)；我们提供了模板。issue 可以用英文或俄文撰写。
+- **请不要在公开 issue 中报告漏洞。** 报告方式见 [SECURITY.md](SECURITY.md#english)。
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
