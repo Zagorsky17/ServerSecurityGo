@@ -15,6 +15,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/web"
 )
@@ -34,14 +35,18 @@ func demoScanner(t *testing.T) *scanner.Scanner {
 
 // newTestApp — интерфейс на демо-данных без настоящего терминала.
 func newTestApp(t *testing.T, w, h int) (*App, *bytes.Buffer) {
+	return newTestAppLang(t, w, h, i18n.RU)
+}
+
+func newTestAppLang(t *testing.T, w, h int, lang i18n.Lang) (*App, *bytes.Buffer) {
 	t.Helper()
-	src, err := NewLocalSource(demoScanner(t), "test", true, "демо")
+	src, err := NewLocalSource(demoScanner(t), "test", true, i18n.T("tui.source_demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(src.Close)
 	out := &bytes.Buffer{}
-	a := New(Options{Source: src, Out: out})
+	a := New(Options{Source: src, Out: out, Lang: lang})
 	a.w, a.h = w, h
 	a.load()
 	return a, out
@@ -456,7 +461,7 @@ func TestAddrInTitle(t *testing.T) {
 func TestAddrInHistory(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
 	press(a, r('5'))
-	a.events[0].Details = "Начал слушать tcp 203.0.113.5:8443"
+	a.events[0].Details = i18n.T("hist.listen", "tcp 203.0.113.5:8443")
 	a.render()
 	cs := cellsAt(a, "203.0.113.5:8443")
 	if cs == nil {
@@ -464,5 +469,73 @@ func TestAddrInHistory(t *testing.T) {
 	}
 	if cs[0].st.FG != stAddr.FG || cs[len("203.0.113.5")].st.FG == stAddr.FG {
 		t.Errorf("цвета: адрес %d, порт %d", cs[0].st.FG, cs[len("203.0.113.5")].st.FG)
+	}
+}
+
+// hasCyrillic сообщает, есть ли в строке кириллица. Слово «русский» —
+// название языка в переключателе — пишется по-русски намеренно.
+func hasCyrillic(s string) bool {
+	s = strings.ReplaceAll(s, "русский", "")
+	return strings.ContainsFunc(s, func(r rune) bool { return r >= 0x400 && r <= 0x4FF })
+}
+
+// TestEnglishScreens: на английском ни на одном экране нет русского
+// текста (демо-данные — латиница), так ловятся забытые в коде строки.
+func TestEnglishScreens(t *testing.T) {
+	a, _ := newTestAppLang(t, 160, 60, i18n.EN)
+	check := func(what string) {
+		t.Helper()
+		if s := screen(a); hasCyrillic(s) {
+			t.Errorf("%s: русский текст на английском экране:\n%s", what, s)
+		}
+	}
+	check("старт")
+	for _, k := range "123456" {
+		press(a, r(k))
+		check("панель " + string(k))
+		press(a, Key{Kind: KeyEnter})
+		check("подробности панели " + string(k))
+		for range 3 {
+			press(a, Key{Kind: KeyDown})
+			check("подробности, прокрутка " + string(k))
+		}
+		press(a, Key{Kind: KeyEsc})
+	}
+	// Все подозрительные процессы: карточка каждого.
+	press(a, r('2'))
+	for range len(a.susp) {
+		press(a, Key{Kind: KeyEnter})
+		a.mainOffset = 0
+		for range 20 {
+			check("карточка процесса")
+			press(a, Key{Kind: KeyPgDn})
+		}
+		press(a, Key{Kind: KeyEsc}, Key{Kind: KeyDown})
+	}
+	press(a, r('3'), r('t'))
+	check("дерево")
+	press(a, r('s'))
+	check("сортировка")
+	press(a, r('?'))
+	check("справка")
+	press(a, Key{Kind: KeyEsc}, r('/'))
+	check("фильтр")
+	press(a, Key{Kind: KeyEsc})
+	a.w = 60
+	check("узкое окно")
+}
+
+func TestLangToggle(t *testing.T) {
+	a, _ := newTestAppLang(t, 160, 45, i18n.RU)
+	if s := screen(a); !strings.Contains(s, "[2] Подозрительные") {
+		t.Fatalf("ожидался русский интерфейс:\n%s", s)
+	}
+	press(a, r('L'))
+	if s := screen(a); !strings.Contains(s, "[2] Suspicious") || !strings.Contains(s, "Language: English") {
+		t.Errorf("после L ожидался английский:\n%s", s)
+	}
+	press(a, r('L'))
+	if a.lang != i18n.RU {
+		t.Errorf("повторное L должно вернуть русский: %s", a.lang)
 	}
 }

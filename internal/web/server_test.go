@@ -21,6 +21,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
@@ -441,5 +442,89 @@ func TestPeerContext(t *testing.T) {
 	}
 	if uid, ok := peerUID(ctx); uid != 1000 || !ok {
 		t.Errorf("peerUID = %d %v", uid, ok)
+	}
+}
+
+// TestCatalogEndpoint: каталог переводов доступен без входа (он нужен
+// странице входа), отдаётся с ETag и только для известных языков.
+func TestCatalogEndpoint(t *testing.T) {
+	s := newTestServer(t, fastHash(t, "correct horse battery", 1000))
+	w := do(s, "GET", "/i18n/en.json", "127.0.0.1:8090", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("код %d", w.Code)
+	}
+	var cat map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &cat); err != nil || cat["web.login.submit"] != "Log in" {
+		t.Fatalf("каталог: %v %q", err, cat["web.login.submit"])
+	}
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("нет ETag")
+	}
+	if w := do(s, "GET", "/i18n/en.json", "127.0.0.1:8090", "", map[string]string{"If-None-Match": etag}); w.Code != http.StatusNotModified {
+		t.Errorf("повторный запрос с ETag: %d", w.Code)
+	}
+	if w := do(s, "GET", "/i18n/ru.json", "127.0.0.1:8090", "", nil); w.Code != 200 || !strings.Contains(w.Body.String(), "Войти") {
+		t.Errorf("русский каталог: %d", w.Code)
+	}
+	for _, p := range []string{"/i18n/de.json", "/i18n/en", "/i18n/..%2fapp.js"} {
+		if w := do(s, "GET", p, "127.0.0.1:8090", "", nil); w.Code != http.StatusNotFound {
+			t.Errorf("%s: код %d", p, w.Code)
+		}
+	}
+}
+
+// TestPageLang: язык страницы по умолчанию — SSG_LANG, иначе
+// Accept-Language; ошибки API — на языке из X-SSG-Lang.
+func TestPageLang(t *testing.T) {
+	s := newTestServer(t, "")
+	page := func(al string) string {
+		w := do(s, "GET", "/", "127.0.0.1:8090", "", map[string]string{"Accept-Language": al})
+		if w.Header().Get("Vary") != "Accept-Language" {
+			t.Error("нет Vary: Accept-Language")
+		}
+		return w.Body.String()
+	}
+	if b := page("en-US,en;q=0.9"); !strings.Contains(b, `<html lang="en">`) {
+		t.Errorf("английский браузер: %.80s", b)
+	}
+	if b := page("ru-RU"); !strings.Contains(b, `<html lang="ru">`) {
+		t.Errorf("русский браузер: %.80s", b)
+	}
+	s.opt.Lang = i18n.EN
+	if b := page("ru-RU"); !strings.Contains(b, `<html lang="en">`) {
+		t.Errorf("SSG_LANG=en должен быть главнее браузера: %.80s", b)
+	}
+	w := do(s, "GET", "/api/process/nope", "127.0.0.1:8090", "", map[string]string{"X-SSG-Lang": "ru"})
+	if !strings.Contains(w.Body.String(), "процесс не найден") {
+		t.Errorf("ошибка на русском: %s", w.Body)
+	}
+	w = do(s, "GET", "/api/process/nope", "127.0.0.1:8090", "", nil)
+	if !strings.Contains(w.Body.String(), "process not found") {
+		t.Errorf("ошибка на английском (SSG_LANG): %s", w.Body)
+	}
+}
+
+// TestStaticKeysAndSafety: разметка не использует innerHTML, а скрипты
+// подключают i18n.js раньше страницы (они делят глобальные функции).
+func TestStaticKeysAndSafety(t *testing.T) {
+	for _, name := range []string{"app.js", "login.js", "i18n.js"} {
+		data, err := staticFS.ReadFile("static/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), ".innerHTML") || strings.Contains(string(data), "insertAdjacentHTML") {
+			t.Errorf("%s: innerHTML запрещён", name)
+		}
+	}
+	for page, script := range map[string]string{"index.html": "app.js", "login.html": "login.js"} {
+		data, _ := staticFS.ReadFile("static/" + page)
+		i, j := strings.Index(string(data), "/static/i18n.js"), strings.Index(string(data), "/static/"+script)
+		if i < 0 || j < 0 || i > j {
+			t.Errorf("%s: i18n.js должен подключаться до %s", page, script)
+		}
+		if !strings.Contains(string(data), htmlLangAttr) {
+			t.Errorf("%s: нет %s — сервер не сможет выставить язык", page, htmlLangAttr)
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -28,7 +29,7 @@ func (a *App) draw() {
 func (a *App) render() {
 	if a.w < 20 || a.h < 8 {
 		a.scr = newScreen(max(a.w, 1), max(a.h, 1))
-		a.scr.Text(0, 0, a.w, "Окно слишком маленькое", stWarn)
+		a.scr.Text(0, 0, a.w, a.tr("tui.too_small"), stWarn)
 		return
 	}
 	a.scr = newScreen(a.w, a.h)
@@ -107,13 +108,13 @@ func (a *App) panelActive(p panelID) bool { return !a.inMain && a.focus == p }
 
 func (a *App) drawStatus(r rect) {
 	s := a.scr
-	s.Box(r.x, r.y, r.w, r.h, "[1] "+panelTitles[pStatus], a.panelActive(pStatus))
+	s.Box(r.x, r.y, r.w, r.h, "[1] "+a.panelTitle(pStatus), a.panelActive(pStatus))
 	iw := r.w - 4
 	x := r.x + 2
 	if a.data == nil {
-		msg := "Загрузка…"
+		msg := a.tr("tui.loading")
 		if a.err != nil {
-			msg = "Ошибка: " + a.err.Error()
+			msg = a.tr("tui.error", a.err.Error())
 		}
 		s.Text(x, r.y+1, iw, msg, stErr)
 		return
@@ -122,10 +123,10 @@ func (a *App) drawStatus(r rect) {
 	h := st.Host
 	host := sanitize(h.Hostname)
 	if st.Demo {
-		host += " · ДЕМО"
+		host += " · " + a.tr("tui.demo")
 	}
 	s.Text(x, r.y+1, iw, fmt.Sprintf("%s · %s · %s", host, h.OS, h.Kernel), stBold)
-	s.Text(x, r.y+2, iw, fmt.Sprintf("Скан %s (%d мс) · каждые %s · %s", st.Time.Local().Format("15:04:05"), st.DurationMs, secs(st.Interval), a.src.Describe()), stDim)
+	s.Text(x, r.y+2, iw, a.tr("tui.scan_line", st.Time.Local().Format("15:04:05"), st.DurationMs, secs(st.Interval), a.txt(a.src.Describe())), stDim)
 	cx := x
 	for _, rk := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
 		n := st.Stats.ByRisk[rk]
@@ -135,7 +136,7 @@ func (a *App) drawStatus(r rect) {
 		}
 		cx += s.Text(cx, r.y+3, x+iw-cx, fmt.Sprintf("%s %d  ", strings.TrimSpace(riskShort(rk)), n), stl)
 	}
-	line := fmt.Sprintf("Процессов %d · сокетов %d · система %d", st.Stats.Total, st.Stats.Sockets, st.SystemFindings)
+	line := a.tr("tui.counts_line", st.Stats.Total, st.Stats.Sockets, st.SystemFindings)
 	s.Text(x, r.y+4, iw, line, stNormal)
 	if len(st.Warnings) > 0 {
 		w := fmt.Sprintf(" · ⚠ %d", len(st.Warnings))
@@ -152,12 +153,12 @@ func secs(f float64) string {
 // ---------------------------------------------------------------------
 
 func (a *App) listTitle(p panelID) string {
-	t := fmt.Sprintf("[%d] %s (%d)", p+1, panelTitles[p], a.count(p))
+	t := fmt.Sprintf("[%d] %s (%d)", p+1, a.panelTitle(p), a.count(p))
 	if p == pProcs {
 		if a.treeMode {
-			t += " · дерево"
+			t += " · " + a.tr("tui.tree")
 		} else {
-			t += " · " + sortNames[a.sortMode]
+			t += " · " + a.sortName(a.sortMode)
 		}
 	}
 	if f := a.lists[p].filter; f != "" {
@@ -196,9 +197,9 @@ func (a *App) drawList(p panelID, r rect) {
 	}
 	l.offset = max(0, min(l.offset, max(0, n-ih)))
 	if n == 0 {
-		msg := "Пусто"
+		msg := a.tr("tui.empty")
 		if p == pSusp && l.filter == "" {
-			msg = "Подозрительных процессов нет"
+			msg = a.tr("tui.no_suspicious")
 		}
 		s.Text(x+1, y, iw-1, msg, stDim)
 		return
@@ -231,19 +232,19 @@ func (a *App) drawList(p panelID, r rect) {
 func (a *App) columnsHeader(p panelID, w int) string {
 	switch p {
 	case pSusp:
-		return fit("РИСК    PID ПОЛЬЗ.   ИМЯ", w)
+		return fit(a.tr("tui.cols.susp"), w)
 	case pProcs:
-		h := "   PID ПОЛЬЗ.     CPU%    RAM РИСК ИМЯ"
+		h := a.tr("tui.cols.procs")
 		if w >= 90 {
-			h += strings.Repeat(" ", 12) + "КОМАНДА"
+			h += strings.Repeat(" ", 12) + a.tr("tui.cols.command")
 		}
 		return fit(h, w)
 	case pNet:
-		return fit("ПРОТ  ЛОКАЛЬНЫЙ             УДАЛЁННЫЙ             СОСТОЯНИЕ   ПРОЦЕСС", w)
+		return fit(a.tr("tui.cols.net"), w)
 	case pHist:
-		return fit("ВРЕМЯ    СОБЫТИЕ      PID ИМЯ             ПОДРОБНОСТИ", w)
+		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
-		return fit("РИСК ПРОВЕРКА / ФАЙЛ", w)
+		return fit(a.tr("tui.cols.sys"), w)
 	}
 	return ""
 }
@@ -260,7 +261,7 @@ func (a *App) row(p panelID, i, w int) []seg {
 			rest = pr.Cmdline
 		}
 		if pr.ExeDeleted {
-			rest += " (удалён)"
+			rest += " " + a.tr("tui.deleted")
 		}
 		return []seg{
 			{fit(pr.Risk.String(), 8), riskStyle(pr.Risk.String())},
@@ -304,7 +305,7 @@ func (a *App) row(p panelID, i, w int) []seg {
 		if sk.RemotePort != 0 {
 			remote = addrSegs(sk.RemoteAddr, sk.RemotePort, 21)
 		}
-		owner := "неизвестно"
+		owner := a.tr("tui.unknown")
 		ost := stDim
 		if sk.PID != 0 {
 			owner, ost = fmt.Sprintf("%s(%d)", sk.ProcName, sk.PID), stNormal
@@ -330,16 +331,16 @@ func (a *App) row(p panelID, i, w int) []seg {
 		}
 		return []seg{
 			{e.Time.Local().Format("15:04:05") + " ", stDim},
-			{fit(eventName(e.Type), 10) + " ", est},
+			{fit(eventName(a.lang, e.Type), 10) + " ", est},
 			{fitLeft(pid, 6) + " ", stNormal},
 			{fit(who, 15) + " ", stBold},
-			{e.Details, stDim},
+			{a.txt(e.Details), stDim},
 		}
 	case pSys:
 		f := a.system[i]
 		return []seg{
 			{riskShort(f.Risk.String()) + " ", riskStyle(f.Risk.String())},
-			{f.Title + " ", stNormal},
+			{a.txt(f.Title) + " ", stNormal},
 			{f.Path, stDim},
 		}
 	}
@@ -400,8 +401,12 @@ func (a *App) drawMain(r rect) {
 // lb — построитель строк подробностей с переносом по ширине.
 type lb struct {
 	w     int
+	lang  i18n.Lang
 	lines []line
 }
+
+// tr — строка каталога на языке интерфейса.
+func (b *lb) tr(key string, args ...any) string { return i18n.T(key, args...).In(b.lang) }
 
 func (b *lb) add(segs ...seg) { b.lines = append(b.lines, line(segs)) }
 func (b *lb) blank()          { b.lines = append(b.lines, nil) }
@@ -457,64 +462,64 @@ func fmtTime(t time.Time) string {
 	return t.Local().Format("02.01.2006 15:04:05")
 }
 
-func ago(t time.Time) string {
+func (b *lb) ago(t time.Time) string {
 	if t.IsZero() || t.Year() < 2000 {
 		return "—"
 	}
 	d := time.Since(t)
 	switch {
 	case d >= 24*time.Hour:
-		return fmt.Sprintf("%d д %d ч", int(d.Hours())/24, int(d.Hours())%24)
+		return b.tr("tui.ago.days", int(d.Hours())/24, int(d.Hours())%24)
 	case d >= time.Hour:
-		return fmt.Sprintf("%d ч %d мин", int(d.Hours()), int(d.Minutes())%60)
+		return b.tr("tui.ago.hours", int(d.Hours()), int(d.Minutes())%60)
 	case d >= time.Minute:
-		return fmt.Sprintf("%d мин", int(d.Minutes()))
+		return b.tr("tui.ago.minutes", int(d.Minutes()))
 	}
-	return fmt.Sprintf("%d с", int(d.Seconds()))
+	return b.tr("tui.ago.seconds", int(d.Seconds()))
 }
 
 // mainContent возвращает заголовок и строки для панели подробностей в
 // зависимости от активной панели слева.
 func (a *App) mainContent(w int) (string, []line) {
-	b := &lb{w: w}
+	b := &lb{w: w, lang: a.lang}
 	if a.data == nil {
-		b.para("Нет данных. "+errText(a.err), stErr, 0)
-		return "Подробности", b.lines
+		b.para(a.tr("tui.no_data", errText(a.err)), stErr, 0)
+		return a.tr("tui.title.details"), b.lines
 	}
 	switch a.focus {
 	case pStatus:
 		a.overview(b)
-		return "Обзор", b.lines
+		return a.tr("tui.title.overview"), b.lines
 	case pNet:
 		sk, ok := a.selSocket()
 		if !ok {
-			return "Сокет", nil
+			return a.tr("tui.title.socket"), nil
 		}
 		a.socketDetail(b, sk)
-		return fmt.Sprintf("Сокет %s:%d", sk.LocalAddr, sk.LocalPort), b.lines
+		return a.tr("tui.title.socket_addr", sk.LocalAddr, sk.LocalPort), b.lines
 	case pSys:
 		f, ok := a.selSystem()
 		if !ok {
-			b.para("Системных находок нет.", stDim, 0)
-			return "Проверка", b.lines
+			b.para(a.tr("tui.no_system"), stDim, 0)
+			return a.tr("tui.title.check"), b.lines
 		}
 		a.systemDetail(b, f)
-		return "Проверка · " + f.Path, b.lines
+		return a.tr("tui.title.check") + " · " + f.Path, b.lines
 	case pHist:
 		e, ok := a.selEvent()
 		if !ok {
-			return "Событие", nil
+			return a.tr("tui.title.event"), nil
 		}
-		b.add(seg{fmtTime(e.Time) + "  ", stDim}, seg{eventName(e.Type), riskStyle(e.Risk.String())}, seg{"  " + e.Risk.String(), riskStyle(e.Risk.String())})
-		b.para(e.Details, stNormal, 0)
+		b.add(seg{fmtTime(e.Time) + "  ", stDim}, seg{eventName(a.lang, e.Type), riskStyle(e.Risk.String())}, seg{"  " + e.Risk.String(), riskStyle(e.Risk.String())})
+		b.para(a.txt(e.Details), stNormal, 0)
 		if e.Key == "" {
-			return "Событие", b.lines
+			return a.tr("tui.title.event"), b.lines
 		}
 	}
 	p, ok := a.selectedProc()
 	if !ok {
-		b.para("Выберите процесс в списке слева.", stDim, 0)
-		return "Процесс", b.lines
+		b.para(a.tr("tui.select_process"), stDim, 0)
+		return a.tr("tui.title.process"), b.lines
 	}
 	a.processDetail(b, p.Key)
 	return fmt.Sprintf("PID %d · %s", p.PID, sanitize(p.Name)), b.lines
@@ -544,26 +549,26 @@ func (a *App) ensureDetail(key string) {
 func (a *App) processDetail(b *lb, key string) {
 	a.ensureDetail(key)
 	if a.detailErr != nil {
-		b.para("Не удалось получить карточку: "+a.detailErr.Error(), stErr, 0)
+		b.para(a.tr("tui.detail_error", a.detailErr.Error()), stErr, 0)
 		return
 	}
 	d := a.detail
 	if d.Exited && d.Track != nil {
 		t := d.Track
-		b.add(seg{"Процесс завершился", stWarn})
-		b.kv("Имя", t.Name)
-		b.kv("Пользователь", t.User)
-		b.kv("Путь", t.Exe)
-		b.kv("Команда", t.Cmdline)
-		b.kv("Впервые", fmtTime(t.FirstSeen))
-		b.kv("Последний раз", fmtTime(t.LastSeen))
-		b.kv("Последний риск", t.Risk.String())
+		b.add(seg{a.tr("tui.exited"), stWarn})
+		b.kv(a.tr("tui.k.name"), t.Name)
+		b.kv(a.tr("tui.k.user"), t.User)
+		b.kv(a.tr("tui.k.path"), t.Exe)
+		b.kv(a.tr("tui.k.command"), t.Cmdline)
+		b.kv(a.tr("tui.k.first"), fmtTime(t.FirstSeen))
+		b.kv(a.tr("tui.k.last"), fmtTime(t.LastSeen))
+		b.kv(a.tr("tui.k.last_risk"), t.Risk.String())
 		eventsBlock(b, d.Events)
 		return
 	}
 	p := d.Process
 	rs := p.Risk.String()
-	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{fmt.Sprintf("  %d балл. · %s · %s", p.Score, sanitize(p.User), sanitize(p.Name)), stBold})
+	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + a.tr("tui.points", p.Score, sanitize(p.User), sanitize(p.Name)), stBold})
 
 	active, info := []model.Finding{}, []model.Finding{}
 	for _, f := range p.Findings {
@@ -573,66 +578,66 @@ func (a *App) processDetail(b *lb, key string) {
 			active = append(active, f)
 		}
 	}
-	b.header("Оценка риска")
-	b.para(p.Explanation, stNormal, 2)
+	b.header(a.tr("tui.h.assessment"))
+	b.para(a.txt(p.Explanation), stNormal, 2)
 	if len(active) > 0 {
-		b.header("Признаки")
+		b.header(a.tr("tui.h.findings"))
 		for _, f := range active {
 			findingBlock(b, f)
 		}
 	}
 	if len(p.Recommendations) > 0 {
-		b.header("Рекомендации по проверке")
+		b.header(a.tr("tui.h.recommendations"))
 		for _, r := range p.Recommendations {
-			b.para("• "+r, stNormal, 2)
+			b.para("• "+a.txt(r), stNormal, 2)
 		}
 	}
-	b.header("Командная строка  (y — копировать, секреты замаскированы)")
+	b.header(a.tr("tui.h.cmdline"))
 	cmd := p.Cmdline
 	if cmd == "" {
-		cmd = "(пусто)"
+		cmd = a.tr("tui.empty_paren")
 	}
 	b.para(cmd, Style{FG: 223, BG: -1}, 2)
 
-	b.header("Основное")
+	b.header(a.tr("tui.h.main"))
 	b.kv("PID / PPID", fmt.Sprintf("%d / %d", p.PID, p.PPID))
-	b.kv("Пользователь", fmt.Sprintf("%s (UID %d, EUID %d, GID %d)", p.User, p.UID, p.EUID, p.GID))
+	b.kv(a.tr("tui.k.user"), fmt.Sprintf("%s (UID %d, EUID %d, GID %d)", p.User, p.UID, p.EUID, p.GID))
 	exe := p.Exe
 	switch {
 	case exe == "" && p.Kernel:
-		exe = "поток ядра"
+		exe = a.tr("tui.kernel_thread")
 	case exe == "":
-		exe = "недоступно"
+		exe = a.tr("tui.unavailable")
 	case p.ExeDeleted:
-		exe += " (удалён)"
+		exe += " " + a.tr("tui.deleted")
 	}
-	b.kv("Исполняемый файл", exe)
+	b.kv(a.tr("tui.k.exe"), exe)
 	if p.ExeInfo != nil {
-		b.kv("Права файла", fmt.Sprintf("%s, владелец UID %d, %s", p.ExeInfo.Mode, p.ExeInfo.UID, fmtBytes(uint64(p.ExeInfo.Size))))
+		b.kv(a.tr("tui.k.file_mode"), a.tr("tui.file_mode", p.ExeInfo.Mode, p.ExeInfo.UID, fmtBytes(uint64(p.ExeInfo.Size))))
 	}
-	b.kv("Рабочий каталог", orDash(p.Cwd))
-	b.kv("Запущен", fmtTime(p.StartTime)+" ("+ago(p.StartTime)+")")
-	b.kv("Впервые замечен", fmtTime(p.FirstSeen))
+	b.kv(a.tr("tui.k.cwd"), orDash(p.Cwd))
+	b.kv(a.tr("tui.k.started"), fmtTime(p.StartTime)+" ("+b.ago(p.StartTime)+")")
+	b.kv(a.tr("tui.k.first_seen"), fmtTime(p.FirstSeen))
 	cpu := fmt.Sprintf("%.1f%%", p.CPUPercent)
 	if p.CPUAverage {
-		cpu += " (среднее с запуска)"
+		cpu += " " + a.tr("tui.cpu_average")
 	}
 	b.kv("CPU", cpu)
-	b.kv("Память", fmt.Sprintf("%s RSS (%.1f%%), потоков %d, дескрипторов %d", fmtBytes(p.RSSBytes), p.MemPercent, p.Threads, p.FDCount))
+	b.kv(a.tr("tui.k.memory"), a.tr("tui.memory", fmtBytes(p.RSSBytes), fmt.Sprintf("%.1f", p.MemPercent), p.Threads, p.FDCount))
 	if len(p.EnvFlags) > 0 {
-		b.kv("Окружение", strings.Join(p.EnvFlags, ", ")+" (значения не читаются)")
+		b.kv(a.tr("tui.k.env"), strings.Join(p.EnvFlags, ", ")+" "+a.tr("tui.env_values"))
 	}
 	if p.ContainerRuntime != "" {
-		b.kv("Контейнер", strings.TrimSpace(p.ContainerRuntime+" "+p.Container))
+		b.kv(a.tr("tui.k.container"), strings.TrimSpace(p.ContainerRuntime+" "+p.Container))
 	}
 	if len(p.ForeignNS) > 0 {
-		b.kv("Другие namespaces", strings.Join(p.ForeignNS, ", "))
+		b.kv(a.tr("tui.k.foreign_ns"), strings.Join(p.ForeignNS, ", "))
 	}
 	if len(p.Access) > 0 {
-		b.kv("Нет доступа к", strings.Join(p.Access, ", "))
+		b.kv(a.tr("tui.k.no_access"), strings.Join(p.Access, ", "))
 	}
 
-	b.header("Цепочка запуска")
+	b.header(a.tr("tui.h.chain"))
 	var chain []string
 	for i := len(d.Ancestors) - 1; i >= 0; i-- {
 		chain = append(chain, fmt.Sprintf("%s(%d)", d.Ancestors[i].Name, d.Ancestors[i].PID))
@@ -644,7 +649,7 @@ func (a *App) processDetail(b *lb, key string) {
 		for _, c := range d.Children {
 			kids = append(kids, fmt.Sprintf("%s(%d)", c.Name, c.PID))
 		}
-		b.para("Потомки: "+strings.Join(kids, ", "), stDim, 2)
+		b.para(a.tr("tui.children", strings.Join(kids, ", ")), stDim, 2)
 	}
 
 	var inet []model.Socket
@@ -656,7 +661,7 @@ func (a *App) processDetail(b *lb, key string) {
 			inet = append(inet, sk)
 		}
 	}
-	b.header(fmt.Sprintf("Сеть (TCP/UDP: %d, unix: %d)", len(inet), unix))
+	b.header(a.tr("tui.h.network", len(inet), unix))
 	for _, sk := range inet {
 		segs := []seg{{fmt.Sprintf("  %-5s ", sk.Proto), stNormal}, {sk.LocalAddr, stAddr}, {fmt.Sprintf(":%d", sk.LocalPort), stNormal}}
 		if sk.RemotePort != 0 {
@@ -665,19 +670,19 @@ func (a *App) processDetail(b *lb, key string) {
 		b.add(append(segs, seg{" ", stNormal}, seg{sk.State, stAccent})...)
 	}
 	if len(p.Files) > 0 {
-		b.header(fmt.Sprintf("Открытые файлы (%d из %d)", len(p.Files), p.FDCount))
+		b.header(a.tr("tui.h.files", len(p.Files), p.FDCount))
 		for i, f := range p.Files {
 			if i >= 40 {
-				b.add(seg{fmt.Sprintf("  … ещё %d (полный список — JSON, клавиша Y)", len(p.Files)-40), stDim})
+				b.add(seg{"  " + a.tr("tui.more_files", len(p.Files)-40), stDim})
 				break
 			}
 			b.add(seg{fmt.Sprintf("  %4d %-7s ", f.FD, f.Kind), stDim}, seg{sanitize(f.Target), stNormal})
 		}
 	}
 	if len(info) > 0 {
-		b.header("Справочно")
+		b.header(a.tr("tui.h.info"))
 		for _, f := range info {
-			b.para("• "+f.Title+": "+strings.Join(f.Evidence, "; "), stDim, 2)
+			b.para("• "+a.txt(f.Title)+": "+i18n.Join("; ", f.Evidence...).In(a.lang), stDim, 2)
 		}
 	}
 	eventsBlock(b, d.Events)
@@ -693,20 +698,20 @@ func findingBlock(b *lb, f model.Finding) {
 		st = stDim
 		mark = "○"
 	}
-	tags := fmt.Sprintf("  [%s, +%d", detect.CategoryTitle(f.Category), f.Weight)
+	tags := fmt.Sprintf("  [%s, +%d", detect.CategoryTitle(f.Category).In(b.lang), f.Weight)
 	if f.Strong {
-		tags += ", сильный"
+		tags += ", " + b.tr("tui.strong")
 	}
 	if f.Suppressed {
-		tags += ", подавлен allowlist"
+		tags += ", " + b.tr("tui.suppressed")
 	}
 	tags += "]"
-	b.add(seg{"  " + mark + " ", st}, seg{sanitize(f.Title), st}, seg{tags, stDim})
+	b.add(seg{"  " + mark + " ", st}, seg{sanitize(f.Title.In(b.lang)), st}, seg{tags, stDim})
 	for _, e := range f.Evidence {
-		b.para("· "+e, Style{FG: 250, BG: -1}, 6)
+		b.para("· "+e.In(b.lang), Style{FG: 250, BG: -1}, 6)
 	}
-	if f.Recommendation != "" {
-		b.para("→ "+f.Recommendation, stDim, 6)
+	if !f.Recommendation.IsZero() {
+		b.para("→ "+f.Recommendation.In(b.lang), stDim, 6)
 	}
 }
 
@@ -714,10 +719,10 @@ func eventsBlock(b *lb, evs []model.Event) {
 	if len(evs) == 0 {
 		return
 	}
-	b.header("История процесса")
+	b.header(b.tr("tui.h.history"))
 	for i := len(evs) - 1; i >= 0; i-- {
 		e := evs[i]
-		b.add(seg{"  " + e.Time.Local().Format("02.01 15:04:05") + " ", stDim}, seg{fit(eventName(e.Type), 11), riskStyle(e.Risk.String())}, seg{sanitize(e.Details), stNormal})
+		b.add(seg{"  " + e.Time.Local().Format("02.01 15:04:05") + " ", stDim}, seg{fit(eventName(b.lang, e.Type), 11), riskStyle(e.Risk.String())}, seg{sanitize(e.Details.In(b.lang)), stNormal})
 	}
 }
 
@@ -729,17 +734,17 @@ func orDash(s string) string {
 }
 
 func (a *App) socketDetail(b *lb, sk model.Socket) {
-	b.kv("Протокол", sk.Proto)
-	b.kvAddr("Локальный адрес", sk.LocalAddr, sk.LocalPort)
+	b.kv(a.tr("tui.k.proto"), sk.Proto)
+	b.kvAddr(a.tr("tui.k.local"), sk.LocalAddr, sk.LocalPort)
 	if sk.RemotePort != 0 {
-		b.kvAddr("Удалённый адрес", sk.RemoteAddr, sk.RemotePort)
+		b.kvAddr(a.tr("tui.k.remote"), sk.RemoteAddr, sk.RemotePort)
 	}
-	b.kv("Состояние", sk.State)
+	b.kv(a.tr("tui.k.state"), sk.State)
 	b.kv("inode", strconv.FormatUint(sk.Inode, 10))
 	b.kv("Netns", orDash(sk.NetNS))
 	if sk.ProcKey == "" {
 		b.blank()
-		b.para("Владелец не найден: нет прав на /proc/PID/fd, сокет ядра или соединение уже закрыто (TIME_WAIT).", stDim, 2)
+		b.para(a.tr("tui.no_owner"), stDim, 2)
 		return
 	}
 	b.blank()
@@ -748,17 +753,17 @@ func (a *App) socketDetail(b *lb, sk model.Socket) {
 
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
 	rs := f.Risk.String()
-	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(f.Title), stBold})
-	b.kv("Файл", f.Path)
-	b.kv("Изменён", fmtTime(f.ModTime))
-	b.kv("Правило", f.ID)
-	b.header("Факты")
+	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
+	b.kv(a.tr("tui.k.file"), f.Path)
+	b.kv(a.tr("tui.k.modified"), fmtTime(f.ModTime))
+	b.kv(a.tr("tui.k.rule"), f.ID)
+	b.header(a.tr("tui.h.facts"))
 	for _, e := range f.Evidence {
-		b.para("· "+e, stNormal, 2)
+		b.para("· "+a.txt(e), stNormal, 2)
 	}
-	if f.Recommendation != "" {
-		b.header("Рекомендация")
-		b.para(f.Recommendation, stNormal, 2)
+	if !f.Recommendation.IsZero() {
+		b.header(a.tr("tui.h.recommendation"))
+		b.para(a.txt(f.Recommendation), stNormal, 2)
 	}
 }
 
@@ -767,42 +772,43 @@ func (a *App) overview(b *lb) {
 	st := a.data.Status
 	h := st.Host
 	b.add(seg{"ServerSecurityGo " + st.Version, stBold})
-	b.para("Только наблюдение: приложение не завершает процессы, не удаляет файлы и не блокирует соединения.", stDim, 0)
-	b.header("Сервер")
-	b.kv("Хост", h.Hostname)
-	b.kv("ОС / ядро", h.OS+" / "+h.Kernel)
-	b.kv("Загрузка", fmtTime(h.BootTime)+" ("+ago(h.BootTime)+" назад)")
-	b.kv("Память", fmtBytes(h.MemTotal))
-	b.kv("Сканер от root", yesNo(h.IsRoot))
-	b.kv("В контейнере", yesNo(h.InContainer))
-	b.header("Источник данных")
-	b.kv("Источник", a.src.Describe())
-	b.kv("Последнее сканирование", fmtTime(st.Time)+fmt.Sprintf(" (%d мс)", st.DurationMs))
-	b.kv("Обновление экрана", "каждые "+a.refresh.String()+pausedText(a.paused))
-	b.header("Риски")
+	b.para(a.tr("tui.observe_only"), stDim, 0)
+	b.header(a.tr("tui.h.server"))
+	b.kv(a.tr("tui.k.host"), h.Hostname)
+	b.kv(a.tr("tui.k.os"), h.OS+" / "+h.Kernel)
+	b.kv(a.tr("tui.k.boot"), fmtTime(h.BootTime)+" ("+a.tr("tui.ago", b.ago(h.BootTime))+")")
+	b.kv(a.tr("tui.k.memory"), fmtBytes(h.MemTotal))
+	b.kv(a.tr("tui.k.root"), a.yesNo(h.IsRoot))
+	b.kv(a.tr("tui.k.in_container"), a.yesNo(h.InContainer))
+	b.header(a.tr("tui.h.source"))
+	b.kv(a.tr("tui.k.source"), a.txt(a.src.Describe()))
+	b.kv(a.tr("tui.k.last_scan"), fmtTime(st.Time)+" "+a.tr("tui.ms", st.DurationMs))
+	b.kv(a.tr("tui.k.refresh"), a.tr("tui.every", a.refresh.String())+a.pausedText())
+	b.kv(a.tr("tui.k.lang"), a.tr("tui.lang_name"))
+	b.header(a.tr("tui.h.risks"))
 	for _, rk := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"} {
 		b.add(seg{"  " + fit(rk, 10), riskStyle(rk)}, seg{strconv.Itoa(st.Stats.ByRisk[rk]), stNormal})
 	}
 	if len(st.Warnings) > 0 {
-		b.header("Ограничения сканирования")
+		b.header(a.tr("tui.h.limits"))
 		for _, w := range st.Warnings {
-			b.para("⚠ "+w, stWarn, 2)
+			b.para("⚠ "+a.txt(w), stWarn, 2)
 		}
 	}
-	b.header("Быстрый старт")
-	b.para("2 — подозрительные процессы, 3 — все процессы (t — дерево, s — сортировка), 4 — сеть, 5 — история, 6 — проверки закрепления. Enter или → — подробности, / — фильтр, ? — все клавиши.", stNormal, 2)
+	b.header(a.tr("tui.h.quickstart"))
+	b.para(a.tr("tui.quickstart"), stNormal, 2)
 }
 
-func yesNo(v bool) string {
+func (a *App) yesNo(v bool) string {
 	if v {
-		return "да"
+		return a.tr("tui.yes")
 	}
-	return "нет"
+	return a.tr("tui.no")
 }
 
-func pausedText(p bool) string {
-	if p {
-		return " (пауза)"
+func (a *App) pausedText() string {
+	if a.paused {
+		return " " + a.tr("tui.paused_paren")
 	}
 	return ""
 }
@@ -816,21 +822,21 @@ func (a *App) drawBottom() {
 	y := a.h - 1
 	if a.editing {
 		l := a.lists[a.focus]
-		cx := s.Text(0, y, a.w, "Фильтр ("+panelTitles[a.focus]+"): ", stKey)
+		cx := s.Text(0, y, a.w, a.tr("tui.filter_prompt", a.panelTitle(a.focus)), stKey)
 		cx += s.Text(cx, y, a.w-cx, l.filter, stBold)
-		s.Text(cx, y, a.w-cx, "█   Enter — применить, Esc — сбросить", stDim)
+		s.Text(cx, y, a.w-cx, "█   "+a.tr("tui.filter_hint"), stDim)
 		return
 	}
 	var hints [][2]string
 	switch {
 	case a.inMain:
-		hints = [][2]string{{"↑↓", "прокрутка"}, {"PgUp/PgDn", "страница"}, {"←/Esc", "к списку"}, {"y", "копировать cmd"}, {"Y", "JSON"}, {"+", "во весь экран"}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.scroll")}, {"PgUp/PgDn", a.tr("tui.hint.page")}, {"←/Esc", a.tr("tui.hint.to_list")}, {"y", a.tr("tui.hint.copy_cmd")}, {"Y", "JSON"}, {"+", a.tr("tui.hint.fullscreen")}}
 	case a.focus == pProcs:
-		hints = [][2]string{{"↑↓", "выбор"}, {"Enter", "подробности"}, {"/", "фильтр"}, {"s", "сортировка"}, {"t", "дерево"}, {"K", "потоки ядра"}, {"y", "копировать"}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"s", a.tr("tui.hint.sort")}, {"t", a.tr("tui.tree")}, {"K", a.tr("tui.hint.kernel")}, {"y", a.tr("tui.hint.copy")}}
 	default:
-		hints = [][2]string{{"↑↓", "выбор"}, {"1-6/Tab", "панели"}, {"Enter", "подробности"}, {"/", "фильтр"}, {"r", "сканировать"}, {"y", "копировать"}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"1-6/Tab", a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y", a.tr("tui.hint.copy")}}
 	}
-	hints = append(hints, [2]string{"?", "помощь"}, [2]string{"q", "выход"})
+	hints = append(hints, [2]string{"L", a.tr("tui.hint.lang")}, [2]string{"?", a.tr("tui.hint.help")}, [2]string{"q", a.tr("tui.hint.quit")})
 	cx := 0
 	for _, h := range hints {
 		need := strWidth(h[0]) + strWidth(h[1]) + 3
@@ -849,9 +855,9 @@ func (a *App) drawBottom() {
 			rst = stErr
 		}
 	case a.err != nil:
-		right, rst = "ошибка: "+a.err.Error(), stErr
+		right, rst = a.tr("tui.error_lower", a.err.Error()), stErr
 	case a.paused:
-		right, rst = "⏸ пауза (p)", stWarn
+		right, rst = "⏸ "+a.tr("tui.paused_key"), stWarn
 	default:
 		right = "⟳ " + a.refresh.String()
 	}
@@ -861,27 +867,30 @@ func (a *App) drawBottom() {
 	}
 }
 
+// helpLines — справка по клавишам: клавиша и ключ каталога описания.
+// Пустая клавиша — заголовок раздела.
 var helpLines = [][2]string{
-	{"", "Навигация"},
-	{"1 … 6", "перейти к панели (сводка, подозрительные, процессы, сеть, история, система)"},
-	{"Tab / Shift+Tab, [ ]", "следующая / предыдущая панель"},
-	{"↑ ↓ / j k", "выбор строки (в подробностях — прокрутка)"},
-	{"PgUp PgDn, Ctrl+U Ctrl+D", "страница вверх / вниз"},
-	{"Home End / g G", "в начало / в конец"},
-	{"Enter, →, l", "перейти в подробности"},
-	{"←, h, Esc", "вернуться к списку; Esc также сбрасывает фильтр"},
-	{"+ / z", "развернуть активную сторону на весь экран"},
-	{"мышь", "клик — выбор, колесо — прокрутка"},
-	{"", "Действия"},
-	{"/", "фильтр активной панели (имя, PID, путь, пользователь, признак, риск)"},
-	{"s", "сортировка процессов: риск, CPU, память, PID, имя"},
-	{"t", "дерево процессов вкл/выкл"},
-	{"K", "показать / скрыть потоки ядра"},
-	{"r", "просканировать сейчас"},
-	{"p", "пауза автообновления"},
-	{"y / Y", "копировать командную строку / JSON (OSC 52, работает по SSH)"},
-	{"q, Ctrl+C", "выход"},
-	{"", "Приложение только наблюдает: ничего не завершает, не удаляет и не блокирует."},
+	{"", "tui.help.nav"},
+	{"1 … 6", "tui.help.panels"},
+	{"Tab / Shift+Tab, [ ]", "tui.help.next_panel"},
+	{"↑ ↓ / j k", "tui.help.select"},
+	{"PgUp PgDn, Ctrl+U Ctrl+D", "tui.help.page"},
+	{"Home End / g G", "tui.help.home_end"},
+	{"Enter, →, l", "tui.help.enter"},
+	{"←, h, Esc", "tui.help.back"},
+	{"+ / z", "tui.help.zoom"},
+	{"", "tui.help.mouse_key"},
+	{"", "tui.help.actions"},
+	{"/", "tui.help.filter"},
+	{"s", "tui.help.sort"},
+	{"t", "tui.help.tree"},
+	{"K", "tui.help.kernel"},
+	{"r", "tui.help.rescan"},
+	{"p", "tui.help.pause"},
+	{"y / Y", "tui.help.copy"},
+	{"L", "tui.help.lang"},
+	{"q, Ctrl+C", "tui.help.quit"},
+	{"", "tui.help.observe"},
 }
 
 func (a *App) drawHelp() {
@@ -895,17 +904,23 @@ func (a *App) drawHelp() {
 			s.Set(i, j, ' ', stNormal)
 		}
 	}
-	s.Box(x, y, w, h, "Клавиши · Esc — закрыть", true)
+	s.Box(x, y, w, h, a.tr("tui.help.title"), true)
 	for i, hl := range helpLines {
 		if i >= h-3 {
 			break
 		}
 		row := y + 2 + i
+		if hl[1] == "tui.help.mouse_key" {
+			// Строка про мышь: «клавиша» тоже переводится.
+			s.Text(x+4, row, 26, a.tr("tui.help.mouse"), stKey)
+			s.Text(x+31, row, w-33, a.tr("tui.help.mouse_desc"), stNormal)
+			continue
+		}
 		if hl[0] == "" {
-			s.Text(x+2, row, w-4, hl[1], Style{FG: 75, BG: -1, Bold: true})
+			s.Text(x+2, row, w-4, a.tr(hl[1]), Style{FG: 75, BG: -1, Bold: true})
 			continue
 		}
 		s.Text(x+4, row, 26, hl[0], stKey)
-		s.Text(x+31, row, w-33, hl[1], stNormal)
+		s.Text(x+31, row, w-33, a.tr(hl[1]), stNormal)
 	}
 }

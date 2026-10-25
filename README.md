@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/Zagorsky17/ServerSecurityGo)](https://github.com/Zagorsky17/ServerSecurityGo/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for suspicious processes, signs of malware and unauthorized access. The scanner reads `/proc` and scores every process on a combination of verifiable indicators. It explains each score, keeps a history of changes and shows everything in a web dashboard. The interface texts are currently in Russian.
+Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for suspicious processes, signs of malware and unauthorized access. The scanner reads `/proc` and scores every process on a combination of verifiable indicators. It explains each score, keeps a history of changes and shows everything in a web dashboard and a terminal UI. The interface is available in English and Russian (see [Language](#language)).
 
 **The application only observes.** It never kills processes, deletes files or blocks connections. All decisions stay with the administrator.
 
@@ -26,6 +26,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
 - [Detection limitations](#detection-limitations)
 - [Where it has been tested](#where-it-has-been-tested)
 - [Configuration](#configuration)
+- [Language](#language)
 - [Remote access](#remote-access)
 - [Updating, rollback, removal, logs](#updating-rollback-removal-logs)
 - [Console mode and demo](#console-mode-and-demo)
@@ -108,7 +109,7 @@ serversecuritygo
 ↑↓ выбор  1-6/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
 ```
 
-On the left are six panels: summary, suspicious processes, all processes (as a list or a tree), network connections, history and system checks. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. The interface texts are in Russian.
+On the left are six panels: summary, suspicious processes, all processes (as a list or a tree), network connections, history and system checks. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
 
 | Keys | Action |
 |---|---|
@@ -120,6 +121,7 @@ On the left are six panels: summary, suspicious processes, all processes (as a l
 | `r`, `p` | scan now, pause auto-refresh |
 | `y`, `Y` | copy the command line or JSON to your computer's clipboard (OSC 52, works over SSH) |
 | `+` | expand the active side to full screen |
+| `L` | interface language: English / Russian |
 | `?`, `q` | help, quit |
 
 The mouse works too: a click selects a panel and row, and the wheel scrolls.
@@ -198,7 +200,7 @@ Example explanation from a process card:
 
 > Total CRITICAL: 102 points, 4 indicators, 2 categories (command line, network), 2 strong. Fired: "Shell or interpreter I/O connected to a network socket" +40 (strong); "Command line contains a reverse shell construct" +35 (strong); … This is an assessment based on indirect indicators, not proof of compromise.
 
-The dashboard shows this text in Russian.
+The dashboard and the terminal UI show this text in the selected language.
 
 ## Examples of detected anomalies
 
@@ -262,10 +264,23 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 | `SSG_CPU_THRESHOLD` / `SSG_CPU_SUSTAIN_SCANS` | `80` / `10` | high load threshold and duration |
 | `SSG_HISTORY_RETENTION` | `168h` | how long to keep data about exited processes |
 | `SSG_ALLOWLIST_FILE` | `/opt/serversecuritygo/allowlist.json` | allowlist |
+| `SSG_LANG` | — (auto) | default language: `ru` or `en` |
 
 After editing `.env`, run `systemctl restart serversecuritygo`.
 
 **Allowlist.** Copy [`allowlist.example.json`](allowlist.example.json) to `/opt/serversecuritygo/allowlist.json`. A rule sets `exe` and `name` (with `*` and `?` wildcards), `user` and a list of `rules` (indicator IDs). A rule with no conditions is ignored, so nothing gets suppressed by accident. A process sets its own name (`comm`), so a rule without `exe` matches only if the name also matches the executable's file name: a miner calling itself `node` is not covered by `{"name": "node"}`. For programs running on an interpreter (for example, `gunicorn` on Python), specify `exe`. The service warns about rules without `exe` in its log at startup.
+
+## Language
+
+Every text the user sees is available in English and Russian: the web dashboard and login page, the terminal UI, indicator titles, evidence, score explanations, recommendations, history events, scan warnings, `scan` and `--help` output, the service log and error messages.
+
+- **Web dashboard.** The **English / Русский** button in the header (and on the login page) switches the language instantly; the choice is stored in the browser. Until the user picks a language, the dashboard uses `SSG_LANG`, or the browser language (`Accept-Language`) if it is not set.
+- **Terminal UI.** The `L` key switches the language. The initial language is `SSG_LANG`, or the terminal locale (`LC_ALL`, `LC_MESSAGES`, `LANG`).
+- **Command line and service log.** `SSG_LANG`, otherwise the locale. With an empty, `C` or `POSIX` locale (typical for systemd services) the output is in Russian, so set `SSG_LANG=en` in `/opt/serversecuritygo/.env` for an English service log.
+
+The scanner stores texts as messages (a catalog key and arguments) and every client renders them in its own language, so two users can watch the same server in different languages at the same time. Translations live in [`internal/i18n`](internal/i18n): `catalog_*.go` holds Russian and English side by side, and tests check that every key has both translations with the same placeholders.
+
+**JSON API.** Text fields (`title`, `evidence`, `recommendation`, `explanation`, `recommendations`, `warnings`, event `details`) are either a plain string (a fact from the system, such as a path) or a message object `{"key": "…", "args": […]}` (`{"sep": "…", "parts": […]}` for joined text). The catalog for one language is served at `GET /i18n/en.json` or `/i18n/ru.json`. `scan --format json` outputs ready-made text in the process language instead of message objects. Error messages of the API follow the `X-SSG-Lang` request header.
 
 ## Remote access
 
@@ -398,6 +413,7 @@ internal/
   history/                process history and event log (state.json, events.jsonl)
   scanner/                periodic scanning: collect → analyze → history
   web/                    HTTP server, authentication, API; static/ holds the embedded web dashboard
+  i18n/                   English and Russian translations, message type, language detection
   tui/                    terminal UI (no external libraries: termios, ANSI, mouse)
   view/                   data views shared by the web dashboard and the terminal UI
   config/                 settings from environment variables
@@ -410,7 +426,7 @@ allowlist.example.json    allowlist example
 .github/workflows/        CI and releases
 ```
 
-API (JSON, for automation): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
+API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
 
 ## Security
 

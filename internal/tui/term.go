@@ -3,9 +3,10 @@
 package tui
 
 import (
-	"errors"
 	"syscall"
 	"unsafe"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 )
 
 // Работа с терминалом без внешних библиотек: сырой режим через termios
@@ -36,7 +37,7 @@ func isTerminal(fd int) bool {
 func makeRaw(fd int) (*termState, error) {
 	st := &termState{fd: fd}
 	if err := ioctl(fd, ioctlGetTermios, unsafe.Pointer(&st.old)); err != nil {
-		return nil, errors.New("стандартный ввод не является терминалом")
+		return nil, i18n.Errorf("err.stdin_not_tty")
 	}
 	t := st.old
 	t.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON

@@ -15,9 +15,12 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"log/slog"
@@ -29,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
@@ -69,6 +73,10 @@ type Options struct {
 	// бы через 127.0.0.1 данные, которые служба собирает от root.
 	CheckPeer bool
 	LocalUIDs []int
+	// Lang — язык панели по умолчанию (SSG_LANG). Пусто — по заголовку
+	// Accept-Language браузера. Пользователь может переключить язык в
+	// панели, выбор хранится в его браузере.
+	Lang i18n.Lang
 }
 
 // Server — HTTP-обработчик приложения.
@@ -80,6 +88,13 @@ type Server struct {
 	noAuthCSRF string
 	hosts      map[string]bool
 	mux        *http.ServeMux
+	// catalogs — готовые JSON-каталоги переводов для веб-панели и их ETag.
+	catalogs map[i18n.Lang]catalogFile
+}
+
+type catalogFile struct {
+	data []byte
+	etag string
 }
 
 // New создаёт сервер.
@@ -98,8 +113,56 @@ func New(opt Options) *Server {
 	for _, h := range opt.AllowedHosts {
 		s.hosts[strings.ToLower(h)] = true
 	}
+	s.catalogs = make(map[i18n.Lang]catalogFile, len(i18n.Langs))
+	for _, l := range i18n.Langs {
+		data, _ := json.Marshal(i18n.Catalog(l))
+		sum := sha256.Sum256(data)
+		s.catalogs[l] = catalogFile{data: data, etag: `"` + hex.EncodeToString(sum[:8]) + `"`}
+	}
 	s.routes()
 	return s
+}
+
+// lang — язык ответа: заголовок X-SSG-Lang (его шлёт панель, когда
+// пользователь выбрал язык), затем SSG_LANG, затем Accept-Language.
+func (s *Server) lang(r *http.Request) i18n.Lang {
+	if l, ok := i18n.Parse(r.Header.Get("X-SSG-Lang")); ok {
+		return l
+	}
+	return s.defaultLang(r)
+}
+
+// defaultLang — язык страницы, пока пользователь не выбрал свой.
+func (s *Server) defaultLang(r *http.Request) i18n.Lang {
+	if s.opt.Lang != "" {
+		return s.opt.Lang
+	}
+	return i18n.FromAcceptLanguage(r.Header.Get("Accept-Language"))
+}
+
+// tr — строка каталога на языке запроса (тексты ошибок API).
+func (s *Server) tr(r *http.Request, key string, args ...any) string {
+	return i18n.T(key, args...).In(s.lang(r))
+}
+
+// errJSON — ответ API с ошибкой на языке запроса.
+func (s *Server) errJSON(w http.ResponseWriter, r *http.Request, code int, key string) {
+	writeJSON(w, code, map[string]string{"error": s.tr(r, key)})
+}
+
+// handleCatalog отдаёт каталог переводов одного языка. Он публичный:
+// нужен и странице входа, а секретов в нём нет.
+func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	l, ok := i18n.Parse(strings.TrimSuffix(r.PathValue("file"), ".json"))
+	if !ok || !strings.HasSuffix(r.PathValue("file"), ".json") {
+		http.NotFound(w, r)
+		return
+	}
+	c := s.catalogs[l]
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", c.etag)
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(c.data))
 }
 
 func (s *Server) authEnabled() bool { return s.opt.PasswordHash != "" }
@@ -115,7 +178,8 @@ func (s *Server) routes() {
 		w.Write([]byte("ok\n"))
 	})
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", files))
-	s.mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) { serveFile(w, r, static, "login.html") })
+	s.mux.HandleFunc("GET /i18n/{file}", s.handleCatalog)
+	s.mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) { s.serveFile(w, r, static, "login.html") })
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /{$}", s.page(static, "index.html"))
@@ -142,19 +206,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Set("Strict-Transport-Security", "max-age=31536000")
 	}
 	if !trusted(r) && !s.hostAllowed(r.Host) {
-		http.Error(w, "недопустимый заголовок Host (см. SSG_ALLOWED_HOSTS)", http.StatusMisdirectedRequest)
+		http.Error(w, s.tr(r, "web.err.host"), http.StatusMisdirectedRequest)
 		return
 	}
 	// /healthz открыт всем: он не раскрывает данных, а по нему скрипты
 	// проверяют запуск службы.
 	if s.opt.CheckPeer && !s.authEnabled() && !trusted(r) && r.URL.Path != "/healthz" {
 		if uid, ok := peerUID(r.Context()); !ok || !slices.Contains(s.opt.LocalUIDs, uid) {
-			who := "неизвестен"
+			who := "unknown"
 			if ok {
 				who = strconv.Itoa(uid)
 			}
-			s.opt.Logger.Warn("отклонён доступ к панели без пароля: пользователь не в SSG_LOCAL_UIDS", "uid", who, "remote", r.RemoteAddr)
-			http.Error(w, "без пароля панель доступна только root (SSG_LOCAL_UIDS); задайте пароль или подключитесь через SSH-туннель под root", http.StatusForbidden)
+			s.opt.Logger.Warn(i18n.S("log.peer_denied"), "uid", who, "remote", r.RemoteAddr)
+			http.Error(w, s.tr(r, "web.err.peer"), http.StatusForbidden)
 			return
 		}
 	}
@@ -237,18 +301,25 @@ func (s *Server) page(static fs.FS, name string) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		serveFile(w, r, static, name)
+		s.serveFile(w, r, static, name)
 	}
 }
 
-func serveFile(w http.ResponseWriter, r *http.Request, static fs.FS, name string) {
+// htmlLangAttr — атрибут языка в embed-страницах; при отдаче он
+// заменяется языком по умолчанию, по которому панель выбирает перевод,
+// пока пользователь не выбрал свой.
+const htmlLangAttr = `<html lang="ru">`
+
+func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, static fs.FS, name string) {
 	data, err := fs.ReadFile(static, name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+	data = bytes.Replace(data, []byte(htmlLangAttr), []byte(`<html lang="`+string(s.defaultLang(r))+`">`), 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Vary", "Accept-Language")
 	w.Write(data)
 }
 
@@ -257,11 +328,11 @@ func (s *Server) api(h func(w http.ResponseWriter, r *http.Request, sess session
 	return func(w http.ResponseWriter, r *http.Request) {
 		sess, ok := s.session(r)
 		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "требуется вход"})
+			s.errJSON(w, r, http.StatusUnauthorized, "web.err.login_required")
 			return
 		}
 		if r.Method != http.MethodGet && !trusted(r) && !tokenEqual(r.Header.Get("X-CSRF-Token"), sess.csrf) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "неверный CSRF-токен, обновите страницу"})
+			s.errJSON(w, r, http.StatusForbidden, "web.err.csrf")
 			return
 		}
 		h(w, r, sess)
@@ -336,31 +407,31 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный запрос"})
+		s.errJSON(w, r, http.StatusBadRequest, "web.err.bad_request")
 		return
 	}
 	if !s.limiter.begin(key, now) {
-		s.opt.Logger.Warn("вход заблокирован: слишком много попыток", "ip", ip)
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "слишком много неудачных попыток, повторите через 15 минут"})
+		s.opt.Logger.Warn(i18n.S("log.login_blocked"), "ip", ip)
+		s.errJSON(w, r, http.StatusTooManyRequests, "web.err.too_many")
 		return
 	}
 	if !s.limiter.acquire(3 * time.Second) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "сервер занят проверкой других попыток входа, повторите через несколько секунд"})
+		s.errJSON(w, r, http.StatusTooManyRequests, "web.err.busy")
 		return
 	}
 	ok := VerifyPassword(s.opt.PasswordHash, req.Password)
 	s.limiter.release()
 	if !ok {
 		// Пароль в журнал не пишем никогда — только факт и адрес.
-		s.opt.Logger.Warn("неудачная попытка входа", "ip", ip)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "неверный пароль"})
+		s.opt.Logger.Warn(i18n.S("log.login_failed"), "ip", ip)
+		s.errJSON(w, r, http.StatusUnauthorized, "web.err.bad_password")
 		return
 	}
 	s.limiter.reset(key)
 	tok, _ := s.sessions.create(now)
 	http.SetCookie(w, &http.Cookie{Name: s.cookie(), Value: tok, Path: "/", HttpOnly: true, Secure: s.opt.SecureCookie,
 		SameSite: http.SameSiteStrictMode, MaxAge: int(s.opt.SessionTTL.Seconds())})
-	s.opt.Logger.Info("успешный вход", "ip", ip)
+	s.opt.Logger.Info(i18n.S("log.login_ok"), "ip", ip)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -376,10 +447,10 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // snapshot возвращает текущий снимок или пишет 503.
-func (s *Server) snapshot(w http.ResponseWriter) *model.Snapshot {
+func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) *model.Snapshot {
 	snap := s.opt.Scanner.Snapshot()
 	if snap == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "первое сканирование ещё выполняется"})
+		s.errJSON(w, r, http.StatusServiceUnavailable, "err.first_scan_running")
 	}
 	return snap
 }
@@ -390,7 +461,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, sess sessi
 }
 
 func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request, _ session) {
-	snap := s.snapshot(w)
+	snap := s.snapshot(w, r)
 	if snap == nil {
 		return
 	}
@@ -398,20 +469,20 @@ func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request, _ sessi
 }
 
 func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request, _ session) {
-	snap := s.snapshot(w)
+	snap := s.snapshot(w, r)
 	if snap == nil {
 		return
 	}
 	d, ok := view.BuildDetail(snap, s.opt.Scanner.History(), r.PathValue("key"))
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "процесс не найден"})
+		s.errJSON(w, r, http.StatusNotFound, "err.process_not_found")
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
 }
 
 func (s *Server) handleTree(w http.ResponseWriter, r *http.Request, _ session) {
-	snap := s.snapshot(w)
+	snap := s.snapshot(w, r)
 	if snap == nil {
 		return
 	}
@@ -419,7 +490,7 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request, _ session) {
 }
 
 func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request, _ session) {
-	snap := s.snapshot(w)
+	snap := s.snapshot(w, r)
 	if snap == nil {
 		return
 	}
@@ -437,7 +508,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, _ session)
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request, _ session) {
-	snap := s.snapshot(w)
+	snap := s.snapshot(w, r)
 	if snap == nil {
 		return
 	}

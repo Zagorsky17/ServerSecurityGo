@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -41,6 +42,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
@@ -53,28 +55,19 @@ import (
 var version = "dev"
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `ServerSecurityGo %s — мониторинг и анализ процессов Linux-сервера
-
-Использование:
-  serversecuritygo                                  терминальный интерфейс (то же, что tui)
-  serversecuritygo tui [--local] [--socket PATH]    терминальный интерфейс
-  serversecuritygo serve [--env-file PATH]          запустить сканер и веб-панель
-  serversecuritygo scan [--format table|json] [--min-risk LOW] [--env-file PATH]
-  serversecuritygo demo [--tui] [--listen ADDR]     демонстрационные данные (веб или терминал)
-  serversecuritygo hash-password                    хеш пароля для SSG_AUTH_PASSWORD_HASH
-  serversecuritygo version
-
-Настройки задаются переменными окружения SSG_* (см. .env.example).
-`, version)
+	fmt.Fprint(os.Stderr, i18n.S("cli.usage", version))
 }
 
 func main() {
+	// Язык вывода: SSG_LANG, иначе локаль терминала. После чтения
+	// --env-file язык уточняется в loadConfig.
+	i18n.SetDefault(i18n.FromEnv())
 	if len(os.Args) < 2 {
 		// Без аргументов в терминале сразу открываем интерфейс — так
 		// удобнее всего для быстрой диагностики на сервере.
 		if tui.IsTerminal() {
 			if err := cmdTUI(nil); err != nil {
-				fmt.Fprintln(os.Stderr, "ошибка:", err)
+				fmt.Fprintln(os.Stderr, i18n.S("cli.error", err))
 				os.Exit(1)
 			}
 			return
@@ -103,7 +96,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "ошибка:", err)
+		fmt.Fprintln(os.Stderr, i18n.S("cli.error", err))
 		os.Exit(1)
 	}
 }
@@ -112,10 +105,14 @@ func main() {
 func loadConfig(envFile string) (config.Config, error) {
 	if envFile != "" {
 		if err := config.LoadEnvFile(envFile); err != nil {
-			return config.Config{}, fmt.Errorf("файл настроек: %w", err)
+			return config.Config{}, i18n.Errorf("err.env_file", err)
 		}
 	}
-	return config.FromEnv()
+	cfg, err := config.FromEnv()
+	if err == nil && cfg.Lang != "" {
+		i18n.SetDefault(cfg.Lang)
+	}
+	return cfg, err
 }
 
 func newLogger(level string) *slog.Logger {
@@ -141,7 +138,7 @@ func newLogger(level string) *slog.Logger {
 
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	envFile := fs.String("env-file", "", "файл с переменными SSG_* (для ручного запуска)")
+	envFile := fs.String("env-file", "", i18n.S("cli.flag.env_file_manual"))
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*envFile)
@@ -152,24 +149,24 @@ func cmdServe(args []string) error {
 		return err
 	}
 	if cfg.AuthPasswordHash != "" && !web.ValidHash(cfg.AuthPasswordHash) {
-		return errors.New("SSG_AUTH_PASSWORD_HASH имеет неверный формат; получите его командой serversecuritygo hash-password")
+		return i18n.Errorf("err.bad_hash")
 	}
 	if !cfg.IsLoopback() && len(cfg.AllowedHosts) == 0 {
-		return errors.New("для доступа из сети задайте SSG_ALLOWED_HOSTS — доменное имя или IP, по которому открывается панель (защита от DNS rebinding)")
+		return i18n.Errorf("err.need_allowed_hosts")
 	}
 	log := newLogger(cfg.LogLevel)
 	if runtime.GOOS != "linux" {
-		log.Warn("приложение рассчитано на Linux; на этой ОС нет /proc — используйте режим demo")
+		log.Warn(i18n.S("log.not_linux"))
 	}
 	if os.Geteuid() != 0 {
-		log.Warn("запуск не от root: данные о процессах других пользователей будут неполными")
+		log.Warn(i18n.S("log.not_root"))
 	}
 	detCfg, err := cfg.DetectConfig()
 	if err != nil {
 		return err
 	}
 	for _, w := range detect.WeakAllowRules(detCfg.Allow) {
-		log.Warn("слабое правило allowlist", "rule", w)
+		log.Warn(i18n.S("log.weak_allow"), "rule", w)
 	}
 	hist, err := history.Open(history.Options{Dir: cfg.DataDir, Retention: cfg.Retention, MaxEventsBytes: int64(cfg.EventsMaxMB) << 20,
 		CPUThreshold: cfg.CPUThreshold, MemThreshold: cfg.MemThreshold})
@@ -185,12 +182,12 @@ func cmdServe(args []string) error {
 	noAuth := cfg.AuthPasswordHash == ""
 	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version, ListenAddr: cfg.ListenAddr, PasswordHash: cfg.AuthPasswordHash,
 		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, TrustProxy: cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts,
-		CheckPeer: noAuth, LocalUIDs: cfg.LocalUIDs})
+		CheckPeer: noAuth, LocalUIDs: cfg.LocalUIDs, Lang: cfg.Lang})
 	var connCtx func(context.Context, net.Conn) context.Context
 	if noAuth {
 		connCtx = web.PeerContext(pfs.SocketOwner)
 	}
-	log.Info("запуск", "version", version, "listen", cfg.ListenAddr, "interval", cfg.ScanInterval.String(), "data", cfg.DataDir,
+	log.Info(i18n.S("log.start"), "version", version, "listen", cfg.ListenAddr, "interval", cfg.ScanInterval.String(), "data", cfg.DataDir,
 		"auth", !noAuth, "local_uids", fmt.Sprint(cfg.LocalUIDs), "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow))
 	return run(sc, srv, srv.LocalHandler(), connCtx, cfg, log, func() { _ = hist.Flush(time.Now()) })
 }
@@ -204,7 +201,7 @@ func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.
 
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
-		return fmt.Errorf("не удалось открыть %s: %w", cfg.ListenAddr, err)
+		return i18n.Errorf("err.listen", cfg.ListenAddr, err)
 	}
 	httpSrv := &http.Server{
 		Handler:           handler,
@@ -224,12 +221,12 @@ func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.
 	var localSrv *http.Server
 	if local != nil && cfg.SocketPath != "" {
 		if lnU, err := listenSocket(cfg.SocketPath); err != nil {
-			log.Warn("локальный сокет для терминального интерфейса не создан", "path", cfg.SocketPath, "err", err)
+			log.Warn(i18n.S("log.socket_failed"), "path", cfg.SocketPath, "err", err)
 		} else {
 			localSrv = &http.Server{Handler: local, ReadHeaderTimeout: 10 * time.Second}
 			go func() { _ = localSrv.Serve(lnU) }()
 			defer os.Remove(cfg.SocketPath)
-			log.Info("локальный сокет для терминального интерфейса", "path", cfg.SocketPath)
+			log.Info(i18n.S("log.socket"), "path", cfg.SocketPath)
 		}
 	}
 	errCh := make(chan error, 1)
@@ -249,11 +246,11 @@ func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.
 	if cfg.TLSEnabled() {
 		scheme = "https"
 	}
-	log.Info("веб-панель доступна", "url", scheme+"://"+cfg.ListenAddr+"/")
+	log.Info(i18n.S("log.panel_url"), "url", scheme+"://"+cfg.ListenAddr+"/")
 
 	select {
 	case <-ctx.Done():
-		log.Info("остановка по сигналу")
+		log.Info(i18n.S("log.stop_signal"))
 	case err := <-errCh:
 		if err != nil {
 			return err
@@ -280,14 +277,14 @@ func listenSocket(path string) (net.Listener, error) {
 		return nil, err
 	}
 	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("каталог %s должен иметь права 0700", dir)
+		return nil, i18n.Errorf("err.dir_mode", dir)
 	}
 	if _, err := os.Lstat(path); err == nil {
 		// Сокет остался от прошлого запуска? Если на нём кто-то отвечает —
 		// работает другой экземпляр, его не трогаем.
 		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
 			c.Close()
-			return nil, errors.New("сокет занят другим запущенным экземпляром")
+			return nil, i18n.Errorf("err.socket_busy")
 		}
 		if err := os.Remove(path); err != nil {
 			return nil, err
@@ -311,15 +308,15 @@ func listenSocket(path string) (net.Listener, error) {
 // запущена — сканирует сам, и история хранится только в памяти.
 func cmdTUI(args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ExitOnError)
-	envFile := fs.String("env-file", "", "файл с переменными SSG_* (по умолчанию /opt/serversecuritygo/.env, если он есть)")
-	socket := fs.String("socket", "", "Unix-сокет службы (по умолчанию из SSG_SOCKET_PATH или "+config.DefaultSocketPath+")")
-	local := fs.Bool("local", false, "не подключаться к службе, сканировать самостоятельно")
-	interval := fs.Duration("interval", 5*time.Second, "период сканирования в локальном режиме")
-	refresh := fs.Duration("refresh", 5*time.Second, "период обновления экрана")
+	envFile := fs.String("env-file", "", i18n.S("cli.flag.env_file_tui"))
+	socket := fs.String("socket", "", i18n.S("cli.flag.socket", config.DefaultSocketPath))
+	local := fs.Bool("local", false, i18n.S("cli.flag.local"))
+	interval := fs.Duration("interval", 5*time.Second, i18n.S("cli.flag.interval_local"))
+	refresh := fs.Duration("refresh", 5*time.Second, i18n.S("cli.flag.refresh"))
 	_ = fs.Parse(args)
 
 	if !tui.IsTerminal() {
-		return errors.New("терминальный интерфейс нужно запускать в терминале; для скриптов используйте scan")
+		return i18n.Errorf("err.tui_needs_terminal")
 	}
 	if *envFile == "" {
 		if _, err := os.Stat("/opt/serversecuritygo/.env"); err == nil {
@@ -330,7 +327,7 @@ func cmdTUI(args []string) error {
 		if err := config.LoadEnvFile(*envFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 			// Нет прав на .env (запуск не от root) — работаем со значениями по умолчанию.
 			if !errors.Is(err, os.ErrPermission) {
-				return fmt.Errorf("файл настроек: %w", err)
+				return i18n.Errorf("err.env_file", err)
 			}
 		}
 	}
@@ -338,17 +335,20 @@ func cmdTUI(args []string) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Lang != "" {
+		i18n.SetDefault(cfg.Lang)
+	}
 	if *socket == "" {
 		*socket = cfg.SocketPath
 	}
 
 	var src tui.Source
-	note := "локально (--local), история только за сеанс"
+	note := i18n.T("tui.source_local")
 	if !*local && *socket != "" {
 		if rs, err := tui.DialSocket(*socket); err == nil {
 			src = rs
 		} else {
-			note = "локально: служба не найдена, история только за сеанс"
+			note = i18n.T("tui.source_nosvc")
 		}
 	}
 	if src == nil {
@@ -365,7 +365,7 @@ func cmdTUI(args []string) error {
 // newLocalTUISource создаёт локальный сканер для интерфейса. Журнал
 // отключён (он испортил бы экран), история — только в памяти, чтобы не
 // мешать файлам истории службы.
-func newLocalTUISource(cfg config.Config, interval time.Duration, note string) (*tui.LocalSource, error) {
+func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg) (*tui.LocalSource, error) {
 	detCfg, err := cfg.DetectConfig()
 	if err != nil {
 		return nil, err
@@ -383,15 +383,15 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note string) (
 
 func cmdScan(args []string) error {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
-	envFile := fs.String("env-file", "", "файл с переменными SSG_*")
-	format := fs.String("format", "table", "формат вывода: table или json")
-	minRisk := fs.String("min-risk", "LOW", "минимальный уровень для вывода: INFO, LOW, MEDIUM, HIGH, CRITICAL")
-	sample := fs.Duration("sample", 0, "сделать два замера с этим интервалом для точного CPU% (например, 2s)")
+	envFile := fs.String("env-file", "", i18n.S("cli.flag.env_file"))
+	format := fs.String("format", "table", i18n.S("cli.flag.format"))
+	minRisk := fs.String("min-risk", "LOW", i18n.S("cli.flag.min_risk"))
+	sample := fs.Duration("sample", 0, i18n.S("cli.flag.sample"))
 	_ = fs.Parse(args)
 
 	min, ok := model.ParseRisk(*minRisk)
 	if !ok {
-		return fmt.Errorf("неизвестный уровень %q", *minRisk)
+		return i18n.Errorf("err.unknown_level", strconv.Quote(*minRisk))
 	}
 	cfg, err := loadConfig(*envFile)
 	if err != nil {
@@ -435,7 +435,13 @@ func cmdScan(args []string) error {
 	if *format == "json" {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]any{"time": snap.Time, "host": snap.Host, "stats": snap.Stats, "warnings": snap.Warnings, "processes": procs, "system": sys})
+		// Сообщения выводятся готовым текстом на языке процесса: скриптам
+		// не нужен каталог переводов.
+		v, err := i18n.RenderJSON(map[string]any{"time": snap.Time, "host": snap.Host, "stats": snap.Stats, "warnings": snap.Warnings, "processes": procs, "system": sys}, i18n.Default())
+		if err != nil {
+			return err
+		}
+		return enc.Encode(v)
 	}
 
 	// Таблица уходит прямо в терминал администратора, а имя процесса
@@ -444,42 +450,41 @@ func cmdScan(args []string) error {
 	// Поэтому всё из системы выводится через view.Printable. JSON
 	// экранирует управляющие символы сам.
 	pr := view.Printable
-	fmt.Printf("Хост: %s, %s, ядро %s. Процессов: %d, сокетов: %d, сканирование %s\n",
-		pr(snap.Host.Hostname), pr(snap.Host.OS), pr(snap.Host.Kernel), snap.Stats.Total, snap.Stats.Sockets, snap.Duration.Round(time.Millisecond))
+	fmt.Println(i18n.S("cli.scan.host", pr(snap.Host.Hostname), pr(snap.Host.OS), pr(snap.Host.Kernel), snap.Stats.Total, snap.Stats.Sockets, snap.Duration.Round(time.Millisecond)))
 	for _, w := range snap.Warnings {
-		fmt.Println("! " + pr(w))
+		fmt.Println("! " + pr(w.String()))
 	}
-	fmt.Printf("По уровням: CRITICAL %d, HIGH %d, MEDIUM %d, LOW %d, INFO %d\n\n",
-		snap.Stats.ByRisk["CRITICAL"], snap.Stats.ByRisk["HIGH"], snap.Stats.ByRisk["MEDIUM"], snap.Stats.ByRisk["LOW"], snap.Stats.ByRisk["INFO"])
+	fmt.Println(i18n.S("cli.scan.levels", snap.Stats.ByRisk["CRITICAL"], snap.Stats.ByRisk["HIGH"], snap.Stats.ByRisk["MEDIUM"], snap.Stats.ByRisk["LOW"], snap.Stats.ByRisk["INFO"]))
+	fmt.Println()
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "РИСК\tБАЛЛЫ\tPID\tПОЛЬЗОВАТЕЛЬ\tИМЯ\tПУТЬ\tПРИЗНАКИ")
+	fmt.Fprintln(tw, i18n.S("cli.scan.header"))
 	for _, p := range procs {
 		var titles []string
 		for _, f := range p.Findings {
 			if f.Category != model.CatInfo && !f.Suppressed {
-				titles = append(titles, f.Title)
+				titles = append(titles, f.Title.String())
 			}
 		}
 		exe := p.Exe
 		if p.ExeDeleted {
-			exe += " (удалён)"
+			exe += " " + i18n.S("tui.deleted")
 		}
 		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\n", p.Risk, p.Score, p.PID, pr(p.User), pr(p.Name), pr(exe), pr(strings.Join(titles, "; ")))
 	}
 	tw.Flush()
 	if len(procs) == 0 {
-		fmt.Printf("Процессов с уровнем %s и выше нет.\n", min)
+		fmt.Println(i18n.S("cli.scan.none", min))
 	}
 	if len(sys) > 0 {
-		fmt.Println("\nСистемные проверки:")
+		fmt.Println("\n" + i18n.S("cli.scan.system"))
 		for _, f := range sys {
-			fmt.Printf("  [%s] %s — %s\n", f.Risk, pr(f.Title), pr(f.Path))
+			fmt.Printf("  [%s] %s — %s\n", f.Risk, pr(f.Title.String()), pr(f.Path))
 			for _, e := range f.Evidence {
-				fmt.Println("      " + pr(e))
+				fmt.Println("      " + pr(e.String()))
 			}
 		}
 	}
-	fmt.Println("\nОценка основана на косвенных признаках и не является доказательством компрометации. Подробности: --format json или веб-панель.")
+	fmt.Println("\n" + i18n.S("cli.scan.footer"))
 	return nil
 }
 
@@ -494,16 +499,16 @@ func sortByRisk(procs []*model.Process) {
 
 func cmdDemo(args []string) error {
 	fs := flag.NewFlagSet("demo", flag.ExitOnError)
-	listen := fs.String("listen", "127.0.0.1:8090", "адрес веб-панели (только loopback)")
-	interval := fs.Duration("interval", 5*time.Second, "период сканирования")
-	useTUI := fs.Bool("tui", false, "открыть демо в терминальном интерфейсе вместо веб-панели")
+	listen := fs.String("listen", "127.0.0.1:8090", i18n.S("cli.flag.listen"))
+	interval := fs.Duration("interval", 5*time.Second, i18n.S("cli.flag.interval"))
+	useTUI := fs.Bool("tui", false, i18n.S("cli.flag.demo_tui"))
 	_ = fs.Parse(args)
 
 	cfg := config.Default()
 	cfg.ListenAddr = *listen
 	cfg.ScanInterval = *interval
 	if !cfg.IsLoopback() {
-		return errors.New("демо-режим работает только на 127.0.0.1")
+		return i18n.Errorf("err.demo_loopback")
 	}
 	dir, err := os.MkdirTemp("", "ssg-demo-")
 	if err != nil {
@@ -528,40 +533,40 @@ func cmdDemo(args []string) error {
 		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true})
 	if *useTUI {
 		if !tui.IsTerminal() {
-			return errors.New("demo --tui нужно запускать в терминале")
+			return i18n.Errorf("err.demo_tui_terminal")
 		}
-		ls, err := tui.NewLocalSource(sc, version+" (демо)", true, "демо-данные")
+		ls, err := tui.NewLocalSource(sc, version+" (demo)", true, i18n.T("tui.source_demo"))
 		if err != nil {
 			return err
 		}
 		defer ls.Close()
 		return tui.New(tui.Options{Source: ls, Refresh: *interval}).Run()
 	}
-	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (демо)", ListenAddr: cfg.ListenAddr, Demo: true})
-	log.Info("демо-режим: данные вымышленные", "dir", dir)
+	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (demo)", ListenAddr: cfg.ListenAddr, Demo: true})
+	log.Info(i18n.S("log.demo"), "dir", dir)
 	return run(sc, srv, nil, nil, cfg, log, nil)
 }
 
 func cmdHashPassword() error {
-	fmt.Fprint(os.Stderr, "Пароль (не короче 12 символов): ")
+	fmt.Fprint(os.Stderr, i18n.S("cli.pw.prompt"))
 	pw, err := readSecret()
 	if err != nil {
 		return err
 	}
-	fmt.Fprint(os.Stderr, "\nПовторите пароль: ")
+	fmt.Fprint(os.Stderr, "\n"+i18n.S("cli.pw.repeat"))
 	pw2, err := readSecret()
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr)
 	if pw != pw2 {
-		return errors.New("пароли не совпадают")
+		return i18n.Errorf("err.pw_mismatch")
 	}
 	h, err := web.HashPassword(pw)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(os.Stderr, "Добавьте строку в /opt/serversecuritygo/.env:")
+	fmt.Fprintln(os.Stderr, i18n.S("cli.pw.add_line"))
 	fmt.Printf("SSG_AUTH_PASSWORD_HASH=%s\n", h)
 	return nil
 }

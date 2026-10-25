@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 )
 
 // Config — все настройки приложения.
@@ -44,6 +45,10 @@ type Config struct {
 	AllowlistFile    string
 	MaxFiles         int
 	LogLevel         string
+	// Lang — язык по умолчанию (SSG_LANG): вывод CLI, журнал и первое
+	// открытие панели. Пусто — определяется автоматически (локаль
+	// терминала, язык браузера).
+	Lang i18n.Lang
 }
 
 // DefaultSocketPath — Unix-сокет службы. Каталог /run/serversecuritygo
@@ -92,7 +97,7 @@ func LoadEnvFile(path string) error {
 		}
 		key, val, ok := strings.Cut(line, "=")
 		if !ok {
-			return fmt.Errorf("%s:%d: ожидается KEY=VALUE", path, n)
+			return i18n.Errorf("err.env_line", fmt.Sprintf("%s:%d", path, n))
 		}
 		key = strings.TrimSpace(strings.TrimPrefix(key, "export "))
 		val = strings.TrimSpace(val)
@@ -119,7 +124,7 @@ func FromEnv() (Config, error) {
 		if v, ok := os.LookupEnv(key); ok && v != "" {
 			d, err := time.ParseDuration(v)
 			if err != nil || d <= 0 {
-				errs = append(errs, fmt.Errorf("%s: неверная длительность %q (пример: 30s, 5m, 168h)", key, v))
+				errs = append(errs, i18n.Errorf("err.env_duration", key, strconv.Quote(v)))
 				return
 			}
 			*dst = d
@@ -129,7 +134,7 @@ func FromEnv() (Config, error) {
 		if v, ok := os.LookupEnv(key); ok && v != "" {
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 0 {
-				errs = append(errs, fmt.Errorf("%s: ожидается неотрицательное целое, получено %q", key, v))
+				errs = append(errs, i18n.Errorf("err.env_int", key, strconv.Quote(v)))
 				return
 			}
 			*dst = n
@@ -139,7 +144,7 @@ func FromEnv() (Config, error) {
 		if v, ok := os.LookupEnv(key); ok && v != "" {
 			f, err := strconv.ParseFloat(v, 64)
 			if err != nil || f < 0 {
-				errs = append(errs, fmt.Errorf("%s: ожидается число, получено %q", key, v))
+				errs = append(errs, i18n.Errorf("err.env_number", key, strconv.Quote(v)))
 				return
 			}
 			*dst = f
@@ -161,7 +166,7 @@ func FromEnv() (Config, error) {
 	if v := os.Getenv("SSG_TRUST_PROXY_TLS"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("SSG_TRUST_PROXY_TLS: ожидается true/false"))
+			errs = append(errs, i18n.Errorf("err.env_bool", "SSG_TRUST_PROXY_TLS"))
 		}
 		c.TrustProxyTLS = b
 	}
@@ -181,7 +186,7 @@ func FromEnv() (Config, error) {
 			}
 			uid, err := strconv.Atoi(f)
 			if err != nil || uid < 0 {
-				errs = append(errs, fmt.Errorf("SSG_LOCAL_UIDS: ожидаются числовые UID через запятую, получено %q", f))
+				errs = append(errs, i18n.Errorf("err.env_uids", strconv.Quote(f)))
 				continue
 			}
 			c.LocalUIDs = append(c.LocalUIDs, uid)
@@ -196,8 +201,15 @@ func FromEnv() (Config, error) {
 	str("SSG_ALLOWLIST_FILE", &c.AllowlistFile)
 	num("SSG_MAX_FILES_PER_PROCESS", &c.MaxFiles)
 	str("SSG_LOG_LEVEL", &c.LogLevel)
+	if v := strings.TrimSpace(os.Getenv("SSG_LANG")); v != "" {
+		if l, ok := i18n.Parse(v); ok {
+			c.Lang = l
+		} else {
+			errs = append(errs, i18n.Errorf("err.env_lang", strconv.Quote(v)))
+		}
+	}
 	if c.ScanInterval < 2*time.Second {
-		errs = append(errs, errors.New("SSG_SCAN_INTERVAL: минимум 2s"))
+		errs = append(errs, i18n.Errorf("err.env_interval_min"))
 	}
 	return c, errors.Join(errs...)
 }
@@ -222,21 +234,21 @@ func (c Config) TLSEnabled() bool { return c.TLSCert != "" && c.TLSKey != "" }
 // вне loopback обязательны пароль и TLS (свой или на reverse proxy).
 func (c Config) ValidateSecurity() error {
 	if (c.TLSCert == "") != (c.TLSKey == "") {
-		return errors.New("SSG_TLS_CERT и SSG_TLS_KEY задаются только вместе")
+		return i18n.Errorf("err.tls_pair")
 	}
 	// За reverse proxy панель может быть доступна из интернета, даже если
 	// приложение слушает 127.0.0.1, поэтому пароль обязателен.
 	if c.TrustProxyTLS && c.AuthPasswordHash == "" {
-		return errors.New("SSG_TRUST_PROXY_TLS=true означает доступ через reverse proxy — задайте SSG_AUTH_PASSWORD_HASH (serversecuritygo hash-password)")
+		return i18n.Errorf("err.proxy_needs_password")
 	}
 	if c.IsLoopback() {
 		return nil
 	}
 	if c.AuthPasswordHash == "" {
-		return fmt.Errorf("адрес %s доступен из сети, но SSG_AUTH_PASSWORD_HASH не задан. Задайте пароль (serversecuritygo hash-password) или используйте 127.0.0.1 и SSH-туннель", c.ListenAddr)
+		return i18n.Errorf("err.network_needs_password", c.ListenAddr)
 	}
 	if !c.TLSEnabled() && !c.TrustProxyTLS {
-		return fmt.Errorf("адрес %s доступен из сети без TLS. Задайте SSG_TLS_CERT/SSG_TLS_KEY или, если TLS завершается на reverse proxy, SSG_TRUST_PROXY_TLS=true", c.ListenAddr)
+		return i18n.Errorf("err.network_needs_tls", c.ListenAddr)
 	}
 	return nil
 }

@@ -1,0 +1,194 @@
+package i18n
+
+// Тексты правил обнаружения (internal/detect): заголовки (rule.<id>.title),
+// рекомендации (rule.<id>.rec), доказательства (ev.*), объяснение оценки
+// (score.*), категории (cat.*) и общие рекомендации (rec.*).
+// Формулировки — «признак, требует проверки», а не «вредонос».
+func init() {
+	add(map[string]entry{
+		// Категории признаков.
+		"cat.location":    {"расположение", "location"},
+		"cat.integrity":   {"целостность файла", "file integrity"},
+		"cat.masquerade":  {"маскировка/имя", "masquerading/name"},
+		"cat.chain":       {"цепочка запуска", "launch chain"},
+		"cat.network":     {"сеть", "network"},
+		"cat.content":     {"командная строка", "command line"},
+		"cat.behavior":    {"поведение", "behavior"},
+		"cat.environment": {"окружение", "environment"},
+		"cat.privilege":   {"привилегии", "privileges"},
+		"cat.persistence": {"закрепление", "persistence"},
+		"cat.info":        {"справка", "info"},
+
+		// Объяснение оценки.
+		"score.none":           {"Подозрительных признаков не обнаружено.", "No suspicious indicators found."},
+		"score.suppressed":     {"Подавлено правилами allowlist: {0}.", "Suppressed by allowlist rules: {0}."},
+		"score.total":          {"Итог {0}: {1} балл(ов), признаков — {2}, категорий — {3} ({4}), сильных — {5}.", "Result {0}: {1} point(s), indicators: {2}, categories: {3} ({4}), strong: {5}."},
+		"score.part":           {"«{0}» +{1}", "“{0}” +{1}"},
+		"score.part_strong":    {"«{0}» +{1} (сильный)", "“{0}” +{1} (strong)"},
+		"score.fired":          {"Сработали: {0}.", "Triggered: {0}."},
+		"score.scale":          {"Шкала: LOW от {0}, MEDIUM от {1}, HIGH от {2}, CRITICAL от {3} баллов.", "Scale: LOW from {0}, MEDIUM from {1}, HIGH from {2}, CRITICAL from {3} points."},
+		"score.capped":         {"Уровень ограничен: {0}.", "Level capped: {0}."},
+		"score.limit_one_weak": {"все признаки одной категории и ни одного сильного — не выше LOW", "all indicators are in one category and none is strong — LOW at most"},
+		"score.limit_one":      {"признаки только одной категории — не выше MEDIUM", "indicators of only one category — MEDIUM at most"},
+		"score.limit_two":      {"признаки двух категорий — не выше HIGH (для CRITICAL нужны 3 категории или 2 сильных признака)", "indicators of two categories — HIGH at most (CRITICAL needs 3 categories or 2 strong indicators)"},
+		"score.disclaimer":     {"Это оценка по косвенным признакам, а не доказательство компрометации.", "This is an assessment based on indirect indicators, not proof of compromise."},
+
+		// Общие рекомендации для процессов с риском от MEDIUM.
+		"rec.preserve":      {"Сохраните сведения до любых действий: ls -l /proc/{0}/exe /proc/{0}/cwd; cat /proc/{0}/maps; ss -tunap | grep 'pid={0},'", "Preserve the details before taking any action: ls -l /proc/{0}/exe /proc/{0}/cwd; cat /proc/{0}/maps; ss -tunap | grep 'pid={0},'"},
+		"rec.copy_exe":      {"Снимите копию исполняемого файла для анализа: cp /proc/{0}/exe /root/evidence-{0}.bin && sha256sum /root/evidence-{0}.bin", "Take a copy of the executable for analysis: cp /proc/{0}/exe /root/evidence-{0}.bin && sha256sum /root/evidence-{0}.bin"},
+		"rec.admin_decides": {"Приложение ничего не завершает и не удаляет. Решение о действиях (изоляция, остановка, расследование) принимает администратор.", "The application never kills or deletes anything. The administrator decides what to do (isolate, stop, investigate)."},
+
+		// Слабые правила allowlist (журнал при запуске).
+		"allow.weak_user_only": {"№{0} {1}: только пользователь — подавляет признаки всего, что он запустит", "#{0} {1}: user only — suppresses indicators for everything this user runs"},
+		"allow.weak_no_exe":    {"№{0} {1}: без exe — сработает, только если имя совпадёт и с именем исполняемого файла; надёжнее указать exe", "#{0} {1}: no exe — applies only if the name also matches the executable file name; specifying exe is more reliable"},
+
+		// Расположение.
+		"rule.exe_in_temp.title":     {"Исполняемый файл во временном каталоге", "Executable in a temporary directory"},
+		"rule.exe_in_temp.rec":       {"Проверьте происхождение файла: ls -la {0}; sha256sum /proc/{1}/exe; dpkg -S {2} (штатные пакеты туда не ставятся).", "Check where the file came from: ls -la {0}; sha256sum /proc/{1}/exe; dpkg -S {2} (packages are never installed there)."},
+		"rule.exe_hidden_path.title": {"Исполняемый файл в скрытом каталоге или со скрытым именем", "Executable in a hidden directory or with a hidden name"},
+		"rule.exe_hidden_path.rec":   {"Осмотрите каталог: ls -la {0}; выясните, какой пакет или пользователь его создал.", "Inspect the directory: ls -la {0}; find out which package or user created it."},
+		"rule.cwd_in_temp.title":     {"Рабочий каталог во временном каталоге", "Working directory inside a temporary directory"},
+		"rule.cwd_in_temp.rec":       {"Посмотрите содержимое рабочего каталога: ls -la {0}.", "Look at the working directory contents: ls -la {0}."},
+		"ev.dir_world_writable":      {"каталог доступен на запись всем пользователям", "the directory is writable by all users"},
+		"ev.hidden_component":        {"компонент пути начинается с точки — такие файлы не видны в обычном ls", "a path component starts with a dot — such files are not shown by a plain ls"},
+
+		// Целостность.
+		"rule.exe_deleted.title":        {"Исполняемый файл удалён после запуска", "Executable deleted after start"},
+		"rule.exe_deleted.rec":          {"Скопируйте бинарник, пока процесс жив: cp /proc/{0}/exe /root/deleted-{0}.bin; проверьте хеш.", "Copy the binary while the process is alive: cp /proc/{0}/exe /root/deleted-{0}.bin; check its hash."},
+		"rule.exe_deleted.title_system": {"Исполняемый файл в системном каталоге заменён или удалён", "Executable in a system directory replaced or deleted"},
+		"rule.exe_deleted.rec_system":   {"Сверьте с журналом обновлений (/var/log/apt/history.log, /var/log/dpkg.log) и перезапустите службу, если обновление было.", "Compare with the update log (/var/log/apt/history.log, /var/log/dpkg.log) and restart the service if there was an update."},
+		"ev.system_path_after_upgrade":  {"путь системный: типично после обновления пакетов до перезапуска службы", "system path: typical after a package upgrade until the service is restarted"},
+		"rule.exe_memfd.title":          {"Процесс запущен из памяти (memfd), без файла на диске", "Process runs from memory (memfd), with no file on disk"},
+		"rule.exe_memfd.rec":            {"Сохраните образ: cp /proc/{0}/exe /root/memfd-{0}.bin; проверьте родителя и сетевые соединения процесса.", "Save the image: cp /proc/{0}/exe /root/memfd-{0}.bin; check the parent and the network connections of the process."},
+		"ev.memfd_no_file":              {"memfd_create позволяет выполнять код, не оставляя файла в файловой системе", "memfd_create allows running code without leaving a file in the filesystem"},
+		"ev.memfd_runc":                 {"имя связано с runc — старые версии runc используют memfd штатно", "the name relates to runc — old runc versions use memfd legitimately"},
+		"rule.exe_world_writable.title": {"Исполняемый файл доступен на запись всем", "Executable is world-writable"},
+		"rule.exe_world_writable.rec":   {"Любой пользователь может подменить файл. Проверьте целостность и права: stat {0}.", "Any user can replace the file. Check its integrity and permissions: stat {0}."},
+		"rule.exe_setuid_nonstd.title":  {"SUID/SGID-файл вне системных каталогов", "SUID/SGID file outside system directories"},
+		"rule.exe_setuid_nonstd.rec":    {"Найдите все такие файлы: find / -xdev -perm /6000 -type f 2>/dev/null — и сравните со списком пакетов.", "Find all such files: find / -xdev -perm /6000 -type f 2>/dev/null — and compare with the package list."},
+		"rule.exe_system_nonroot.title": {"Файл в системном каталоге принадлежит не root", "File in a system directory is not owned by root"},
+		"rule.exe_system_nonroot.rec":   {"Проверьте пакет и контрольные суммы: dpkg -S {0} && dpkg --verify $(dpkg -S {0} | cut -d: -f1).", "Check the package and checksums: dpkg -S {0} && dpkg --verify $(dpkg -S {0} | cut -d: -f1)."},
+		"ev.mode":                       {"права: {0}", "mode: {0}"},
+		"ev.owner_uid":                  {"владелец UID {0}", "owner UID {0}"},
+
+		// Маскировка и имена.
+		"rule.kthread_masquerade.title":     {"Пользовательский процесс маскируется под поток ядра", "User process masquerades as a kernel thread"},
+		"rule.kthread_masquerade.rec":       {"У настоящих потоков ядра нет exe и cmdline. Изучите файл: ls -l /proc/{0}/exe; sha256sum /proc/{0}/exe.", "Real kernel threads have no exe and cmdline. Examine the file: ls -l /proc/{0}/exe; sha256sum /proc/{0}/exe."},
+		"ev.argv0_kthread":                  {"argv[0] = {0} — так выглядят только потоки ядра в ps", "argv[0] = {0} — only kernel threads look like this in ps"},
+		"ev.no_pf_kthread":                  {"флаг PF_KTHREAD в /proc/PID/stat не установлен — это пользовательский процесс", "the PF_KTHREAD flag in /proc/PID/stat is not set — this is a user process"},
+		"rule.system_name_masquerade.title": {"Имя системной службы, но файл вне системных каталогов", "System service name, but the file is outside system directories"},
+		"rule.system_name_masquerade.rec":   {"Сравните с настоящим файлом службы (command -v {0}) и проверьте, как процесс был запущен (родитель PID {1}).", "Compare with the real service binary (command -v {0}) and check how the process was started (parent PID {1})."},
+		"ev.name_is_daemon":                 {"имя процесса {0} совпадает с системной службой", "process name {0} matches a system service"},
+		"rule.name_mismatch.title":          {"Имя процесса не совпадает с именем исполняемого файла", "Process name does not match the executable name"},
+		"rule.name_mismatch.rec":            {"Некоторые программы штатно переименовывают процесс; если эта программа к ним не относится, выясните, зачем она скрывает настоящее имя.", "Some programs rename their process legitimately; if this one is not among them, find out why it hides its real name."},
+		"rule.unusual_name.title":           {"Необычное имя процесса", "Unusual process name"},
+		"rule.unusual_name.rec":             {"Такие имена затрудняют поиск процесса в ps/top. Проверьте файл и родителя.", "Such names make the process hard to find in ps/top. Check the file and the parent."},
+		"ev.comm_reason":                    {"comm = {0}: {1}", "comm = {0}: {1}"},
+		"ev.name_dot":                       {"имя начинается с точки", "the name starts with a dot"},
+		"ev.name_spaces":                    {"имя состоит из пробелов", "the name consists of spaces"},
+		"ev.name_edge_space":                {"имя начинается или заканчивается пробелом", "the name starts or ends with a space"},
+		"rule.empty_cmdline.title":          {"Пустая командная строка у пользовательского процесса", "Empty command line of a user process"},
+		"rule.empty_cmdline.rec":            {"Процесс мог затереть argv, чтобы скрыть параметры запуска. Сверьте с exe и родителем.", "The process may have wiped argv to hide its launch parameters. Compare with exe and the parent."},
+		"ev.cmdline_empty":                  {"/proc/{0}/cmdline пуст, но exe есть: {1}", "/proc/{0}/cmdline is empty, but exe exists: {1}"},
+		"rule.unicode_control.title":        {"Невидимые символы Unicode в имени или командной строке", "Invisible Unicode characters in the name or command line"},
+		"rule.unicode_control.rec":          {"Так маскируют настоящую команду. Посмотрите байты: od -c /proc/{0}/comm; tr '\\0' ' ' < /proc/{0}/cmdline | od -c | head.", "This is how the real command is disguised. Look at the bytes: od -c /proc/{0}/comm; tr '\\0' ' ' < /proc/{0}/cmdline | od -c | head."},
+		"ev.unicode_char":                   {"{0}: символ {1}", "{0}: character {1}"},
+		"ev.field_name":                     {"имя", "name"},
+		"ev.field_path":                     {"путь", "path"},
+		"rule.cmdline_truncated.title":      {"Очень длинная командная строка (прочитана не полностью)", "Very long command line (not read completely)"},
+		"rule.cmdline_truncated.rec":        {"Посмотрите полную строку: tr '\\0' ' ' < /proc/{0}/cmdline | less. Команду могли спрятать в конце, за длинным заполнением.", "View the full line: tr '\\0' ' ' < /proc/{0}/cmdline | less. A command may be hidden at the end, behind long padding."},
+		"ev.cmdline_read_bytes":             {"прочитано {0} байт, остальное правила не проверяли", "{0} bytes read, the rest was not checked by the rules"},
+		"rule.miner_name.title":             {"Имя совпадает с известной программой-майнером", "Name matches a known mining program"},
+		"rule.miner_name.rec":               {"Само имя ничего не доказывает (майнинг может быть разрешён). Проверьте, согласован ли запуск.", "The name alone proves nothing (mining may be authorized). Check whether this launch was approved."},
+
+		// Цепочки запуска.
+		"rule.web_spawns_shell.title":     {"Сетевой сервис запустил оболочку или сетевую утилиту", "A network service started a shell or a network tool"},
+		"rule.web_spawns_shell.rec":       {"Проверьте журналы веб-сервера (access/error log) около времени запуска, поищите недавно изменённые файлы в каталоге сайта (find /var/www -mmin -1440 -type f).", "Check the web server logs (access/error log) around the start time and look for recently modified files in the site directory (find /var/www -mmin -1440 -type f)."},
+		"ev.parent_child":                 {"родитель PID {0} {1} ({2}) → потомок PID {3} {4}", "parent PID {0} {1} ({2}) → child PID {3} {4}"},
+		"ev.child_cmdline":                {"командная строка потомка: {0}", "child command line: {0}"},
+		"ev.parent_runtime":               {"родитель — среда выполнения, которая иногда штатно запускает shell (сборка, скрипты)", "the parent is a runtime that sometimes starts a shell legitimately (builds, scripts)"},
+		"rule.scheduler_suspicious.title": {"Планировщик запускает программу из временного каталога или загрузку из сети", "Scheduler runs a program from a temporary directory or a download from the network"},
+		"rule.scheduler_suspicious.rec":   {"Проверьте задания: crontab -l -u <user>; ls -la /etc/cron* /var/spool/cron/crontabs; atq.", "Check the jobs: crontab -l -u <user>; ls -la /etc/cron* /var/spool/cron/crontabs; atq."},
+		"ev.parent":                       {"родитель PID {0} {1}", "parent PID {0} {1}"},
+		"ev.cmdline":                      {"командная строка: {0}", "command line: {0}"},
+
+		// Сеть.
+		"rule.stdio_socket.title":      {"Ввод/вывод оболочки или интерпретатора подключён к сетевому сокету", "Shell or interpreter I/O is connected to a network socket"},
+		"rule.stdio_socket.rec":        {"Определите удалённую сторону: ss -tnp | grep 'pid={0},'; проверьте, кто запустил процесс (родитель PID {1}).", "Identify the remote side: ss -tnp | grep 'pid={0},'; check who started the process (parent PID {1})."},
+		"ev.reverse_shell_like":        {"так выглядит reverse/bind shell: команды приходят по сети прямо в оболочку", "this is what a reverse/bind shell looks like: commands arrive over the network straight into the shell"},
+		"rule.shell_network.title":     {"Оболочка или netcat/socat держит внешнее TCP-соединение", "Shell or netcat/socat holds an external TCP connection"},
+		"rule.shell_network.rec":       {"Оболочки обычно не открывают сетевые соединения сами. Выясните назначение удалённого адреса (whois, журналы файрвола).", "Shells do not usually open network connections themselves. Find out what the remote address is (whois, firewall logs)."},
+		"rule.pool_port.title":         {"Соединение на порт, типичный для пулов майнинга или Metasploit", "Connection to a port typical of mining pools or Metasploit"},
+		"rule.pool_port.rec":           {"Порт сам по себе ничего не доказывает. Проверьте, что за сервис на удалённой стороне и нужна ли процессу эта связь.", "The port alone proves nothing. Check what service is on the remote side and whether the process needs this connection."},
+		"ev.pool_ports":                {"порты 3333/4444/5555/7777/14444 и др. часто используют пулы Monero; 4444 — порт Metasploit по умолчанию", "ports 3333/4444/5555/7777/14444 etc. are often used by Monero pools; 4444 is the Metasploit default port"},
+		"rule.suspicious_listen.title": {"Подозрительный процесс принимает входящие соединения", "Suspicious process accepts incoming connections"},
+		"rule.suspicious_listen.rec":   {"Так может выглядеть bind shell или бэкдор. Проверьте, кто подключался: ss -tnp state established.", "This may be a bind shell or a backdoor. Check who connected: ss -tnp state established."},
+		"ev.risky_listener":            {"процесс запущен из временного каталога/удалён/является оболочкой или netcat", "the process runs from a temporary directory / is deleted / is a shell or netcat"},
+
+		// Содержимое командной строки.
+		"rule.revshell_pattern.title": {"Командная строка содержит конструкцию reverse shell", "Command line contains a reverse shell construct"},
+		"rule.revshell_pattern.rec":   {"Определите удалённый адрес из командной строки и соединений процесса, проверьте журналы входа и веб-сервера на момент запуска.", "Determine the remote address from the command line and the process connections; check login and web server logs around the start time."},
+		"rule.download_exec.title":    {"Загрузка из сети с немедленным выполнением", "Download from the network with immediate execution"},
+		"rule.download_exec.rec":      {"Установщики иногда так работают, но это и типичный способ доставки вредоносов. Скачайте скрипт отдельно (без выполнения) и изучите.", "Installers sometimes work this way, but it is also a typical malware delivery method. Download the script separately (without running it) and examine it."},
+		"rule.miner_pattern.title":    {"Параметры командной строки характерны для майнера", "Command line parameters are typical of a miner"},
+		"rule.miner_pattern.rec":      {"Проверьте загрузку CPU (top -p PID), соединения процесса и способ запуска (cron, systemd, родитель).", "Check CPU usage (top -p PID), the process connections and how it was started (cron, systemd, parent)."},
+		"ev.match":                    {"совпадение: {0}", "match: {0}"},
+
+		// Поведение.
+		"rule.cpu_sustained.title": {"Длительная высокая загрузка CPU", "Sustained high CPU usage"},
+		"rule.cpu_sustained.rec":   {"Высокая нагрузка бывает у легитимных задач (сборки, БД). Подозрительна в сочетании с другими признаками: майнинг, неизвестный файл.", "High load is normal for legitimate tasks (builds, databases). It is suspicious combined with other indicators: mining, an unknown file."},
+		"ev.cpu_sustained":         {"CPU ≥ {0}% в {1} сканированиях подряд (≈ {2}), сейчас {3}%", "CPU ≥ {0}% for {1} scans in a row (≈ {2}), now {3}%"},
+		"rule.mem_sustained.title": {"Длительное высокое потребление памяти", "Sustained high memory usage"},
+		"rule.mem_sustained.rec":   {"Сверьте с ожидаемым поведением программы; проверьте утечки памяти или нецелевое использование.", "Compare with the expected behavior of the program; check for memory leaks or misuse."},
+		"ev.mem_sustained":         {"RAM ≥ {0}% в {1} сканированиях подряд, сейчас {2}%", "RAM ≥ {0}% for {1} scans in a row, now {2}%"},
+
+		// Окружение и привилегии.
+		"rule.ld_preload.title":         {"Задана переменная подгрузки библиотек (LD_PRELOAD/LD_AUDIT)", "Library preload variable is set (LD_PRELOAD/LD_AUDIT)"},
+		"rule.ld_preload.rec":           {"Посмотрите значение вручную: tr '\\0' '\\n' < /proc/{0}/environ | grep -E '^LD_(PRELOAD|AUDIT)='; проверьте библиотеку (dpkg -S, sha256sum).", "View the value manually: tr '\\0' '\\n' < /proc/{0}/environ | grep -E '^LD_(PRELOAD|AUDIT)='; check the library (dpkg -S, sha256sum)."},
+		"ev.environ_has":                {"в /proc/{0}/environ есть {1} (значение не сохраняется)", "/proc/{0}/environ contains {1} (the value is not stored)"},
+		"ev.preload_rootkits":           {"через подгружаемую библиотеку руткиты перехватывают системные вызовы", "rootkits intercept system calls through a preloaded library"},
+		"rule.root_from_writable.title": {"Процесс root запущен из каталога, доступного на запись пользователям", "Root process started from a user-writable directory"},
+		"rule.root_from_writable.rec":   {"Подмена такого файла непривилегированным пользователем даёт ему права root. Проверьте, кто владеет файлом и каталогом.", "Replacing such a file gives an unprivileged user root rights. Check who owns the file and the directory."},
+
+		// Справочные признаки.
+		"rule.info_container.title": {"Процесс работает в контейнере", "Process runs in a container"},
+		"rule.info_container.rec":   {"Пути exe/cwd указаны внутри файловой системы контейнера.", "The exe/cwd paths are inside the container filesystem."},
+		"ev.container_runtime":      {"среда: {0}", "runtime: {0}"},
+		"ev.container_id":           {"контейнер: {0}", "container: {0}"},
+		"ev.container_pid":          {"PID внутри контейнера: {0}", "PID inside the container: {0}"},
+		"rule.info_listen.title":    {"Процесс слушает сетевые порты", "Process listens on network ports"},
+		"rule.info_access.title":    {"Часть данных недоступна из-за прав", "Some data is unavailable due to permissions"},
+		"rule.info_access.rec":      {"Запустите сканер от root, чтобы правила, зависящие от этих данных, могли сработать.", "Run the scanner as root so that rules depending on this data can work."},
+		"ev.not_read":               {"не прочитано: {0}", "not read: {0}"},
+
+		// Системные проверки (закрепление).
+		"rule.ld_so_preload.title":        {"Глобальная подгрузка библиотек через /etc/ld.so.preload", "Global library preload via /etc/ld.so.preload"},
+		"rule.ld_so_preload.rec":          {"Штатно файл отсутствует. Проверьте каждую библиотеку: dpkg -S <путь>; sha256sum <путь>. Так работают многие руткиты пользовательского уровня.", "Normally the file does not exist. Check every library: dpkg -S <path>; sha256sum <path>. Many userland rootkits work this way."},
+		"ev.preload_not_empty":            {"файл не пустой, библиотеки подгружаются во ВСЕ процессы:", "the file is not empty, libraries are loaded into ALL processes:"},
+		"rule.autostart_temp.title":       {"Файл автозапуска ссылается на временный каталог", "Autostart file refers to a temporary directory"},
+		"rule.autostart_temp.rec":         {"Проверьте, что именно запускается из /tmp в {0}: штатные скрипты обычно так не делают.", "Check what exactly is run from /tmp in {0}: regular scripts do not usually do this."},
+		"rule.autostart_suspicious.title": {"Подозрительная команда в файле автозапуска", "Suspicious command in an autostart file"},
+		"rule.autostart_suspicious.rec":   {"Изучите файл {0} и выясните, кто и когда его изменил (stat, журналы auth.log, история команд).", "Examine {0} and find out who changed it and when (stat, auth.log, shell history)."},
+		"rule.autostart_recent.title":     {"Недавно изменён файл автозапуска", "Autostart file modified recently"},
+		"rule.autostart_recent.rec":       {"Обычно это результат установки пакетов или действий администратора. Убедитесь, что изменение ожидаемо.", "Usually this is the result of package installation or administrator actions. Make sure the change is expected."},
+		"ev.line":                         {"строка {0}: {1}", "line {0}: {1}"},
+		"ev.modified":                     {"изменён {0}", "modified {0}"},
+		"rule.ssh_keys_not_regular.title": {"Файл authorized_keys — не обычный файл или слишком большой", "authorized_keys is not a regular file or is too large"},
+		"rule.ssh_keys_not_regular.rec":   {"Файл не прочитан: сканер не открывает ссылки, FIFO и устройства в домашних каталогах. sshd по ссылке идёт — проверьте, куда она указывает и кто её создал (ls -la {0}).", "The file was not read: the scanner does not open links, FIFOs and devices in home directories. sshd does follow links — check where it points and who created it (ls -la {0})."},
+		"ev.file_too_large":               {"размер {0} байт — больше лимита 1 МБ", "size {0} bytes — over the 1 MB limit"},
+		"ev.file_symlink":                 {"символическая ссылка → {0}", "symbolic link → {0}"},
+		"ev.file_fifo":                    {"именованный канал (FIFO)", "named pipe (FIFO)"},
+		"ev.file_device":                  {"файл устройства", "device file"},
+		"ev.file_dir":                     {"каталог", "directory"},
+		"ev.file_type":                    {"тип файла: {0}", "file type: {0}"},
+		"rule.ssh_key_command.title":      {"Ключ SSH с подозрительной принудительной командой", "SSH key with a suspicious forced command"},
+		"rule.ssh_key_command.rec":        {"Просмотрите файл вручную и удалите неизвестные ключи (приложение этого не делает).", "Review the file manually and remove unknown keys (the application does not do this)."},
+		"ev.key_command":                  {"ключ №{0} содержит подозрительную опцию command=", "key #{0} has a suspicious command= option"},
+		"rule.ssh_keys_recent.title":      {"Недавно изменён список ключей SSH", "SSH key list modified recently"},
+		"rule.ssh_keys_recent.rec":        {"Сверьте ключи со списком ожидаемых: ssh-keygen -lf {0}. Добавление ключа — частый способ закрепления.", "Compare the keys with the expected list: ssh-keygen -lf {0}. Adding a key is a common persistence method."},
+		"ev.modified_keys":                {"изменён {0}, ключей: {1}", "modified {0}, keys: {1}"},
+
+		// Ошибки модели.
+		"err.unknown_risk": {"неизвестный уровень риска {0}", "unknown risk level {0}"},
+	})
+}

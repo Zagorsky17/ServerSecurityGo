@@ -3,8 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 )
 
 func TestValidateSecurity(t *testing.T) {
@@ -99,5 +102,20 @@ func TestLocalUIDs(t *testing.T) {
 		if _, err := FromEnv(); err == nil {
 			t.Errorf("%q принято", bad)
 		}
+	}
+}
+
+func TestLang(t *testing.T) {
+	t.Setenv("SSG_LANG", "")
+	if c, err := FromEnv(); err != nil || c.Lang != "" {
+		t.Errorf("пусто — автоопределение: %v %q", err, c.Lang)
+	}
+	t.Setenv("SSG_LANG", "EN")
+	if c, err := FromEnv(); err != nil || c.Lang != i18n.EN {
+		t.Errorf("EN: %v %q", err, c.Lang)
+	}
+	t.Setenv("SSG_LANG", "de")
+	if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "SSG_LANG") {
+		t.Errorf("неизвестный язык должен быть ошибкой: %v", err)
 	}
 }

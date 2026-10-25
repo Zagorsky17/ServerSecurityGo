@@ -3,17 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Вход — ServerSecurityGo</title>
+<title data-i18n="web.login.title">Вход — ServerSecurityGo</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js" defer></script>
 <script src="/static/login.js" defer></script>
 </head>
 <body class="login-page">
 <form id="login" class="login-box" autocomplete="on">
   <h1>ServerSecurityGo</h1>
-  <p class="muted">Панель мониторинга процессов. Введите пароль администратора.</p>
-  <label for="password">Пароль</label>
+  <p class="muted" data-i18n="web.login.intro">Панель мониторинга процессов. Введите пароль администратора.</p>
+  <label for="password" data-i18n="web.login.password">Пароль</label>
   <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
-  <button type="submit">Войти</button>
+  <button type="submit" data-i18n="web.login.submit">Войти</button>
+  <button type="button" id="btn-lang" class="secondary" data-i18n="web.btn.lang" data-i18n-title="web.btn.lang_title">English</button>
   <p id="err" class="error hidden" role="alert"></p>
 </form>
 </body>

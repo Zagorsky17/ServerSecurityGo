@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -50,7 +51,7 @@ func TestLifecycleEvents(t *testing.T) {
 	a2 := proc(10, "10-1", start, 6000)
 	a2.Cmdline = "p --changed"
 	a2.Risk = model.RiskMedium
-	a2.Findings = []model.Finding{{ID: "exe_in_temp", Title: "x", Category: model.CatLocation, Weight: 15}}
+	a2.Findings = []model.Finding{{ID: "exe_in_temp", Title: i18n.L("x"), Category: model.CatLocation, Weight: 15}}
 	a2.Sockets = []model.Socket{{Proto: "tcp", State: "LISTEN", LocalAddr: "0.0.0.0", LocalPort: 31337}}
 	b := proc(20, "20-5", t1, 0)
 	s.Observe(t1, []*model.Process{a2, b})
@@ -95,7 +96,7 @@ func TestPersistence(t *testing.T) {
 	now := time.Now()
 	p := proc(1, "1-1", now.Add(-time.Hour), 10)
 	s.Observe(now, []*model.Process{p})
-	s.Record(now, []*model.Process{p}, []model.SystemFinding{{Finding: model.Finding{ID: "ld_so_preload", Title: "x"}, Path: "/etc/ld.so.preload", Risk: model.RiskHigh}})
+	s.Record(now, []*model.Process{p}, []model.SystemFinding{{Finding: model.Finding{ID: "ld_so_preload", Title: i18n.L("x")}, Path: "/etc/ld.so.preload", Risk: model.RiskHigh}})
 	if err := s.Flush(now); err != nil {
 		t.Fatal(err)
 	}

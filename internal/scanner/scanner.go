@@ -9,7 +9,6 @@ package scanner
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"sort"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/redact"
@@ -91,7 +91,7 @@ func (s *Scanner) Run(ctx context.Context) {
 	defer t.Stop()
 	for {
 		if _, err := s.ScanOnce(); err != nil {
-			s.opt.Logger.Error("ошибка сканирования", "err", err)
+			s.opt.Logger.Error(i18n.S("log.scan_error"), "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -129,10 +129,10 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	for _, e := range events {
 		// В журнал пишем только факт и уровень, без командной строки.
 		if (e.Type == model.EvStarted || e.Type == model.EvRiskUp || e.Type == model.EvSystem) && e.Risk >= model.RiskHigh {
-			s.opt.Logger.Warn("обнаружен процесс с высоким риском", "type", e.Type, "pid", e.PID, "name", e.Name, "risk", e.Risk.String(), "key", e.Key)
+			s.opt.Logger.Warn(i18n.S("log.high_risk"), "type", e.Type, "pid", e.PID, "name", e.Name, "risk", e.Risk.String(), "key", e.Key)
 		}
 	}
-	s.opt.Logger.Debug("сканирование завершено", "processes", len(snap.Processes), "duration", snap.Duration.Round(time.Millisecond).String(), "events", len(events))
+	s.opt.Logger.Debug(i18n.S("log.scan_done"), "processes", len(snap.Processes), "duration", snap.Duration.Round(time.Millisecond).String(), "events", len(events))
 
 	s.mu.Lock()
 	s.snap = snap
@@ -168,11 +168,11 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 	fs := s.opt.FS
 	pids, err := fs.PIDs()
 	if err != nil {
-		return nil, fmt.Errorf("чтение %s: %w", fs.Root, err)
+		return nil, i18n.Errorf("err.read_path", fs.Root, err)
 	}
 	boot, err := fs.BootTime()
 	if err != nil {
-		s.opt.Logger.Warn("не удалось определить время загрузки", "err", err)
+		s.opt.Logger.Warn(i18n.S("log.boot_time"), "err", err)
 	}
 	users := fs.Users()
 	memTotal := fs.MemTotal()
@@ -373,13 +373,13 @@ func (s *Scanner) hostInfo(boot time.Time, memTotal uint64) model.HostInfo {
 	return h
 }
 
-func (s *Scanner) warnings(snap *model.Snapshot, readErrors int) []string {
-	var w []string
+func (s *Scanner) warnings(snap *model.Snapshot, readErrors int) []i18n.Msg {
+	var w []i18n.Msg
 	if !snap.Host.IsRoot && !s.opt.Demo {
-		w = append(w, "Сканер запущен не от root: у процессов других пользователей недоступны exe, cwd, открытые файлы и окружение. Часть правил не сможет сработать.")
+		w = append(w, i18n.T("warn.not_root"))
 	}
 	if snap.Host.InContainer {
-		w = append(w, "Сканер работает внутри контейнера: видны только процессы его PID-пространства. Для анализа хоста запускайте на хосте.")
+		w = append(w, i18n.T("warn.in_container"))
 	}
 	restricted := 0
 	for _, p := range snap.Processes {
@@ -388,10 +388,10 @@ func (s *Scanner) warnings(snap *model.Snapshot, readErrors int) []string {
 		}
 	}
 	if restricted > 0 {
-		w = append(w, fmt.Sprintf("Неполные данные у %d процессов из-за прав доступа (hidepid, ptrace_scope, LSM).", restricted))
+		w = append(w, i18n.T("warn.restricted", restricted))
 	}
 	if readErrors > 0 {
-		w = append(w, fmt.Sprintf("Не удалось прочитать %d процессов.", readErrors))
+		w = append(w, i18n.T("warn.read_errors", readErrors))
 	}
 	return w
 }
