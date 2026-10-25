@@ -64,7 +64,10 @@ type Tree struct {
 	Procs      []*Proc
 	Socks      []Sock
 	HostFiles  map[string]string // путь относительно корня хоста → содержимое
-	Kernel     string
+	// HostModes — права файлов хоста (по умолчанию 0644): аудит проверяет
+	// права /etc/shadow, sudoers, ключей SSH.
+	HostModes map[string]os.FileMode
+	Kernel    string
 	// Addrs — локальные адреса сервера: IPv4 пишутся в /proc/net/fib_trie,
 	// IPv6 — в /proc/net/if_inet6 (интерфейс lo для ::1, иначе eth0).
 	Addrs []string
@@ -92,6 +95,11 @@ func (t *Tree) Write(dir string) (procRoot, hostRoot string, err error) {
 	w(filepath.Join(procRoot, "sys", "kernel", "osrelease"), t.Kernel+"\n")
 	for path, content := range t.HostFiles {
 		w(filepath.Join(hostRoot, path), content)
+	}
+	for path, mode := range t.HostModes {
+		if err == nil {
+			err = os.Chmod(filepath.Join(hostRoot, path), mode)
+		}
 	}
 	if err != nil {
 		return "", "", err

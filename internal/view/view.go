@@ -194,6 +194,7 @@ type Status struct {
 	Stats          model.Stats    `json:"stats"`
 	Warnings       []i18n.Msg     `json:"warnings"`
 	SystemFindings int            `json:"systemFindings"`
+	Audit          AuditBrief     `json:"audit"`
 }
 
 // BuildStatus заполняет данные снимка в Status (snap может быть nil).
@@ -240,4 +241,110 @@ func Exposure(snap *model.Snapshot) *model.ExposureReport {
 		r.Bindings = []model.PortBinding{}
 	}
 	return &r
+}
+
+// AuditCounts — число проверок по статусам.
+type AuditCounts struct {
+	Pass    int `json:"pass"`
+	Fail    int `json:"fail"`
+	Warn    int `json:"warn"`
+	Info    int `json:"info"`
+	NA      int `json:"na"`
+	Unknown int `json:"unknown"`
+}
+
+func (c *AuditCounts) add(status string) {
+	switch status {
+	case model.AuditPass:
+		c.Pass++
+	case model.AuditFail:
+		c.Fail++
+	case model.AuditWarn:
+		c.Warn++
+	case model.AuditInfo:
+		c.Info++
+	case model.AuditNA:
+		c.NA++
+	default:
+		c.Unknown++
+	}
+}
+
+// AuditView — вкладка «Настройки безопасности»: результат последнего
+// аудита и сводка «пройдено N из M» (советы, n/a и unknown не считаются).
+type AuditView struct {
+	Enabled    bool                   `json:"enabled"`
+	Running    bool                   `json:"running"`
+	Interval   float64                `json:"interval"` // секунды
+	Ready      bool                   `json:"ready"`    // есть результат
+	Time       time.Time              `json:"time"`
+	DurationMs int64                  `json:"durationMs"`
+	Passed     int                    `json:"passed"`
+	Total      int                    `json:"total"`
+	Summary    AuditCounts            `json:"summary"`
+	Groups     map[string]AuditCounts `json:"groups"`
+	Checks     []model.AuditCheck     `json:"checks"`
+}
+
+// AuditBrief — счётчики аудита для заголовка интерфейса.
+type AuditBrief struct {
+	Enabled bool      `json:"enabled"`
+	Running bool      `json:"running"`
+	Ready   bool      `json:"ready"`
+	Fail    int       `json:"fail"`
+	Warn    int       `json:"warn"`
+	Time    time.Time `json:"time"`
+}
+
+// auditOrder — порядок статусов в списке: сначала то, что нужно исправить.
+var auditOrder = map[string]int{model.AuditFail: 0, model.AuditWarn: 1, model.AuditUnknown: 2, model.AuditInfo: 3, model.AuditPass: 4, model.AuditNA: 5}
+
+// BuildAudit собирает представление аудита. rep может быть nil (аудит
+// ещё не выполнялся или выключен).
+func BuildAudit(enabled, running bool, interval time.Duration, rep *model.AuditReport) AuditView {
+	v := AuditView{Enabled: enabled, Running: running, Interval: interval.Seconds(), Groups: map[string]AuditCounts{}, Checks: []model.AuditCheck{}}
+	if rep == nil {
+		return v
+	}
+	v.Ready, v.Time, v.DurationMs = true, rep.Time, rep.Duration.Milliseconds()
+	v.Checks = append(v.Checks, rep.Checks...)
+	sort.SliceStable(v.Checks, func(i, j int) bool {
+		a, b := v.Checks[i], v.Checks[j]
+		if auditOrder[a.Status] != auditOrder[b.Status] {
+			return auditOrder[a.Status] < auditOrder[b.Status]
+		}
+		return a.Severity > b.Severity
+	})
+	for _, c := range v.Checks {
+		v.Summary.add(c.Status)
+		g := v.Groups[c.Group]
+		g.add(c.Status)
+		v.Groups[c.Group] = g
+	}
+	v.Passed, v.Total = v.Summary.Pass, v.Summary.Pass+v.Summary.Fail+v.Summary.Warn
+	return v
+}
+
+// Brief — краткая сводка аудита для Status.
+func (v AuditView) Brief() AuditBrief {
+	return AuditBrief{Enabled: v.Enabled, Running: v.Running, Ready: v.Ready, Fail: v.Summary.Fail, Warn: v.Summary.Warn, Time: v.Time}
+}
+
+// BuildAuditBrief — то же, что BuildAudit(...).Brief(), но без копирования
+// и сортировки проверок: /api/status опрашивается каждые несколько секунд.
+func BuildAuditBrief(enabled, running bool, rep *model.AuditReport) AuditBrief {
+	b := AuditBrief{Enabled: enabled, Running: running}
+	if rep == nil {
+		return b
+	}
+	b.Ready, b.Time = true, rep.Time
+	for _, c := range rep.Checks {
+		switch c.Status {
+		case model.AuditFail:
+			b.Fail++
+		case model.AuditWarn:
+			b.Warn++
+		}
+	}
+	return b
 }

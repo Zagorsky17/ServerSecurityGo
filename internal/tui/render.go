@@ -19,7 +19,7 @@ type seg struct {
 type line []seg
 
 // minHeight — минимальная высота окна для раскладки панелей.
-const minHeight = 14
+const minHeight = 16
 
 // draw рисует кадр целиком и выводит его.
 func (a *App) draw() {
@@ -30,7 +30,7 @@ func (a *App) draw() {
 // render раскладывает панели и рисует их в буфер (без вывода — удобно
 // для тестов).
 func (a *App) render() {
-	// Меньше 14 строк семь панелей слева не помещаются даже рамками.
+	// Меньше 16 строк восемь панелей слева не помещаются даже рамками.
 	if a.w < 20 || a.h < minHeight {
 		a.scr = newScreen(max(a.w, 1), max(a.h, 1))
 		a.scr.Text(0, 0, a.w, a.tr("tui.too_small"), stWarn)
@@ -262,6 +262,8 @@ func (a *App) columnsHeader(p panelID, w int) string {
 		return fit(a.tr("tui.cols.net"), w)
 	case pPorts:
 		return fit(a.tr("tui.cols.ports"), w)
+	case pAudit:
+		return fit(a.tr("tui.cols.audit"), w)
 	case pHist:
 		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
@@ -367,6 +369,21 @@ func (a *App) row(p panelID, i, w int) []seg {
 		segs := []seg{{risk + " ", rst}, {fit(e.Proto, 5) + " ", stDim}}
 		segs = append(segs, addrSegs(e.Addr, e.Port, 23)...)
 		return append(segs, seg{fit(scope, 10) + " ", sst}, seg{fit(svc, 14) + " ", stBold}, seg{owner, ost})
+	case pAudit:
+		c := a.checks[i]
+		sst := auditStyle(c.Status)
+		// Важность имеет смысл только для проблем: у пройденных проверок и
+		// советов она сбивала бы с толку.
+		sev, sevSt := "    ", stDim
+		if c.Status == model.AuditFail || c.Status == model.AuditWarn {
+			sev, sevSt = riskShort(c.Severity.String()), riskStyle(c.Severity.String())
+		}
+		return []seg{
+			{auditShort(c.Status) + " ", sst},
+			{sev + " ", sevSt},
+			{fit(a.groupName(c.Group), 8) + " ", stDim},
+			{a.txt(c.Title), stNormal},
+		}
 	case pHist:
 		e := a.events[i]
 		who := e.Name
@@ -554,6 +571,14 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.portDetail(b, e)
 		return a.tr("tui.title.port", exposureEndpoint(e)), b.lines
+	case pAudit:
+		a.auditHeader(b)
+		c, ok := a.selCheck()
+		if !ok {
+			return a.tr("tui.panel.audit"), b.lines
+		}
+		a.auditDetail(b, c)
+		return a.tr("tui.panel.audit") + " · " + auditShort(c.Status), b.lines
 	case pSys:
 		f, ok := a.selSystem()
 		if !ok {
@@ -808,6 +833,112 @@ func (a *App) socketDetail(b *lb, sk model.Socket) {
 	a.processDetail(b, sk.ProcKey)
 }
 
+// auditShort — короткая метка статуса проверки (4 символа, как у риска).
+func auditShort(s string) string {
+	switch s {
+	case model.AuditFail:
+		return "FAIL"
+	case model.AuditWarn:
+		return "WARN"
+	case model.AuditPass:
+		return "OK  "
+	case model.AuditInfo:
+		return "INFO"
+	case model.AuditNA:
+		return "N/A "
+	}
+	return "??  "
+}
+
+func auditStyle(s string) Style {
+	switch s {
+	case model.AuditFail:
+		return riskStyle("CRITICAL")
+	case model.AuditWarn:
+		return riskStyle("MEDIUM")
+	case model.AuditPass:
+		return stOK
+	}
+	return stDim
+}
+
+// statusName — подпись статуса проверки.
+func (a *App) statusName(s string) string {
+	switch s {
+	case model.AuditPass:
+		return a.tr("audit.status.pass")
+	case model.AuditFail:
+		return a.tr("audit.status.fail")
+	case model.AuditWarn:
+		return a.tr("audit.status.warn")
+	case model.AuditInfo:
+		return a.tr("audit.status.info")
+	case model.AuditNA:
+		return a.tr("audit.status.na")
+	}
+	return a.tr("audit.status.unknown")
+}
+
+// groupName — подпись группы проверок.
+func (a *App) groupName(g string) string {
+	switch g {
+	case model.AuditGroupSSH:
+		return a.tr("audit.group.ssh")
+	case model.AuditGroupAccounts:
+		return a.tr("audit.group.accounts")
+	case model.AuditGroupSudo:
+		return a.tr("audit.group.sudo")
+	}
+	return g
+}
+
+// auditHeader — когда была проверка и сколько пройдено.
+func (a *App) auditHeader(b *lb) {
+	av := a.data.Audit
+	switch {
+	case av == nil || !av.Enabled:
+		b.para(a.tr("web.audit.disabled"), stWarn, 0)
+	case !av.Ready || av.Running:
+		b.para(a.tr("web.audit.running"), stDim, 0)
+	default:
+		b.para(a.tr("tui.audit.when", fmtTime(av.Time), av.DurationMs), stDim, 0)
+		st := stOK
+		if av.Summary.Fail > 0 {
+			st = riskStyle("CRITICAL")
+		} else if av.Summary.Warn > 0 {
+			st = stWarn
+		}
+		b.para(a.tr("web.audit.score", av.Passed, av.Total, av.Summary.Fail, av.Summary.Warn, av.Summary.Info, av.Summary.NA+av.Summary.Unknown), st, 0)
+	}
+	b.blank()
+}
+
+// auditDetail — подробности проверки: факты, рекомендация, команда.
+func (a *App) auditDetail(b *lb, c model.AuditCheck) {
+	b.add(seg{" " + auditShort(c.Status) + " ", Style{FG: 16, BG: auditStyle(c.Status).FG, Bold: true}}, seg{"  " + sanitize(a.txt(c.Title)), stBold})
+	b.kv(a.tr("web.col.status"), a.statusName(c.Status))
+	b.kv(a.tr("web.col.severity"), c.Severity.String())
+	b.kv(a.tr("web.col.group"), a.groupName(c.Group))
+	b.kv(a.tr("tui.k.rule"), c.ID)
+	if len(c.References) > 0 {
+		b.kv("ATT&CK", strings.Join(c.References, ", "))
+	}
+	if len(c.Evidence) > 0 {
+		b.header(a.tr("tui.h.facts"))
+		for _, m := range c.Evidence {
+			b.para("· "+a.txt(m), stNormal, 2)
+		}
+	}
+	if !c.Recommendation.IsZero() {
+		b.header(a.tr("tui.h.recommendation"))
+		b.para(a.txt(c.Recommendation), stNormal, 2)
+	}
+	if c.FixCommand != "" {
+		b.header(a.tr("tui.h.fix"))
+		b.para(c.FixCommand, Style{FG: 223, BG: -1}, 2)
+	}
+}
+
 // scopeName — подпись области видимости порта.
 func (a *App) scopeName(s string) string {
 	switch s {
@@ -955,6 +1086,16 @@ func (a *App) overview(b *lb) {
 	for _, rk := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"} {
 		b.add(seg{"  " + fit(rk, 10), riskStyle(rk)}, seg{strconv.Itoa(st.Stats.ByRisk[rk]), stNormal})
 	}
+	if av := a.data.Audit; av != nil && av.Enabled && av.Ready {
+		b.header(a.tr("tui.panel.audit"))
+		st := stOK
+		if av.Summary.Fail > 0 {
+			st = riskStyle("CRITICAL")
+		} else if av.Summary.Warn > 0 {
+			st = stWarn
+		}
+		b.para(a.tr("web.audit.score", av.Passed, av.Total, av.Summary.Fail, av.Summary.Warn, av.Summary.Info, av.Summary.NA+av.Summary.Unknown), st, 2)
+	}
 	if x := a.data.Exposure; x != nil {
 		b.header(a.tr("tui.h.exposure"))
 		pst := stNormal
@@ -1018,7 +1159,7 @@ func (a *App) drawBottom() {
 	case a.focus == pProcs:
 		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"s", a.tr("tui.hint.sort")}, {"t", a.tr("tui.tree")}, {"K", a.tr("tui.hint.kernel")}, {"y", a.tr("tui.hint.copy")}}
 	default:
-		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"1-7/Tab", a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y", a.tr("tui.hint.copy")}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"1-8/Tab", a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y", a.tr("tui.hint.copy")}}
 	}
 	hints = append(hints, [2]string{"L", a.tr("tui.hint.lang")}, [2]string{"?", a.tr("tui.hint.help")}, [2]string{"q", a.tr("tui.hint.quit")})
 	cx := 0
@@ -1055,7 +1196,7 @@ func (a *App) drawBottom() {
 // Пустая клавиша — заголовок раздела.
 var helpLines = [][2]string{
 	{"", "tui.help.nav"},
-	{"1 … 7", "tui.help.panels"},
+	{"1 … 8", "tui.help.panels"},
 	{"Tab / Shift+Tab, [ ]", "tui.help.next_panel"},
 	{"↑ ↓ / j k", "tui.help.select"},
 	{"PgUp PgDn, Ctrl+U Ctrl+D", "tui.help.page"},

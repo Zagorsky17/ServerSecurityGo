@@ -11,6 +11,7 @@ func init() {
   serversecuritygo tui [--local] [--socket PATH]    терминальный интерфейс
   serversecuritygo serve [--env-file PATH]          запустить сканер и веб-панель
   serversecuritygo scan [--format table|json] [--min-risk LOW] [--env-file PATH]
+  serversecuritygo audit [--format table|json] [--env-file PATH]   проверка настроек SSH, учётных записей, sudo
   serversecuritygo demo [--tui] [--listen ADDR]     демонстрационные данные (веб или терминал)
   serversecuritygo hash-password                    хеш пароля для SSG_AUTH_PASSWORD_HASH
   serversecuritygo version
@@ -24,6 +25,7 @@ Usage:
   serversecuritygo tui [--local] [--socket PATH]    terminal interface
   serversecuritygo serve [--env-file PATH]          run the scanner and the web panel
   serversecuritygo scan [--format table|json] [--min-risk LOW] [--env-file PATH]
+  serversecuritygo audit [--format table|json] [--env-file PATH]   check SSH, account and sudo settings
   serversecuritygo demo [--tui] [--listen ADDR]     demo data (web or terminal)
   serversecuritygo hash-password                    password hash for SSG_AUTH_PASSWORD_HASH
   serversecuritygo version
@@ -41,6 +43,9 @@ Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
 		"cli.flag.interval_local":  {"период сканирования в локальном режиме", "scan interval in local mode"},
 		"cli.flag.refresh":         {"период обновления экрана", "screen refresh interval"},
 		"cli.flag.format":          {"формат вывода: table или json", "output format: table or json"},
+		"cli.flag.all_checks":      {"показывать и пройденные проверки", "show passed checks too"},
+		"cli.audit.header":         {"Настройки безопасности: пройдено {0} из {1} · опасно {2} · требует внимания {3} · советов {4}", "Security settings: {0} of {1} passed · fail {2} · warning {3} · tips {4}"},
+		"cli.audit.footer":         {"Изменения (новые пользователи, правка sudoers) отслеживает служба. Команды исправления только предлагаются — выполните их сами, проверив вход по ключу в отдельной сессии.", "The service tracks changes (new users, sudoers edits). Fix commands are only suggestions — run them yourself after checking key login in a separate session."},
 		"cli.flag.min_risk":        {"минимальный уровень для вывода: INFO, LOW, MEDIUM, HIGH, CRITICAL", "minimum level to show: INFO, LOW, MEDIUM, HIGH, CRITICAL"},
 		"cli.flag.sample":          {"сделать два замера с этим интервалом для точного CPU% (например, 2s)", "take two samples with this interval for accurate CPU% (e.g. 2s)"},
 		"cli.flag.listen":          {"адрес веб-панели (только loopback)", "web panel address (loopback only)"},
@@ -69,6 +74,7 @@ Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
 		"err.env_uids":               {"SSG_LOCAL_UIDS: ожидаются числовые UID через запятую, получено {0}", "SSG_LOCAL_UIDS: expected comma-separated numeric UIDs, got {0}"},
 		"err.env_lang":               {"SSG_LANG: ожидается ru или en, получено {0}", "SSG_LANG: expected ru or en, got {0}"},
 		"err.env_interval_min":       {"SSG_SCAN_INTERVAL: минимум 2s", "SSG_SCAN_INTERVAL: minimum is 2s"},
+		"err.env_audit_interval_min": {"SSG_AUDIT_INTERVAL: минимум 1m", "SSG_AUDIT_INTERVAL: minimum is 1m"},
 		"err.tls_pair":               {"SSG_TLS_CERT и SSG_TLS_KEY задаются только вместе", "SSG_TLS_CERT and SSG_TLS_KEY must be set together"},
 		"err.proxy_needs_password":   {"SSG_TRUST_PROXY_TLS=true означает доступ через reverse proxy — задайте SSG_AUTH_PASSWORD_HASH (serversecuritygo hash-password)", "SSG_TRUST_PROXY_TLS=true means access through a reverse proxy — set SSG_AUTH_PASSWORD_HASH (serversecuritygo hash-password)"},
 		"err.network_needs_password": {"адрес {0} доступен из сети, но SSG_AUTH_PASSWORD_HASH не задан. Задайте пароль (serversecuritygo hash-password) или используйте 127.0.0.1 и SSH-туннель", "address {0} is reachable from the network, but SSG_AUTH_PASSWORD_HASH is not set. Set a password (serversecuritygo hash-password) or use 127.0.0.1 and an SSH tunnel"},

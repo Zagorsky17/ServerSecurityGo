@@ -119,3 +119,23 @@ func TestLang(t *testing.T) {
 		t.Errorf("неизвестный язык должен быть ошибкой: %v", err)
 	}
 }
+
+func TestAuditSettings(t *testing.T) {
+	t.Setenv("SSG_AUDIT_ENABLED", "false")
+	t.Setenv("SSG_AUDIT_INTERVAL", "30m")
+	c, err := FromEnv()
+	if err != nil || c.AuditEnabled || c.AuditInterval != 30*time.Minute {
+		t.Fatalf("%v %+v", err, c)
+	}
+	if d := Default(); !d.AuditEnabled || d.AuditInterval != time.Hour {
+		t.Errorf("по умолчанию: %v %v", d.AuditEnabled, d.AuditInterval)
+	}
+	for k, v := range map[string]string{"SSG_AUDIT_ENABLED": "maybe", "SSG_AUDIT_INTERVAL": "10s"} {
+		t.Run(k, func(t *testing.T) {
+			t.Setenv(k, v)
+			if _, err := FromEnv(); err == nil {
+				t.Errorf("%s=%s принят", k, v)
+			}
+		})
+	}
+}

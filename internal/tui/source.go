@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
@@ -28,6 +30,9 @@ type Data struct {
 	// Exposure — открытые порты; nil, если служба старой версии без
 	// /api/exposure.
 	Exposure *model.ExposureReport
+	// Audit — настройки безопасности; nil, если служба старой версии без
+	// /api/audit.
+	Audit *view.AuditView
 }
 
 // Source — откуда интерфейс берёт данные: из запущенной службы (через
@@ -36,6 +41,8 @@ type Source interface {
 	Fetch() (*Data, error)
 	Detail(key string) (*view.Detail, error)
 	Rescan() error
+	// RunAudit — «Проверить сейчас» для настроек безопасности.
+	RunAudit() error
 	// Describe — короткое описание источника для строки состояния.
 	Describe() i18n.Msg
 	Close()
@@ -50,16 +57,22 @@ type Source interface {
 // чтобы не мешать ей.
 type LocalSource struct {
 	sc      *scanner.Scanner
+	audit   *audit.Runner // nil — аудит выключен
 	cancel  context.CancelFunc
 	version string
 	demo    bool
 	note    i18n.Msg
 }
 
-// NewLocalSource запускает сканер в фоне и ждёт первого снимка.
-func NewLocalSource(sc *scanner.Scanner, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
+// NewLocalSource запускает сканер в фоне и ждёт первого снимка. Аудит
+// (ar может быть nil) выполняется сразу и затем только по клавише r: он
+// быстрый, а отдельная горутина интерфейсу не нужна.
+func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
 	if _, err := sc.ScanOnce(); err != nil {
 		return nil, err
+	}
+	if ar != nil {
+		ar.RunOnce()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -72,7 +85,7 @@ func NewLocalSource(sc *scanner.Scanner, version string, demo bool, note i18n.Ms
 		}
 		sc.Run(ctx)
 	}()
-	return &LocalSource{sc: sc, cancel: cancel, version: version, demo: demo, note: note}, nil
+	return &LocalSource{sc: sc, audit: ar, cancel: cancel, version: version, demo: demo, note: note}, nil
 }
 
 func (l *LocalSource) Fetch() (*Data, error) {
@@ -83,7 +96,20 @@ func (l *LocalSource) Fetch() (*Data, error) {
 	st := view.BuildStatus(view.Status{Version: l.version, Demo: l.demo, Interval: l.sc.Interval().Seconds()}, snap)
 	ev := l.sc.History().Events(2000)
 	slices.Reverse(ev)
-	return &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap), Exposure: view.Exposure(snap)}, nil
+	av := view.BuildAudit(false, false, 0, nil)
+	if l.audit != nil {
+		av = view.BuildAudit(true, l.audit.Running(), l.audit.Interval(), l.audit.Report())
+	}
+	st.Audit = av.Brief()
+	return &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap), Exposure: view.Exposure(snap), Audit: &av}, nil
+}
+
+func (l *LocalSource) RunAudit() error {
+	if l.audit == nil {
+		return i18n.Errorf("web.err.audit_disabled")
+	}
+	l.audit.RunOnce()
+	return nil
 }
 
 func (l *LocalSource) Detail(key string) (*view.Detail, error) {
@@ -116,6 +142,10 @@ func (l *LocalSource) Close() { l.cancel() }
 type RemoteSource struct {
 	path   string
 	client *http.Client
+	// audit — последний полученный /api/audit: он меняется раз в час или
+	// по «Проверить сейчас», поэтому заново запрашивается, только когда
+	// сводка в /api/status говорит, что результат другой.
+	audit *view.AuditView
 }
 
 // DialSocket подключается к Unix-сокету службы и проверяет, что она
@@ -202,6 +232,16 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 		return nil, fmt.Errorf("/api/exposure: %w", err)
 	}
 	d.Exposure = exp.Exposure
+	if c, b := r.audit, d.Status.Audit; c != nil && c.Enabled == b.Enabled && c.Running == b.Running && c.Time.Equal(b.Time) {
+		d.Audit = c
+		return d, nil
+	}
+	var av view.AuditView
+	if err := r.get("/api/audit", &av); err == nil {
+		d.Audit, r.audit = &av, &av
+	} else if !errors.Is(err, errNotFound) {
+		return nil, fmt.Errorf("/api/audit: %w", err)
+	}
 	return d, nil
 }
 
@@ -221,6 +261,25 @@ func (r *RemoteSource) Rescan() error {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
 		return errors.New(resp.Status)
+	}
+	return nil
+}
+
+func (r *RemoteSource) RunAudit() error {
+	resp, err := r.client.Post("http://serversecuritygo/api/audit/run", "application/json", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&e)
+		if e.Error == "" {
+			e.Error = resp.Status
+		}
+		return errors.New(e.Error)
 	}
 	return nil
 }

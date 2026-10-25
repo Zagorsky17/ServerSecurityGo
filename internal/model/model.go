@@ -339,6 +339,50 @@ type ExposureReport struct {
 	Warnings []i18n.Msg    `json:"warnings,omitempty"`
 }
 
+// Статусы проверки аудита конфигурации.
+const (
+	AuditPass    = "pass"    // настройка в порядке
+	AuditFail    = "fail"    // настройка опасна
+	AuditWarn    = "warn"    // стоит проверить или улучшить
+	AuditInfo    = "info"    // совет или справка, на «пройдено N из M» не влияет
+	AuditNA      = "n/a"     // неприменимо (например, sshd не установлен)
+	AuditUnknown = "unknown" // нет прав на чтение или данных
+)
+
+// Группы проверок аудита.
+const (
+	AuditGroupSSH      = "ssh"
+	AuditGroupAccounts = "accounts"
+	AuditGroupSudo     = "sudo"
+)
+
+// AuditCheck — результат одной проверки конфигурации. Severity —
+// важность проверки при провале (для pass — та же важность, чтобы было
+// видно, что именно проверено).
+type AuditCheck struct {
+	ID             string     `json:"id"`
+	Group          string     `json:"group"`
+	Title          i18n.Msg   `json:"title"`
+	Status         string     `json:"status"`
+	Severity       Risk       `json:"severity"`
+	Evidence       []i18n.Msg `json:"evidence,omitempty"`
+	Recommendation i18n.Msg   `json:"recommendation,omitzero"`
+	// FixCommand — готовая команда исправления. Только текст: приложение
+	// ничего не выполняет, команду запускает администратор.
+	FixCommand string   `json:"fixCommand,omitempty"`
+	References []string `json:"references,omitempty"` // MITRE ATT&CK и т. п.
+	// Change — проверка изменений (новый пользователь, правка sudoers):
+	// возврат в pass означает «изменение устарело», а не «исправлено».
+	Change bool `json:"change,omitempty"`
+}
+
+// AuditReport — результат одного запуска аудита.
+type AuditReport struct {
+	Time     time.Time     `json:"time"`
+	Duration time.Duration `json:"duration"`
+	Checks   []AuditCheck  `json:"checks"`
+}
+
 // Типы событий истории.
 const (
 	EvBaseline = "baseline"  // первое сканирование после запуска с пустой историей
@@ -350,6 +394,7 @@ const (
 	EvFinding  = "finding"   // появился новый признак
 	EvListen   = "listen"    // процесс начал слушать порт
 	EvSystem   = "system"    // новый результат системной проверки
+	EvAudit    = "audit"     // изменился результат проверки аудита конфигурации
 )
 
 // Event — запись в истории изменений.

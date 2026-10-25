@@ -45,6 +45,10 @@ type Config struct {
 	AllowlistFile    string
 	MaxFiles         int
 	LogLevel         string
+	// AuditEnabled — служба проверяет настройки безопасности (SSH,
+	// учётные записи, sudo) при запуске и затем каждые AuditInterval.
+	AuditEnabled  bool
+	AuditInterval time.Duration
 	// Lang — язык по умолчанию (SSG_LANG): вывод CLI, журнал и первое
 	// открытие панели. Пусто — определяется автоматически (локаль
 	// терминала, язык браузера).
@@ -75,6 +79,8 @@ func Default() Config {
 		LocalUIDs:       []int{0},
 		MaxFiles:        200,
 		LogLevel:        "info",
+		AuditEnabled:    true,
+		AuditInterval:   time.Hour,
 	}
 }
 
@@ -170,6 +176,14 @@ func FromEnv() (Config, error) {
 		}
 		c.TrustProxyTLS = b
 	}
+	if v := os.Getenv("SSG_AUDIT_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			errs = append(errs, i18n.Errorf("err.env_bool", "SSG_AUDIT_ENABLED"))
+		}
+		c.AuditEnabled = b
+	}
+	dur("SSG_AUDIT_INTERVAL", &c.AuditInterval)
 	if v := os.Getenv("SSG_ALLOWED_HOSTS"); v != "" {
 		for h := range strings.SplitSeq(v, ",") {
 			if h = strings.TrimSpace(h); h != "" {
@@ -210,6 +224,9 @@ func FromEnv() (Config, error) {
 	}
 	if c.ScanInterval < 2*time.Second {
 		errs = append(errs, i18n.Errorf("err.env_interval_min"))
+	}
+	if c.AuditInterval < time.Minute {
+		errs = append(errs, i18n.Errorf("err.env_audit_interval_min"))
 	}
 	return c, errors.Join(errs...)
 }

@@ -34,10 +34,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/config"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
@@ -84,6 +86,8 @@ func main() {
 		err = cmdServe(os.Args[2:])
 	case "scan":
 		err = cmdScan(os.Args[2:])
+	case "audit":
+		err = cmdAudit(os.Args[2:])
 	case "demo":
 		err = cmdDemo(os.Args[2:])
 	case "hash-password":
@@ -181,22 +185,44 @@ func cmdServe(args []string) error {
 	// Без пароля панель только для LocalUIDs: владельца подключения служба
 	// определяет по /proc/net/tcp (см. web.Options.CheckPeer).
 	noAuth := cfg.AuthPasswordHash == ""
-	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version, ListenAddr: cfg.ListenAddr, PasswordHash: cfg.AuthPasswordHash,
+	opts := web.Options{Scanner: sc, Logger: log, Version: version, ListenAddr: cfg.ListenAddr, PasswordHash: cfg.AuthPasswordHash,
 		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, TrustProxy: cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts,
-		CheckPeer: noAuth, LocalUIDs: cfg.LocalUIDs, Lang: cfg.Lang})
+		CheckPeer: noAuth, LocalUIDs: cfg.LocalUIDs, Lang: cfg.Lang}
+	ar := auditRunner(cfg, hist, log)
+	if ar != nil {
+		opts.Audit = ar // интерфейс: nil-указатель сюда не попадает
+	}
+	srv := web.New(opts)
 	var connCtx func(context.Context, net.Conn) context.Context
 	if noAuth {
 		connCtx = web.PeerContext(pfs.SocketOwner)
 	}
 	log.Info(i18n.S("log.start"), "version", version, "listen", cfg.ListenAddr, "interval", cfg.ScanInterval.String(), "data", cfg.DataDir,
-		"auth", !noAuth, "local_uids", fmt.Sprint(cfg.LocalUIDs), "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow))
-	return run(sc, srv, srv.LocalHandler(), connCtx, cfg, log, func() { _ = hist.Flush(time.Now()) })
+		"auth", !noAuth, "local_uids", fmt.Sprint(cfg.LocalUIDs), "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow),
+		"audit", cfg.AuditEnabled, "audit_interval", cfg.AuditInterval.String())
+	var bg []func(context.Context)
+	if ar != nil {
+		bg = append(bg, ar.Run)
+	}
+	return run(sc, srv, srv.LocalHandler(), connCtx, cfg, log, func() { _ = hist.Flush(time.Now()) }, bg...)
+}
+
+// auditRunner создаёт фоновый аудит настроек службы (nil, если он
+// выключен через SSG_AUDIT_ENABLED=false).
+func auditRunner(cfg config.Config, hist *history.Store, log *slog.Logger) *audit.Runner {
+	if !cfg.AuditEnabled {
+		return nil
+	}
+	return audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, Interval: cfg.AuditInterval, StateDir: cfg.DataDir,
+		Record: hist.RecordAudit, Logger: log})
 }
 
 // run запускает сканер и HTTP-сервер и корректно останавливает их по
 // SIGINT/SIGTERM.
 // connCtx (может быть nil) — http.Server.ConnContext для TCP-панели.
-func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.Context, net.Conn) context.Context, cfg config.Config, log *slog.Logger, onStop func()) error {
+// bg — фоновые задачи (аудит): получают тот же контекст, при остановке
+// их завершения ждём до 5 секунд, чтобы не оборвать запись состояния.
+func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.Context, net.Conn) context.Context, cfg config.Config, log *slog.Logger, onStop func(), bg ...func(context.Context)) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -219,6 +245,14 @@ func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.
 	}
 
 	go sc.Run(ctx)
+	var wg sync.WaitGroup
+	for _, f := range bg {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f(ctx)
+		}()
+	}
 	var localSrv *http.Server
 	if local != nil && cfg.SocketPath != "" {
 		if lnU, err := listenSocket(cfg.SocketPath); err != nil {
@@ -257,11 +291,18 @@ func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.
 			return err
 		}
 	}
+	stop() // при ошибке HTTP-сервера контекст ещё не отменён
 	shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shCtx)
 	if localSrv != nil {
 		_ = localSrv.Shutdown(shCtx)
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-shCtx.Done():
 	}
 	if onStop != nil {
 		onStop()
@@ -379,7 +420,13 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	pfs.MaxFiles = cfg.MaxFiles
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet})
-	return tui.NewLocalSource(sc, version, false, note)
+	// Аудит без каталога данных: базовая линия только на время сеанса,
+	// файлы службы не трогаются.
+	var ar *audit.Runner
+	if cfg.AuditEnabled {
+		ar = audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Logger: quiet})
+	}
+	return tui.NewLocalSource(sc, ar, version, false, note)
 }
 
 func cmdScan(args []string) error {
@@ -536,6 +583,54 @@ func printPublicPorts(snap *model.Snapshot) {
 	tw.Flush()
 }
 
+// cmdAudit — разовая проверка настроек безопасности (SSH, учётные
+// записи, sudo) с выводом в консоль. Без службы проверки изменений
+// (новые пользователи, правка sudoers) недоступны — сравнивать не с чем.
+func cmdAudit(args []string) error {
+	fs := flag.NewFlagSet("audit", flag.ExitOnError)
+	envFile := fs.String("env-file", "", i18n.S("cli.flag.env_file"))
+	format := fs.String("format", "table", i18n.S("cli.flag.format"))
+	all := fs.Bool("all", false, i18n.S("cli.flag.all_checks"))
+	_ = fs.Parse(args)
+	cfg, err := loadConfig(*envFile)
+	if err != nil {
+		return err
+	}
+	checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot})
+	v := view.BuildAudit(true, false, 0, &model.AuditReport{Time: time.Now(), Checks: checks})
+	if *format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		out, err := i18n.RenderJSON(v, i18n.Default())
+		if err != nil {
+			return err
+		}
+		return enc.Encode(out)
+	}
+	// Факты — строки конфигурационных файлов: печатаются через
+	// view.Printable, как и в scan.
+	pr := view.Printable
+	s := v.Summary
+	fmt.Println(i18n.S("cli.audit.header", v.Passed, v.Total, s.Fail, s.Warn, s.Info))
+	for _, c := range v.Checks {
+		if !*all && (c.Status == model.AuditPass || c.Status == model.AuditNA) {
+			continue
+		}
+		fmt.Printf("\n[%s] %s · %s · %s\n", strings.ToUpper(c.Status), c.Severity, c.Group, pr(c.Title.String()))
+		for _, e := range c.Evidence {
+			fmt.Println("    " + pr(e.String()))
+		}
+		if !c.Recommendation.IsZero() {
+			fmt.Println("  → " + pr(c.Recommendation.String()))
+		}
+		if c.FixCommand != "" {
+			fmt.Println("  $ " + c.FixCommand)
+		}
+	}
+	fmt.Println("\n" + i18n.S("cli.audit.footer"))
+	return nil
+}
+
 func sortByRisk(procs []*model.Process) {
 	sort.SliceStable(procs, func(i, j int) bool {
 		if procs[i].Risk != procs[j].Risk {
@@ -579,20 +674,22 @@ func cmdDemo(args []string) error {
 	anim := fakeproc.NewAnimator(tree, procRoot)
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
 		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true})
+	// Демо-файлы принадлежат текущему пользователю: он и считается root.
+	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Logger: log})
 	if *useTUI {
 		if !tui.IsTerminal() {
 			return i18n.Errorf("err.demo_tui_terminal")
 		}
-		ls, err := tui.NewLocalSource(sc, version+" (demo)", true, i18n.T("tui.source_demo"))
+		ls, err := tui.NewLocalSource(sc, ar, version+" (demo)", true, i18n.T("tui.source_demo"))
 		if err != nil {
 			return err
 		}
 		defer ls.Close()
 		return tui.New(tui.Options{Source: ls, Refresh: *interval}).Run()
 	}
-	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (demo)", ListenAddr: cfg.ListenAddr, Demo: true})
+	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (demo)", ListenAddr: cfg.ListenAddr, Demo: true, Audit: ar})
 	log.Info(i18n.S("log.demo"), "dir", dir)
-	return run(sc, srv, nil, nil, cfg, log, nil)
+	return run(sc, srv, nil, nil, cfg, log, nil, ar.Run)
 }
 
 func cmdHashPassword() error {

@@ -14,7 +14,7 @@ import (
 )
 
 // keyLike — строка, похожая на ключ каталога.
-var keyLike = regexp.MustCompile(`^(cat|score|rec|allow|rule|ev|event|hist|warn|log|err|tui|web|cli)\.[a-z0-9_.]*[a-z0-9_]$`)
+var keyLike = regexp.MustCompile(`^(cat|score|rec|allow|rule|ev|event|hist|warn|log|err|tui|web|cli|audit)\.[a-z0-9_.]*[a-z0-9_]$`)
 
 // dynamicPrefixes — ключи, которые код собирает из префикса и значения
 // (категория признака, тип события); они проверяются отдельно.
