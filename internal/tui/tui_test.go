@@ -714,7 +714,7 @@ func TestAuditPanel(t *testing.T) {
 }
 
 // TestFail2banPanel: панель fail2ban — текущие баны, подробности с
-// мини-графиками и командой разбана, y копирует команду.
+// мини-графиками и командой разбана, y копирует IP.
 func TestFail2banPanel(t *testing.T) {
 	a, out := newTestApp(t, 160, 50)
 	press(a, r('7'))
@@ -731,8 +731,8 @@ func TestFail2banPanel(t *testing.T) {
 	out.Reset()
 	press(a, r('y'))
 	b, _ := a.selBan()
-	if want := base64.StdEncoding.EncodeToString([]byte(b.UnbanCommand)); b.UnbanCommand == "" || !strings.Contains(out.String(), want) {
-		t.Errorf("y не скопировал команду разбана %q", b.UnbanCommand)
+	if want := base64.StdEncoding.EncodeToString([]byte(b.IP)); !strings.Contains(out.String(), want) {
+		t.Errorf("y не скопировал IP %q", b.IP)
 	}
 	// Фильтр по IP.
 	press(a, r('/'))
@@ -793,5 +793,159 @@ func TestNoFail2banPanel(t *testing.T) {
 	}
 	if a.minHeight() != 16 {
 		t.Errorf("минимальная высота без fail2ban: %d", a.minHeight())
+	}
+}
+
+// osc52 — скопированный через OSC 52 текст из вывода (последний).
+func osc52Text(t *testing.T, out string) string {
+	t.Helper()
+	i := strings.LastIndex(out, "\x1b]52;c;")
+	if i < 0 {
+		t.Fatalf("нет OSC 52 в выводе %q", out)
+	}
+	rest := out[i+len("\x1b]52;c;"):]
+	rest = rest[:strings.IndexByte(rest, '\a')]
+	b, err := base64.StdEncoding.DecodeString(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestCopyContext: y копирует главное значение панели.
+func TestCopyContext(t *testing.T) {
+	a, out := newTestApp(t, 160, 50)
+	// Подозрительные — командная строка процесса.
+	press(a, r('y'))
+	if got := osc52Text(t, out.String()); got != a.susp[0].Cmdline {
+		t.Errorf("процесс: %q", got)
+	}
+	// Порты — адрес:порт.
+	press(a, r('5'), r('y'))
+	if e, _ := a.selPort(); osc52Text(t, out.String()) != exposureEndpoint(e) {
+		t.Errorf("порт: %q", osc52Text(t, out.String()))
+	}
+	// Аудит — команда исправления, если она есть.
+	press(a, r('6'))
+	for i, c := range a.checks {
+		if c.FixCommand != "" {
+			a.lists[pAudit].cursor = i
+			break
+		}
+	}
+	press(a, r('y'))
+	if c, _ := a.selCheck(); osc52Text(t, out.String()) != c.FixCommand {
+		t.Errorf("аудит: %q", osc52Text(t, out.String()))
+	}
+	if !strings.Contains(a.msg, "команда исправления") {
+		t.Errorf("сообщение: %q", a.msg)
+	}
+}
+
+// TestCopyMenu: c открывает меню со всем, что можно скопировать; цифра
+// копирует пункт и закрывает меню, Esc закрывает без копирования.
+func TestCopyMenu(t *testing.T) {
+	a, out := newTestApp(t, 160, 50)
+	press(a, r('7'), r('c'))
+	if a.menu == nil || len(a.menu.items) < 3 {
+		t.Fatalf("меню: %+v", a.menu)
+	}
+	s := screen(a)
+	for _, want := range []string{"Копировать", "команда разбана", "активный адрес", "fail2ban-client set"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("в меню нет %q\n%s", want, s)
+		}
+	}
+	// Клавиши меню не уходят в интерфейс: 7 не переключает панель.
+	press(a, Key{Kind: KeyDown})
+	out.Reset()
+	press(a, r('2'))
+	b, _ := a.selBan()
+	if a.menu != nil || osc52Text(t, out.String()) != b.UnbanCommand {
+		t.Errorf("пункт 2: меню %v, скопировано %q", a.menu != nil, osc52Text(t, out.String()))
+	}
+	press(a, r('c'), Key{Kind: KeyEsc})
+	if a.menu != nil || a.focus != pF2B {
+		t.Errorf("Esc: меню %v, фокус %d", a.menu != nil, a.focus)
+	}
+	// Сводка — копировать нечего.
+	press(a, r('1'), r('c'))
+	if a.menu != nil || !a.msgErr {
+		t.Errorf("меню на сводке: %v %q", a.menu != nil, a.msg)
+	}
+}
+
+// TestPlainMode: v выводит подробности обычным текстом в основной экран —
+// без рамок, цвета и переносов; любая клавиша возвращает интерфейс.
+func TestPlainMode(t *testing.T) {
+	a, out := newTestApp(t, 80, 30)
+	press(a, r('6'))
+	var fix string
+	for i, c := range a.checks {
+		if len(c.FixCommand) > 80 {
+			a.lists[pAudit].cursor, fix = i, c.FixCommand
+			break
+		}
+	}
+	if fix == "" {
+		t.Fatal("нет длинной команды исправления")
+	}
+	out.Reset()
+	press(a, r('v'))
+	text := out.String()
+	if !a.plain || !strings.Contains(text, "\x1b[?1049l") || !strings.Contains(text, mouseOffSeq) {
+		t.Fatalf("не перешли в основной экран: %q", text)
+	}
+	body := text[strings.Index(text, "\x1b[0m")+len("\x1b[0m"):]
+	if !strings.Contains(body, fix+"\r\n") {
+		t.Errorf("команда разорвана или не найдена:\n%s", body)
+	}
+	if strings.ContainsAny(body, "│╭╰") || strings.Contains(body, "\x1b[") {
+		t.Errorf("в тексте рамки или цвета:\n%q", body)
+	}
+	out.Reset()
+	press(a, r('x'))
+	if a.plain || !strings.Contains(out.String(), "\x1b[?1049h") || !strings.Contains(out.String(), mouseOnSeq) || a.focus != pAudit {
+		t.Errorf("возврат: plain=%v %q", a.plain, out.String())
+	}
+}
+
+// TestMouseToggle: m выключает мышь (работает выделение терминала) и
+// включает обратно; после текстового режима выключенная мышь не включается.
+func TestMouseToggle(t *testing.T) {
+	a, out := newTestApp(t, 120, 40)
+	press(a, r('m'))
+	if !a.mouseOff || !strings.HasSuffix(out.String(), mouseOffSeq) {
+		t.Fatalf("m: %v %q", a.mouseOff, out.String())
+	}
+	a.msg = ""
+	if s := screen(a); !strings.Contains(s, "мышь выкл.") {
+		t.Errorf("нет индикатора:\n%s", s)
+	}
+	press(a, r('v'))
+	out.Reset()
+	press(a, r('q')) // q в текстовом режиме — возврат, а не выход
+	if a.plain || strings.Contains(out.String(), mouseOnSeq) {
+		t.Errorf("после текстового режима мышь включилась: %q", out.String())
+	}
+	press(a, r('m'))
+	if a.mouseOff || !strings.HasSuffix(out.String(), mouseOnSeq) {
+		t.Errorf("повторное m: %v", a.mouseOff)
+	}
+}
+
+// TestPlainModeEscapes: текстовый режим выводит данные прямо в терминал,
+// поэтому ESC-последовательности из имён и командных строк (их задаёт
+// злоумышленник) вырезаются, как и в обычной отрисовке.
+func TestPlainModeEscapes(t *testing.T) {
+	a, out := newTestApp(t, 120, 40)
+	press(a, r('8'))
+	a.events[0].Details = i18n.L("evil \x1b]52;c;ZXZpbA==\a \x1b[2J end")
+	a.events[0].Key = ""
+	out.Reset()
+	press(a, r('v'))
+	body := out.String()[strings.Index(out.String(), "\x1b[0m")+len("\x1b[0m"):]
+	if strings.Contains(body, "\x1b") || strings.Contains(body, "\a") || !strings.Contains(body, "evil") {
+		t.Errorf("управляющие символы в текстовом режиме: %q", body)
 	}
 }

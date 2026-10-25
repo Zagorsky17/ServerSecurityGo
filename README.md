@@ -124,12 +124,16 @@ On the left are eight panels: summary, suspicious processes, all processes (as a
 | `/` | filter the panel by name, PID, path, user, indicator or risk level |
 | `s`, `t`, `K` | sort processes (risk, CPU, memory, PID, name), tree view, kernel threads |
 | `r`, `p` | scan now (on the Settings panel — check settings now), pause auto-refresh |
-| `y`, `Y` | copy the command line (on the Settings panel — the fix command, on the fail2ban panel — the unban command) or JSON to your computer's clipboard (OSC 52, works over SSH) |
-| `+` | expand the active side to full screen |
+| `y` | copy the main value of the selected item to your computer's clipboard (OSC 52, works over SSH): the command line of a process, the fix command of an audit check, the IP of a fail2ban ban, the address:port of an open port, the remote IP of a connection |
+| `c` | copy menu: everything in the details — IPs, commands, paths, facts, recommendations; `Enter` or `1`…`9` copies an item |
+| `Y` | copy the selected item as JSON |
+| `v` | plain text mode: the details as plain text without frames, colors or wrapping, for selecting with the mouse; any key returns to the interface |
+| `m` | turn the mouse off and on; while it is off, the terminal's own text selection works |
+| `+` / `z` | expand the active side to full screen (press again to return) |
 | `L` | interface language: English / Russian |
 | `?`, `q` | help, quit |
 
-The mouse works too: a click selects a panel and row, and the wheel scrolls.
+The mouse works too: a click selects a panel and row, and the wheel scrolls. Because the interface takes the mouse, the terminal cannot select text at the same time: press `m` to hand the mouse back to the terminal (or hold `Option` in iTerm2, `Shift` in most Linux terminals and Windows Terminal), or use `v` for plain text.
 
 **Where the data comes from.** If the service is running, the interface connects to it through the Unix socket `/run/serversecuritygo/api.sock`. Only root can access the socket, so no password or tunnel is needed, and the full collected history is visible. If the service is not running, or an older version without the socket is installed, the interface scans processes itself, and the history then lasts only for the session. The source is shown in the Summary panel.
 
@@ -140,7 +144,7 @@ serversecuritygo tui --refresh 2s       # refresh the screen more often
 
 To see the processes of all users, run the interface as root. In service mode the service already collects the data.
 
-If copying with `y` does not work: OSC 52 is supported by iTerm2, kitty, WezTerm, Alacritty, Windows Terminal and modern xterm. In tmux, it needs `set -g set-clipboard on`.
+If copying with `y` or `c` does not work: OSC 52 is supported by iTerm2, kitty, WezTerm, Alacritty, Windows Terminal and modern xterm. In tmux, it needs `set -g set-clipboard on`. macOS Terminal.app does not support OSC 52: use `v` (plain text mode) and select the text with the mouse — a long command is wrapped by the terminal and copied as one line.
 
 ## Web dashboard (optional)
 

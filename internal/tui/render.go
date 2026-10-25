@@ -72,6 +72,9 @@ func (a *App) render() {
 		a.drawMain(a.rects[nPanels])
 	}
 	a.drawBottom()
+	if a.menu != nil {
+		a.drawCopyMenu()
+	}
 	if a.help {
 		a.drawHelp()
 	}
@@ -1336,11 +1339,11 @@ func (a *App) drawBottom() {
 	var hints [][2]string
 	switch {
 	case a.inMain:
-		hints = [][2]string{{"↑↓", a.tr("tui.hint.scroll")}, {"PgUp/PgDn", a.tr("tui.hint.page")}, {"←/Esc", a.tr("tui.hint.to_list")}, {"y", a.tr("tui.hint.copy_cmd")}, {"Y", "JSON"}, {"+", a.tr("tui.hint.fullscreen")}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.scroll")}, {"PgUp/PgDn", a.tr("tui.hint.page")}, {"←/Esc", a.tr("tui.hint.to_list")}, {"y/c", a.tr("tui.hint.copy")}, {"v", a.tr("tui.hint.plain")}, {"+", a.tr("tui.hint.fullscreen")}}
 	case a.focus == pProcs:
-		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"s", a.tr("tui.hint.sort")}, {"t", a.tr("tui.tree")}, {"K", a.tr("tui.hint.kernel")}, {"y", a.tr("tui.hint.copy")}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"s", a.tr("tui.hint.sort")}, {"t", a.tr("tui.tree")}, {"K", a.tr("tui.hint.kernel")}, {"y/c", a.tr("tui.hint.copy")}}
 	default:
-		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {fmt.Sprintf("1-%d/Tab", len(a.visible())), a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y", a.tr("tui.hint.copy")}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {fmt.Sprintf("1-%d/Tab", len(a.visible())), a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y/c", a.tr("tui.hint.copy")}, {"v", a.tr("tui.hint.plain")}}
 	}
 	hints = append(hints, [2]string{"L", a.tr("tui.hint.lang")}, [2]string{"?", a.tr("tui.hint.help")}, [2]string{"q", a.tr("tui.hint.quit")})
 	cx := 0
@@ -1364,6 +1367,8 @@ func (a *App) drawBottom() {
 		right, rst = a.tr("tui.error_lower", a.err.Error()), stErr
 	case a.paused:
 		right, rst = "⏸ "+a.tr("tui.paused_key"), stWarn
+	case a.mouseOff:
+		right, rst = a.tr("tui.mouse_off_status"), stWarn
 	default:
 		right = "⟳ " + a.refresh.String()
 	}
@@ -1393,7 +1398,11 @@ var helpLines = [][2]string{
 	{"K", "tui.help.kernel"},
 	{"r", "tui.help.rescan"},
 	{"p", "tui.help.pause"},
-	{"y / Y", "tui.help.copy"},
+	{"y", "tui.help.copy"},
+	{"c", "tui.help.copy_menu"},
+	{"Y", "tui.help.copy_json"},
+	{"v", "tui.help.plain"},
+	{"m", "tui.help.mouse_toggle"},
 	{"L", "tui.help.lang"},
 	{"q, Ctrl+C", "tui.help.quit"},
 	{"", "tui.help.observe"},
