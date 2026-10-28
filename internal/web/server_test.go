@@ -22,6 +22,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
@@ -697,5 +698,76 @@ func TestFail2banAPI(t *testing.T) {
 	w = do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil)
 	if strings.Contains(w.Body.String(), `"fail2ban"`) {
 		t.Errorf("сводка fail2ban в статусе без fail2ban: %s", w.Body)
+	}
+}
+
+// TestMetricsAPI: без сборщика раздел выключен, со сборщиком отдаются
+// текущие значения и ряды выбранного окна.
+func TestMetricsAPI(t *testing.T) {
+	s := newTestServer(t, "")
+	w := do(s, "GET", "/api/metrics", "127.0.0.1:8090", "", nil)
+	var off metrics.View
+	if err := json.Unmarshal(w.Body.Bytes(), &off); err != nil || off.Enabled {
+		t.Fatalf("выключенные метрики: %v %+v", err, off)
+	}
+	// /api/status без сборщика сводку не присылает: по ней интерфейсы
+	// решают, показывать ли вкладку.
+	var st view.Status
+	ws := do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil)
+	if err := json.Unmarshal(ws.Body.Bytes(), &st); err != nil || st.Metrics != nil {
+		t.Errorf("сводка без сборщика: %v %+v", err, st.Metrics)
+	}
+
+	tree := fakeproc.Demo(time.Now())
+	procRoot, hostRoot, err := tree.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mc := metrics.New(metrics.Options{ProcRoot: procRoot, HostRoot: hostRoot, Interval: time.Second,
+		DiskUsage: fakeproc.DemoUsage, Logger: log})
+	if _, err := mc.Collect(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	hist, _ := history.Open(history.Options{})
+	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist, Logger: log, Metrics: mc})
+	if _, err := sc.ScanOnce(); err != nil {
+		t.Fatal(err)
+	}
+	sm := New(Options{Scanner: sc, Logger: log, Version: "test", ListenAddr: "127.0.0.1:8090", Metrics: mc})
+	w = do(sm, "GET", "/api/metrics?range=24h", "127.0.0.1:8090", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("код %d: %s", w.Code, w.Body)
+	}
+	var mv metrics.View
+	if err := json.Unmarshal(w.Body.Bytes(), &mv); err != nil {
+		t.Fatal(err)
+	}
+	if !mv.Enabled || !mv.Ready || mv.Range != "24h" || mv.Now == nil {
+		t.Fatalf("ответ: %+v", mv)
+	}
+	if !mv.VM {
+		t.Error("демо-сервер — виртуальная машина (флаг hypervisor)")
+	}
+	if len(mv.Now.Parts) == 0 || mv.Now.NumCPU == 0 {
+		t.Errorf("текущие значения: %+v", mv.Now)
+	}
+	// Неизвестное окно приводится к часу, а не отвергается.
+	w = do(sm, "GET", "/api/metrics?range=zzz", "127.0.0.1:8090", "", nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &mv); err != nil || mv.Range != "1h" {
+		t.Errorf("окно по умолчанию: %v %q", err, mv.Range)
+	}
+	// Признак заполненного раздела из метрик попал в системные находки.
+	ws = do(sm, "GET", "/api/system", "127.0.0.1:8090", "", nil)
+	if !strings.Contains(ws.Body.String(), "disk_almost_full") {
+		t.Errorf("признаки метрик не попали в /api/system: %s", ws.Body)
+	}
+	// Сводка для шапки.
+	ws = do(sm, "GET", "/api/status", "127.0.0.1:8090", "", nil)
+	if err := json.Unmarshal(ws.Body.Bytes(), &st); err != nil || st.Metrics == nil || !st.Metrics.Ready {
+		t.Errorf("сводка метрик: %v %+v", err, st.Metrics)
+	}
+	if w := do(sm, "POST", "/api/metrics", "127.0.0.1:8090", "", map[string]string{"X-CSRF-Token": sm.noAuthCSRF}); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST: %d", w.Code)
 	}
 }

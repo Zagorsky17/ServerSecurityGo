@@ -49,6 +49,8 @@
   <button role="tab" data-tab="fail2ban" id="tabbtn-fail2ban" class="hidden"><span data-i18n="web.tab.fail2ban">fail2ban</span> <span class="badge" id="cnt-fail2ban">0</span></button>
   <button role="tab" data-tab="history" data-i18n="web.tab.history">История</button>
   <button role="tab" data-tab="system"><span data-i18n="web.tab.system">Система</span> <span class="badge" id="cnt-system">0</span></button>
+  <!-- Вкладка «Метрики» видна, только если служба их собирает (status.metrics). -->
+  <button role="tab" data-tab="metrics" id="tabbtn-metrics" class="hidden" data-i18n="web.tab.metrics">Метрики</button>
 </nav>
 
 <main>
@@ -210,6 +212,39 @@
       <button type="reset" class="secondary" data-i18n="web.btn.reset">Сбросить</button>
     </form>
     <div class="table-wrap"><table id="t-history"></table></div>
+  </section>
+
+  <section id="tab-metrics" class="tab">
+    <p class="hint" data-i18n="web.metrics.hint">Загрузка сервера: процессор, steal, память, диски, сеть.</p>
+    <div class="audit-head">
+      <b id="m-when"></b>
+      <span id="m-notes" class="muted"></span>
+    </div>
+    <form class="filters" id="metrics-filters" autocomplete="off">
+      <select id="m-range" title="Окно графиков" data-i18n-title="web.metrics.range_title">
+        <option value="1h" data-i18n="tui.range.1h">час</option>
+        <option value="24h" data-i18n="tui.range.24h">сутки</option>
+        <option value="30d" data-i18n="tui.range.30d">30 дней</option>
+      </select>
+    </form>
+    <div class="grid2">
+      <div class="card"><h3 data-i18n="web.metrics.chart_cpu">Процессор и steal</h3><div id="m-chart-cpu" class="chart" role="img"></div></div>
+      <div class="card"><h3 data-i18n="web.metrics.chart_load">Средняя нагрузка</h3><div id="m-chart-load" class="chart" role="img"></div></div>
+      <div class="card"><h3 data-i18n="web.metrics.chart_mem">Память и swap</h3><div id="m-chart-mem" class="chart" role="img"></div></div>
+      <div class="card"><h3 data-i18n="web.metrics.chart_disk">Диски</h3><div id="m-chart-disk" class="chart" role="img"></div></div>
+      <div class="card"><h3 data-i18n="web.metrics.chart_net">Сеть</h3><div id="m-chart-net" class="chart" role="img"></div></div>
+      <div class="card" id="m-card-psi"><h3 data-i18n="web.metrics.chart_psi">Давление (PSI)</h3><div id="m-chart-psi" class="chart" role="img"></div></div>
+    </div>
+    <h3 data-i18n="web.metrics.now">Сейчас</h3>
+    <div class="table-wrap"><table id="t-metrics"></table></div>
+    <div class="grid2">
+      <div><h3 data-i18n="web.metrics.parts">Разделы</h3><div class="table-wrap"><table id="t-m-parts"></table></div></div>
+      <div><h3 data-i18n="web.metrics.cores">Ядра</h3><div class="table-wrap"><table id="t-m-cores"></table></div></div>
+    </div>
+    <div class="grid2">
+      <div><h3 data-i18n="web.metrics.disks">Устройства</h3><div class="table-wrap"><table id="t-m-disks"></table></div></div>
+      <div><h3 data-i18n="web.metrics.nets">Интерфейсы</h3><div class="table-wrap"><table id="t-m-nets"></table></div></div>
+    </div>
   </section>
 
   <section id="tab-system" class="tab">

@@ -24,6 +24,7 @@
   - [开放端口](#开放端口)
   - [审计结果](#审计结果)
   - [fail2ban](#fail2ban)
+  - [服务器指标](#服务器指标)
 - [风险评分方式](#风险评分方式)
 - [可检测的异常示例](#可检测的异常示例)
 - [检测局限](#检测局限)
@@ -69,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/Zagorsky17/ServerSecurityGo/main/sc
 | 代码和二进制文件 | `/opt/serversecuritygo`、`/opt/serversecuritygo/bin/serversecuritygo` |
 | 设置 | `/opt/serversecuritygo/.env`（权限 600，不提交到 git） |
 | 白名单（可选） | `/opt/serversecuritygo/allowlist.json` |
-| 历史 | `/var/lib/serversecuritygo`（权限 700）：`state.json`、`events.jsonl` |
+| 历史与指标 | `/var/lib/serversecuritygo`（权限 700）：`state.json`、`events.jsonl`、`audit-baseline.json`、`metrics.json` |
 | 备份 | `/var/backups/serversecuritygo`（权限 700） |
 | 日志 | journald：`journalctl -u serversecuritygo` |
 | systemd 单元 | `/etc/systemd/system/serversecuritygo.service` |
@@ -114,11 +115,11 @@ serversecuritygo
 ↑↓ select  1-8/Tab panels  Enter details  / filter  r scan  y copy  L русский  ? help  q quit
 ```
 
-左侧有八个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、审计结果、历史和系统检查。如果安装了 fail2ban，会在历史之前出现第九个面板 fail2ban，其后面板的编号随之顺延。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
+左侧有九个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、审计结果、历史、系统检查和服务器指标。如果安装了 fail2ban，会在历史之前再出现一个面板 fail2ban，其后面板的编号随之顺延；若关闭了指标采集，则没有指标面板。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
 
 | 按键 | 作用 |
 |---|---|
-| `1`…`8`（有 fail2ban 时为 `9`）、`Tab` / `Shift+Tab` | 切换面板 |
+| `1`…`9`、`0`（第十个面板）、`Tab` / `Shift+Tab` | 切换面板 |
 | `↑` `↓` / `j` `k`、`PgUp` `PgDn`、`g` `G` | 选择行；在详情中滚动 |
 | `Enter` / `→`、`Esc` / `←` | 进入详情并返回 |
 | `/` | 按名称、PID、路径、用户、指标或风险等级过滤面板 |
@@ -130,6 +131,7 @@ serversecuritygo
 | `v` | 纯文本模式：以不带边框、颜色和换行的纯文本显示详情，便于用鼠标选取；按任意键返回界面 |
 | `m` | 关闭和开启鼠标；关闭时可以使用终端自身的文本选取 |
 | `+` / `z` | 将当前一侧放大到全屏（再按一次返回） |
+| `w` | “指标”面板的图表窗口：1 小时 → 24 小时 → 30 天 |
 | `L` | 界面语言：英文 / 俄文 |
 | `?`、`q` | 帮助、退出 |
 
@@ -182,6 +184,7 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 | sudo 规则 | `/etc/sudoers`（含 `@include`/`@includedir`、别名和 `Defaults`） |
 | Docker 发布的端口、容器名称和镜像 | `docker-proxy` 的参数、`<data-root>/containers/*/config.v2.json`（环境变量不会读入内存结构，也从不显示） |
 | 启动时间、内存、内核 | `/proc/stat`、`/proc/meminfo`、`/proc/sys/kernel/osrelease` |
+| 服务器指标 | `/proc/stat`、`/proc/loadavg`、`/proc/meminfo`、`/proc/pressure/*`、`/proc/diskstats`、`/proc/net/dev`、`/proc/uptime`、`/proc/vmstat`、`/proc/self/mounts` + `statfs` |
 
 系统持久化检查覆盖 `/etc/ld.so.preload`、cron（`/etc/crontab`、`/etc/cron.*`、`/var/spool/cron`）、`/etc/systemd/system` 中的 systemd 单元、`/etc/rc.local`、`/etc/init.d`、`/etc/profile.d`、`.bashrc`、`update-motd.d` 和 `authorized_keys`。
 
@@ -195,7 +198,8 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 6. **审计结果** —— SSH、账户、sudo 和内核参数的审计；见[审计结果](#审计结果)。
 7. **历史** —— 进程启动和退出，exe、cmdline 或用户的变化，风险升高和降低，新指标，新的监听端口，系统发现，安全设置的变化。
 8. **系统** —— 服务器信息、扫描限制（权限、容器）、持久化检查和危险的开放端口。
-9. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
+9. **指标** —— CPU 与 steal、负载、PSI、内存、磁盘和网络，附 1 小时、24 小时和 30 天的图表；见[服务器指标](#服务器指标)。
+10. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
 
 面板每 5 到 60 秒自动刷新一次，也可以关闭自动刷新。打开进程卡片时自动刷新会暂停。
 
@@ -257,6 +261,33 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 可以用针对 `sshd` 进程的 allowlist 规则屏蔽 `fail2ban_sshd_disabled`。
 
+### 服务器指标
+
+**指标**标签页（终端界面中的面板 `10`、`GET /api/metrics?range=1h|24h|30d`）回答“服务器为什么慢”这个问题：是你的进程、内存不足，还是主机商的原因。只有在服务开启指标采集（`SSG_METRICS_ENABLED=true`）时才会出现该板块。
+
+一个独立的轻量 goroutine 每 `SSG_METRICS_INTERVAL`（默认 5 秒）采集一次，比进程扫描更频繁，否则半分钟的尖峰就看不到了：
+
+- **处理器**按构成划分（用户、系统、I/O 等待、**steal**），包含总体和每个核心；steal 是你的虚拟机等待 CPU 时、宿主机把时间交给其他虚拟机的那部分：steal 持续偏高说明服务器慢不是你的进程导致的。在物理机上 steal 始终为 0，面板会直接说明这不是虚拟机；
+- **平均负载** 1/5/15（相对核心数）与 **PSI 压力**（`/proc/pressure/*`，任务等待 CPU、内存或磁盘的时间占比）；在 4.20 之前的内核或 `psi=0` 时该部分不存在；
+- **内存与 swap**、**分区占用**（含 inode）、**磁盘 I/O**（MB/s 与设备繁忙度）、**网卡流量**（MB/s、包/秒、丢包）、**uptime**；
+- 全部来自 `/proc` 和 `statfs`：不执行任何外部命令，也没有任何外发连接。网络文件系统（NFS、CIFS、sshfs）不做测量：对不可达的服务器调用 `statfs` 会卡住，连指标 goroutine 一起卡死。
+
+数据序列保存在内存中并逐级降采样：**1 小时**为每次采集、**24 小时**为每分钟、**30 天**（`SSG_METRICS_RETENTION`）为每 15 分钟。每个点同时保存平均值和最大值，因此短暂尖峰在聚合后不会消失（图上表现为线条上方的浅色填充）。聚合值每五分钟以及停止时写入 `/var/lib/serversecuritygo/metrics.json`，所以 24 小时和 30 天的图表能在服务重启后保留；原始采集值不会落盘。文件损坏不会影响启动：它会被移到 `.corrupt`，序列重新开始。
+
+在容器内，`/proc/stat` 和 `/proc/meminfo` 显示的是宿主机而不是容器限制——界面中有相应提示。
+
+指标**不影响**进程风险评分：服务器过载是 VPS 质量问题，不是入侵迹象。但由指标得出的发现会进入“系统”板块、事件历史和 `scan` 报告：
+
+| ID | 等级 | 条件 |
+|---|---|---|
+| `steal_high` | LOW | steal 高于 `SSG_STEAL_THRESHOLD`（10 %）并持续超过 10 分钟：主机商超售资源 |
+| `disk_almost_full` | MEDIUM | 分区或其 inode 占用超过 `SSG_DISK_FULL_THRESHOLD`（90 %）：磁盘写满后日志停止写入，排查入侵将无据可依 |
+| `load_high` | INFO | 平均负载超过每核 2 并持续超过 15 分钟 |
+| `memory_pressure` | INFO | 内存 PSI 高于 10 %，或 swap 在 10 分钟内增长超过 64 MB |
+| `oom_recent` | LOW | `/proc/vmstat` 中的 `oom_kill` 计数增加：内核内存不足并杀掉了进程 |
+
+发现只在条件持续（10–15 分钟）后出现，一旦条件消失立即撤销：单个尖峰不算告警。因此一次性的 `serversecuritygo scan` 只能看到其中的 `disk_almost_full`：其余发现需要持续采集指标的常驻服务。
+
 ## 风险评分方式
 
 每条规则产生一个**指标**：一组说明读取了什么、从哪里读取的事实，例如 `/proc/3101/exe → /dev/shm/.x/kworkerds`。单个指标本身并不断定是否恶意。它有权重、类别，如果它单独出现时很少是合法的，还会带有“强”标记。
@@ -295,7 +326,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | 最近修改过的 `authorized_keys` | SSH 密钥最近被修改 | LOW（系统） |
 
 可用于白名单的完整规则 ID 列表：
-`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`、`exposed_amplifier`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`。
+`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`、`exposed_amplifier`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`、`steal_high`、`disk_almost_full`、`load_high`、`memory_pressure`、`oom_recent`。
 
 ## 检测局限
 
@@ -344,6 +375,11 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | `SSG_AUDIT_ENABLED` | `true` | 在服务中执行安全设置审计 |
 | `SSG_AUDIT_INTERVAL` | `1h` | 审计的重复周期（最少 `1m`） |
 | `SSG_AUTH_LOG_DAYS` | `14` | 分析多少天的 fail2ban 日志（1–365） |
+| `SSG_METRICS_ENABLED` | `true` | 服务器指标采集（CPU、steal、内存、磁盘、网络） |
+| `SSG_METRICS_INTERVAL` | `5s` | 指标采集周期（最小 `1s`） |
+| `SSG_METRICS_RETENTION` | `720h` | 15 分钟聚合指标的保留时长 |
+| `SSG_STEAL_THRESHOLD` | `10` | `steal_high` 发现的 steal 阈值（%） |
+| `SSG_DISK_FULL_THRESHOLD` | `90` | `disk_almost_full` 的分区占用阈值（%） |
 
 修改 `.env` 后，执行 `systemctl restart serversecuritygo`。
 
@@ -535,6 +571,7 @@ internal/
   detect/                 规则、风险评分、解释、白名单、系统检查
   exposure/               开放端口：可达范围、危险服务、ufw、Docker 发布的端口
   audit/                  安全设置审计：sshd_config、账户、sudoers；后台运行
+  metrics/                服务器指标：CPU 与 steal、负载、PSI、内存、分区、磁盘、网络；环形缓冲与 metrics.json
   fail2ban/               fail2ban：jail 配置、日志解析（含 .gz）、当前封禁、暴力破解统计
   report/                 scan 和 audit 报告：文本、JSON、HTML、Markdown；退出码
   safefile/               安全读取攻击者可能控制的文件（不跟随符号链接、拒绝 FIFO、限制大小）
@@ -555,7 +592,7 @@ allowlist.example.json    白名单示例
 .github/workflows/        CI 和发布
 ```
 
-API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/audit`、`/api/fail2ban`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan` 和 `POST /api/audit/run`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
+API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/audit`、`/api/fail2ban`、`/api/metrics?range=1h|24h|30d`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan` 和 `POST /api/audit/run`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
 
 ## 安全
 

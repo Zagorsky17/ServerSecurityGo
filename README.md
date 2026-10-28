@@ -24,6 +24,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
   - [Open ports](#open-ports)
   - [Audit results](#audit-results)
   - [fail2ban](#fail2ban)
+  - [Server metrics](#server-metrics)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
 - [Detection limitations](#detection-limitations)
@@ -69,7 +70,7 @@ Where things live:
 | Code and binary | `/opt/serversecuritygo`, `/opt/serversecuritygo/bin/serversecuritygo` |
 | Settings | `/opt/serversecuritygo/.env` (mode 600, never committed) |
 | Allowlist (optional) | `/opt/serversecuritygo/allowlist.json` |
-| History | `/var/lib/serversecuritygo` (mode 700): `state.json`, `events.jsonl` |
+| History and metrics | `/var/lib/serversecuritygo` (mode 700): `state.json`, `events.jsonl`, `audit-baseline.json`, `metrics.json` |
 | Backups | `/var/backups/serversecuritygo` (mode 700) |
 | Logs | journald: `journalctl -u serversecuritygo` |
 | systemd unit | `/etc/systemd/system/serversecuritygo.service` |
@@ -114,11 +115,11 @@ serversecuritygo
 ↑↓ выбор  1-8/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
 ```
 
-On the left are eight panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, audit results, history and system checks. If fail2ban is installed, a ninth panel, fail2ban, appears before history, and the panels after it are renumbered. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
+On the left are nine panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, audit results, history, system checks and server metrics. If fail2ban is installed, another panel, fail2ban, appears before history, and the panels after it are renumbered; if metrics collection is off, there is no metrics panel. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
 
 | Keys | Action |
 |---|---|
-| `1`…`8` (`9` with fail2ban), `Tab` / `Shift+Tab` | switch panel |
+| `1`…`9`, `0` (the tenth panel), `Tab` / `Shift+Tab` | switch panel |
 | `↑` `↓` / `j` `k`, `PgUp` `PgDn`, `g` `G` | select a row; scroll in the details |
 | `Enter` / `→`, `Esc` / `←` | go to the details and back |
 | `/` | filter the panel by name, PID, path, user, indicator or risk level |
@@ -130,6 +131,7 @@ On the left are eight panels: summary, suspicious processes, all processes (as a
 | `v` | plain text mode: the details as plain text without frames, colors or wrapping, for selecting with the mouse; any key returns to the interface |
 | `m` | turn the mouse off and on; while it is off, the terminal's own text selection works |
 | `+` / `z` | expand the active side to full screen (press again to return) |
+| `w` | chart window on the Metrics panel: hour → day → 30 days |
 | `L` | interface language: English / Russian |
 | `?`, `q` | help, quit |
 
@@ -182,6 +184,7 @@ While no password is set, the service lets only root into the dashboard: for eve
 | sudo rules | `/etc/sudoers` with `@include`/`@includedir`, aliases and `Defaults` |
 | Published Docker ports, container name and image | `docker-proxy` arguments, `<data-root>/containers/*/config.v2.json` (environment variables are not read into memory structures and never shown) |
 | Boot time, memory, kernel | `/proc/stat`, `/proc/meminfo`, `/proc/sys/kernel/osrelease` |
+| Server metrics | `/proc/stat`, `/proc/loadavg`, `/proc/meminfo`, `/proc/pressure/*`, `/proc/diskstats`, `/proc/net/dev`, `/proc/uptime`, `/proc/vmstat`, `/proc/self/mounts` + `statfs` |
 
 System persistence checks cover `/etc/ld.so.preload`, cron (`/etc/crontab`, `/etc/cron.*`, `/var/spool/cron`), systemd units in `/etc/systemd/system`, `/etc/rc.local`, `/etc/init.d`, `/etc/profile.d`, `.bashrc`, `update-motd.d` and `authorized_keys`.
 
@@ -195,7 +198,8 @@ The **terminal UI** is described [above](#terminal-ui). **Web dashboard** (light
 6. **Audit results** — the SSH, account, sudo and kernel-parameter audit; see [Audit results](#audit-results).
 7. **History** — process start and exit, changes of exe, cmdline or user, risk increases and decreases, new indicators, new listening ports, system findings, security setting changes.
 8. **System** — server details, scanning limitations (privileges, container), persistence checks and dangerous open ports.
-9. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
+9. **Metrics** — CPU and steal, load, PSI, memory, disks and network with charts for the hour, the day and 30 days; see [Server metrics](#server-metrics).
+10. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
 
 The dashboard refreshes automatically every 5 to 60 seconds, or not at all. Auto-refresh pauses while a process card is open.
 
@@ -257,6 +261,33 @@ Brute force on a public server never stops, so the statistics are informational 
 
 `fail2ban_sshd_disabled` can be suppressed with an allowlist rule for the `sshd` process.
 
+### Server metrics
+
+The **Metrics** tab (panel `10` in the terminal UI, `GET /api/metrics?range=1h|24h|30d`) answers the question "why is the server slow": because of your processes, because memory ran out, or because of the hosting provider. The section only appears when the service collects metrics (`SSG_METRICS_ENABLED=true`).
+
+What a separate lightweight goroutine takes every `SSG_METRICS_INTERVAL` (5 s by default) — more often than processes are scanned, otherwise a half-minute spike would be invisible:
+
+- **CPU** by component (user, system, I/O wait, **steal**) in total and per core; steal is the time the hypervisor gave to other virtual machines while yours waited for the CPU: with steady steal the server is slow for reasons other than your processes. On bare metal steal is always 0, and the panel says plainly that this is not a virtual machine;
+- **load average** 1/5/15 relative to the core count and **PSI pressure** (`/proc/pressure/*`, the share of time tasks waited for CPU, memory or disk); on kernels before 4.20 or with `psi=0` the block is simply absent;
+- **memory and swap**, **partition usage** (including inodes), **disk I/O** (MB/s and device busy time), **interface traffic** (MB/s, packets/s, drops), **uptime**;
+- everything comes from `/proc` and `statfs`: not a single external command, not a single outgoing connection. Network filesystems (NFS, CIFS, sshfs) are not measured: `statfs` on an unreachable server would hang, and the metrics goroutine with it.
+
+Series are kept in memory with decreasing detail: **hour** — every reading, **day** — per minute, **30 days** (`SSG_METRICS_RETENTION`) — per 15 minutes. Each point keeps an average and a maximum, so a short spike does not disappear when averaged (on the chart it shows as a pale fill above the line). Aggregates are written to `/var/lib/serversecuritygo/metrics.json` every five minutes and on shutdown, so the day and month charts survive a service restart; raw readings are never saved to disk. A corrupt file does not prevent startup: it is moved aside to `.corrupt` and the series start over.
+
+Inside a container `/proc/stat` and `/proc/meminfo` show the host rather than the container limits — the interface says so.
+
+Metrics **do not affect** process risk: an overloaded server is a question of VPS quality, not of a break-in. But findings derived from them appear in the System section, in the event history and in the `scan` report:
+
+| ID | Level | When |
+|---|---|---|
+| `steal_high` | LOW | steal above `SSG_STEAL_THRESHOLD` (10%) for more than 10 minutes: the provider oversold its resources |
+| `disk_almost_full` | MEDIUM | a partition or its inodes are more than `SSG_DISK_FULL_THRESHOLD` (90%) full: on a full disk logs stop being written, leaving nothing to investigate a break-in with |
+| `load_high` | INFO | load average above two per core for more than 15 minutes |
+| `memory_pressure` | INFO | memory PSI above 10% or swap grew by more than 64 MB in 10 minutes |
+| `oom_recent` | LOW | the `oom_kill` counter in `/proc/vmstat` has grown: the kernel ran out of memory and killed a process |
+
+A finding appears only after the condition holds (10–15 minutes) and is cleared as soon as it is gone: a single spike is not an alarm. That is why a one-off `serversecuritygo scan` reports only `disk_almost_full` out of these: the rest need the running service that samples metrics continuously.
+
 ## How risk is scored
 
 Each rule produces an **indicator**: a set of facts saying what was read and where, for example `/proc/3101/exe → /dev/shm/.x/kworkerds`. An indicator by itself makes no claim about maliciousness. It has a weight, a category, and a "strong" flag if it is rarely legitimate on its own.
@@ -295,7 +326,7 @@ All examples are included in the demo data (`serversecuritygo demo`) and in the 
 | Recently modified `authorized_keys` | recent SSH key change | LOW (system) |
 
 Full list of rule IDs for the allowlist:
-`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`, `exposed_database`, `exposed_docker_api`, `exposed_admin_panel`, `exposed_remote_access`, `exposed_file_sharing`, `exposed_info_service`, `exposed_amplifier`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`, `fw_docker_bypass`, the `exposed_*` IDs above for dangerous public ports, `fail2ban_not_running`, `fail2ban_sshd_disabled`, `fail2ban_log_unavailable`.
+`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`, `exposed_database`, `exposed_docker_api`, `exposed_admin_panel`, `exposed_remote_access`, `exposed_file_sharing`, `exposed_info_service`, `exposed_amplifier`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`, `fw_docker_bypass`, the `exposed_*` IDs above for dangerous public ports, `fail2ban_not_running`, `fail2ban_sshd_disabled`, `fail2ban_log_unavailable`, `steal_high`, `disk_almost_full`, `load_high`, `memory_pressure`, `oom_recent`.
 
 ## Detection limitations
 
@@ -344,6 +375,11 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 | `SSG_AUDIT_ENABLED` | `true` | security settings audit in the service |
 | `SSG_AUDIT_INTERVAL` | `1h` | how often to repeat the audit (minimum `1m`) |
 | `SSG_AUTH_LOG_DAYS` | `14` | how many days of the fail2ban log to analyze (1–365) |
+| `SSG_METRICS_ENABLED` | `true` | server metrics collection (CPU, steal, memory, disks, network) |
+| `SSG_METRICS_INTERVAL` | `5s` | metrics sampling period (minimum `1s`) |
+| `SSG_METRICS_RETENTION` | `720h` | how long 15-minute metric aggregates are kept |
+| `SSG_STEAL_THRESHOLD` | `10` | steal threshold, %, for the `steal_high` finding |
+| `SSG_DISK_FULL_THRESHOLD` | `90` | partition usage threshold, %, for `disk_almost_full` |
 
 After editing `.env`, run `systemctl restart serversecuritygo`.
 
@@ -535,6 +571,7 @@ internal/
   detect/                 rules, risk scoring, explanations, allowlist, system checks
   exposure/               open ports: reachability, dangerous services, ufw, published Docker ports
   audit/                  security settings audit: sshd_config, accounts, sudoers; background runner
+  metrics/                server metrics: CPU and steal, load, PSI, memory, partitions, disks, network; ring buffers and metrics.json
   fail2ban/               fail2ban: jail configuration, log parsing (incl. .gz), current bans, brute-force statistics
   report/                 scan and audit reports: text, JSON, HTML, Markdown; exit codes
   safefile/               safe reading of files an attacker may control (no symlinks, FIFOs, size limit)
@@ -555,7 +592,7 @@ allowlist.example.json    allowlist example
 .github/workflows/        CI and releases
 ```
 
-API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/audit`, `/api/fail2ban`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` and `POST /api/audit/run` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
+API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/audit`, `/api/fail2ban`, `/api/metrics?range=1h|24h|30d`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` and `POST /api/audit/run` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
 
 ## Security
 

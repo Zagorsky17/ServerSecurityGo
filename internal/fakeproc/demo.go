@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 )
 
 // Demo возвращает набор демонстрационных сценариев: легитимные
@@ -67,13 +70,25 @@ func Demo(now time.Time) *Tree {
 			"var/lib/docker/containers/" + stoppedID + "/config.v2.json": `{"ID":"` + stoppedID + `","Name":"/old","Config":{"Image":"redis:6"},` +
 				`"State":{"Running":false},"NetworkSettings":{"Ports":{"6379/tcp":[{"HostIp":"0.0.0.0","HostPort":"6380"}]}}}`,
 		},
+		// Хостер перепродал ресурсы: steal 14 % (28 тиков из 200).
+		CPU:        CPUTicks{User: 56, Nice: 4, System: 16, Idle: 84, IOWait: 8, IRQ: 2, SoftIRQ: 2, Steal: 28},
+		SwapUsedKB: 180 * 1024,
 		// Параметры ядра для группы «Ядро» аудита: часть в порядке, часть
 		// со значениями по умолчанию, таблица conntrack маловата.
+		// Ниже — файлы системы для метрик: нагрузка, давление PSI,
+		// флаг виртуальной машины, разделы, счётчик oom_kill.
 		ProcFiles: map[string]string{
-			"sys/net/ipv4/tcp_syncookies":              "1\n",
-			"sys/net/ipv4/tcp_max_syn_backlog":         "512\n",
-			"sys/net/core/somaxconn":                   "4096\n",
-			"sys/net/ipv4/tcp_synack_retries":          "5\n",
+			"loadavg":                          "5.12 4.87 3.94 4/412 3702\n",
+			"vmstat":                           "nr_free_pages 251000\npgfault 9900000\noom_kill 2\n",
+			"cpuinfo":                          "processor\t: 0\nmodel name\t: QEMU Virtual CPU\nflags\t\t: fpu vme de pse tsc msr hypervisor\n\nprocessor\t: 1\nmodel name\t: QEMU Virtual CPU\nflags\t\t: fpu vme de pse tsc msr hypervisor\n",
+			"pressure/cpu":                     "some avg10=22.41 avg60=19.80 avg300=14.20 total=120000000\n",
+			"pressure/memory":                  "some avg10=12.80 avg60=11.40 avg300=6.10 total=40000000\nfull avg10=4.10 avg60=3.80 avg300=2.00 total=12000000\n",
+			"pressure/io":                      "some avg10=8.30 avg60=7.10 avg300=5.40 total=30000000\nfull avg10=3.10 avg60=2.80 avg300=1.90 total=9000000\n",
+			"self/mounts":                      "/dev/vda1 / ext4 rw,relatime 0 0\n/dev/vdb1 /var ext4 rw,relatime 0 0\nproc /proc proc rw 0 0\ntmpfs /run tmpfs rw 0 0\noverlay /var/lib/docker/overlay2/abc/merged overlay rw 0 0\n",
+			"sys/net/ipv4/tcp_syncookies":      "1\n",
+			"sys/net/ipv4/tcp_max_syn_backlog": "512\n",
+			"sys/net/core/somaxconn":           "4096\n",
+			"sys/net/ipv4/tcp_synack_retries":  "5\n",
 			"sys/net/ipv4/icmp_echo_ignore_broadcasts": "1\n",
 			"sys/net/netfilter/nf_conntrack_max":       "32768\n",
 		},
@@ -205,6 +220,28 @@ type Animator struct {
 // NewAnimator создаёт аниматор для записанного дерева.
 func NewAnimator(t *Tree, procRoot string) *Animator {
 	return &Animator{tree: t, procRoot: procRoot, start: time.Now()}
+}
+
+// DemoUsage — заполненность поддельных разделов: / почти в норме,
+// /var почти полон (признак disk_almost_full). Путь приходит с корнем
+// хоста впереди, поэтому сравниваются окончания.
+func DemoUsage(path string) (metrics.Usage, error) {
+	const g = uint64(1) << 30
+	switch {
+	case strings.HasSuffix(path, "/var"):
+		return metrics.Usage{Total: 50 * g, Free: 45 * g / 10, Inodes: 3_200_000, InodesFree: 900_000}, nil
+	default: // корень
+		return metrics.Usage{Total: 40 * g, Free: 88 * g / 10, Inodes: 2_600_000, InodesFree: 1_900_000}, nil
+	}
+}
+
+// StepHost перезаписывает счётчики системы (CPU, диски, сеть): их
+// читает горутина метрик, у неё свой интервал, не связанный со
+// сканированием процессов.
+func (a *Animator) StepHost() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_ = a.tree.HostCounters(a.procRoot)
 }
 
 // Step выполняется перед каждым сканированием.

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
@@ -80,6 +81,15 @@ type Options struct {
 	// Audit — аудит настроек безопасности (audit.Runner); nil — выключен
 	// (SSG_AUDIT_ENABLED=false).
 	Audit AuditRunner
+	// Metrics — метрики сервера (metrics.Collector); nil — выключены
+	// (SSG_METRICS_ENABLED=false).
+	Metrics MetricsSource
+}
+
+// MetricsSource — то, что панели нужно от метрик сервера.
+type MetricsSource interface {
+	View(rng string) metrics.View
+	Brief() *metrics.Brief
 }
 
 // AuditRunner — то, что панели нужно от аудита конфигурации.
@@ -203,6 +213,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/fail2ban", s.api(s.handleFail2ban))
 	s.mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	s.mux.HandleFunc("GET /api/system", s.api(s.handleSystem))
+	s.mux.HandleFunc("GET /api/metrics", s.api(s.handleMetrics))
 	s.mux.HandleFunc("POST /api/rescan", s.api(s.handleRescan))
 	s.mux.HandleFunc("GET /api/audit", s.api(s.handleAudit))
 	s.mux.HandleFunc("POST /api/audit/run", s.api(s.handleAuditRun))
@@ -476,6 +487,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, sess sessi
 	if a := s.opt.Audit; a != nil {
 		st.Audit = view.BuildAuditBrief(true, a.Running(), a.Report())
 	}
+	if m := s.opt.Metrics; m != nil {
+		st.Metrics = m.Brief()
+	}
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -540,6 +554,17 @@ func (s *Server) handleFail2ban(w http.ResponseWriter, r *http.Request, _ sessio
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// handleMetrics отдаёт метрики сервера: текущие значения и ряды за
+// окно (range=1h|24h|30d). Если сбор выключен — {"enabled": false}:
+// панель и терминал по этому флагу раздел не показывают.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request, _ session) {
+	if s.opt.Metrics == nil {
+		writeJSON(w, http.StatusOK, metrics.View{Series: map[string][]metrics.Point{}, Alerts: []string{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.opt.Metrics.View(r.URL.Query().Get("range")))
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, _ session) {

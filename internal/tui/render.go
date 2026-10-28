@@ -278,6 +278,8 @@ func (a *App) columnsHeader(p panelID, w int) string {
 		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
 		return fit(a.tr("tui.cols.sys"), w)
+	case pMetrics:
+		return fit(a.tr("tui.cols.metrics"), w)
 	}
 	return ""
 }
@@ -435,8 +437,36 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{a.txt(f.Title) + " ", stNormal},
 			{f.Path, stDim},
 		}
+	case pMetrics:
+		m := a.mrows[i]
+		// Проценты раскрашиваются как загрузка процессора: у остальных
+		// рядов (МБ/с, пакеты) цвет по значению смысла не имеет.
+		nowSt := stBold
+		if strings.HasSuffix(m.Name, "%") {
+			nowSt = cpuStyle(m.Now)
+		}
+		return []seg{
+			{fit(m.Name, 30) + " ", stNormal},
+			{fitLeft(fmtMetric(m.Now), 8) + "  ", nowSt},
+			{fitLeft(fmtMetric(m.Avg), 8) + "  ", stDim},
+			{fitLeft(fmtMetric(m.Max), 8), stDim},
+		}
 	}
 	return nil
+}
+
+// fmtMetric — значение ряда для таблицы: без лишних знаков, но так,
+// чтобы маленькие значения не выглядели нулём.
+func fmtMetric(v float64) string {
+	switch {
+	case v == 0:
+		return "0"
+	case v >= 100:
+		return strconv.FormatFloat(v, 'f', 0, 64)
+	case v >= 1:
+		return strconv.FormatFloat(v, 'f', 1, 64)
+	}
+	return strconv.FormatFloat(v, 'f', 2, 64)
 }
 
 func cpuStyle(v float64) Style {
@@ -622,6 +652,15 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.systemDetail(b, f)
 		return a.tr("tui.title.check") + " · " + f.Path, b.lines
+	case pMetrics:
+		a.metricsHeader(b)
+		m, ok := a.selMetric()
+		if !ok {
+			b.para(a.tr("web.metrics.empty"), stDim, 0)
+			return a.tr("tui.panel.metrics"), b.lines
+		}
+		a.metricDetail(b, m)
+		return a.tr("tui.panel.metrics") + " · " + m.Name, b.lines
 	case pHist:
 		e, ok := a.selEvent()
 		if !ok {
@@ -1290,6 +1329,26 @@ func (a *App) overview(b *lb) {
 			b.kv(a.tr("tui.k.addrs"), strings.Join(addrs, ", "))
 		}
 	}
+	if br := st.Metrics; br != nil && br.Ready {
+		// Две строки вместо графиков: подробности — на панели «Метрики».
+		b.header(a.tr("tui.h.resources"))
+		cpu, cst := a.tr("tui.resources.cpu", fmtMetric(br.CPU), fmtMetric(br.Load1), br.NumCPU), stNormal
+		if br.VM {
+			cpu += " · " + a.tr("tui.resources.steal", fmtMetric(br.Steal))
+			if br.StealOver {
+				cst = stWarn
+			}
+		}
+		b.add(seg{"  " + cpu, cst})
+		mem, mst := a.tr("tui.resources.mem", fmtMetric(br.Mem), fmtMetric(br.Swap)), stNormal
+		if br.DiskPoint != "" {
+			mem += " · " + a.tr("tui.resources.disk", br.DiskPoint, fmtMetric(br.DiskPct))
+			if br.DiskOver {
+				mst = stWarn
+			}
+		}
+		b.add(seg{"  " + mem, mst})
+	}
 	if f := a.data.Fail2ban; f != nil && f.Installed {
 		b.header("fail2ban")
 		if f.Running {
@@ -1306,6 +1365,87 @@ func (a *App) overview(b *lb) {
 	}
 	b.header(a.tr("tui.h.quickstart"))
 	b.para(a.tr("tui.quickstart"), stNormal, 2)
+}
+
+// metricsHeader — строка состояния панели «Метрики»: время замера,
+// окно и пометки о виртуальной машине, контейнере и PSI.
+func (a *App) metricsHeader(b *lb) {
+	mv := a.data.Metrics
+	if mv == nil {
+		b.para(a.tr("tui.metrics.off"), stDim, 0)
+		return
+	}
+	when := "—"
+	if mv.Now != nil {
+		when = fmtTime(mv.Now.Time)
+	}
+	b.add(seg{a.tr("tui.metrics.when", when, a.rangeName(mv.Range)), stDim})
+	switch {
+	case mv.Container:
+		b.para(a.tr("web.metrics.container"), stWarn, 0)
+	case mv.VM:
+		b.para(a.tr("web.metrics.vm"), stDim, 0)
+	default:
+		b.para(a.tr("web.metrics.bare"), stDim, 0)
+	}
+	if !mv.PSI {
+		b.para(a.tr("web.metrics.no_psi"), stDim, 0)
+	}
+}
+
+// metricDetail — график выбранного ряда и текущие значения по ядрам,
+// разделам, устройствам и интерфейсам.
+func (a *App) metricDetail(b *lb, m metricRow) {
+	b.header(a.tr("tui.h.chart"))
+	vals := make([]int, len(m.Vals))
+	for i, v := range m.Vals {
+		vals[i] = int(v * 100)
+	}
+	width := max(b.w-4, 10)
+	b.add(seg{"  " + spark(vals, width), stOK})
+	b.kv(a.tr("web.metrics.now"), fmtMetric(m.Now))
+	b.kv(a.tr("web.metrics.avg"), fmtMetric(m.Avg))
+	b.kv(a.tr("web.metrics.max"), fmtMetric(m.Max))
+	mv := a.data.Metrics
+	if mv == nil || mv.Now == nil {
+		return
+	}
+	now := mv.Now
+	if len(now.Cores) > 1 {
+		b.header(a.tr("tui.h.cores"))
+		for i, c := range now.Cores {
+			b.add(seg{"  " + fit("cpu"+strconv.Itoa(i), 8), stDim}, seg{fitLeft(fmtMetric(c.Busy), 6) + " %  ", cpuStyle(c.Busy)},
+				seg{a.tr("tui.m.steal") + " " + fmtMetric(c.Steal), stDim})
+		}
+	}
+	if len(now.Parts) > 0 {
+		b.header(a.tr("tui.h.parts"))
+		for _, p := range now.Parts {
+			st := stNormal
+			if p.Percent >= 90 {
+				st = stWarn
+			}
+			b.add(seg{"  " + fit(p.Point, 24), stNormal}, seg{fitLeft(fmtMetric(p.Percent), 6) + " %  ", st},
+				seg{fmtBytes(p.Free) + " " + a.tr("web.col.free"), stDim})
+		}
+	}
+	if len(now.Disks) > 0 {
+		b.header(a.tr("tui.h.disks"))
+		for _, d := range now.Disks {
+			b.add(seg{"  " + fit(d.Name, 12), stNormal},
+				seg{a.tr("web.col.read") + " " + fmtMetric(d.ReadMBs) + "  ", stDim},
+				seg{a.tr("web.col.write") + " " + fmtMetric(d.WriteMBs) + "  ", stDim},
+				seg{a.tr("web.col.busy") + " " + fmtMetric(d.BusyPct) + " %", stDim})
+		}
+	}
+	if len(now.Nets) > 0 {
+		b.header(a.tr("tui.h.nets"))
+		for _, n := range now.Nets {
+			b.add(seg{"  " + fit(n.Name, 12), stNormal},
+				seg{"↓ " + fmtMetric(n.RxMBs) + "  ", stDim}, seg{"↑ " + fmtMetric(n.TxMBs) + "  ", stDim},
+				seg{a.tr("web.col.pps") + " " + fmtMetric(n.RxPPS) + " / " + fmtMetric(n.TxPPS), stDim})
+		}
+	}
 }
 
 func (a *App) yesNo(v bool) string {
@@ -1343,7 +1483,7 @@ func (a *App) drawBottom() {
 	case a.focus == pProcs:
 		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"s", a.tr("tui.hint.sort")}, {"t", a.tr("tui.tree")}, {"K", a.tr("tui.hint.kernel")}, {"y/c", a.tr("tui.hint.copy")}}
 	default:
-		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {fmt.Sprintf("1-%d/Tab", len(a.visible())), a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y/c", a.tr("tui.hint.copy")}, {"v", a.tr("tui.hint.plain")}}
+		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {fmt.Sprintf("1-%d/Tab", min(len(a.visible()), 9)), a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y/c", a.tr("tui.hint.copy")}, {"v", a.tr("tui.hint.plain")}}
 	}
 	hints = append(hints, [2]string{"L", a.tr("tui.hint.lang")}, [2]string{"?", a.tr("tui.hint.help")}, [2]string{"q", a.tr("tui.hint.quit")})
 	cx := 0
@@ -1396,6 +1536,7 @@ var helpLines = [][2]string{
 	{"s", "tui.help.sort"},
 	{"t", "tui.help.tree"},
 	{"K", "tui.help.kernel"},
+	{"w", "tui.help.range"},
 	{"r", "tui.help.rescan"},
 	{"p", "tui.help.pause"},
 	{"y", "tui.help.copy"},

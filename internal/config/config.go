@@ -49,6 +49,19 @@ type Config struct {
 	// учётные записи, sudo) при запуске и затем каждые AuditInterval.
 	AuditEnabled  bool
 	AuditInterval time.Duration
+	// MetricsEnabled — служба снимает метрики сервера (CPU, steal,
+	// память, диски, сеть) отдельной горутиной.
+	MetricsEnabled bool
+	// MetricsInterval — период замера метрик (не зависит от
+	// ScanInterval: атака и всплеск нагрузки развиваются за секунды).
+	MetricsInterval time.Duration
+	// MetricsRetention — сколько хранить 15-минутные агрегаты метрик.
+	MetricsRetention time.Duration
+	// StealThreshold — порог steal, %, для признака steal_high.
+	StealThreshold float64
+	// DiskFullThreshold — порог заполнения раздела, %, для признака
+	// disk_almost_full.
+	DiskFullThreshold float64
 	// LogDays — глубина разбора журналов (SSG_AUTH_LOG_DAYS): сейчас —
 	// журнала fail2ban.
 	LogDays int
@@ -85,6 +98,12 @@ func Default() Config {
 		AuditEnabled:    true,
 		AuditInterval:   time.Hour,
 		LogDays:         14,
+
+		MetricsEnabled:    true,
+		MetricsInterval:   5 * time.Second,
+		MetricsRetention:  30 * 24 * time.Hour,
+		StealThreshold:    10,
+		DiskFullThreshold: 90,
 	}
 }
 
@@ -188,6 +207,17 @@ func FromEnv() (Config, error) {
 		c.AuditEnabled = b
 	}
 	dur("SSG_AUDIT_INTERVAL", &c.AuditInterval)
+	if v := os.Getenv("SSG_METRICS_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			errs = append(errs, i18n.Errorf("err.env_bool", "SSG_METRICS_ENABLED"))
+		}
+		c.MetricsEnabled = b
+	}
+	dur("SSG_METRICS_INTERVAL", &c.MetricsInterval)
+	dur("SSG_METRICS_RETENTION", &c.MetricsRetention)
+	flt("SSG_STEAL_THRESHOLD", &c.StealThreshold)
+	flt("SSG_DISK_FULL_THRESHOLD", &c.DiskFullThreshold)
 	if v := os.Getenv("SSG_ALLOWED_HOSTS"); v != "" {
 		for h := range strings.SplitSeq(v, ",") {
 			if h = strings.TrimSpace(h); h != "" {
@@ -232,6 +262,9 @@ func FromEnv() (Config, error) {
 	}
 	if c.AuditInterval < time.Minute {
 		errs = append(errs, i18n.Errorf("err.env_audit_interval_min"))
+	}
+	if c.MetricsInterval < time.Second {
+		errs = append(errs, i18n.Errorf("err.env_metrics_interval_min"))
 	}
 	if c.LogDays < 1 || c.LogDays > 365 {
 		errs = append(errs, i18n.Errorf("err.env_log_days"))

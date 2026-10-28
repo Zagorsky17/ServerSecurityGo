@@ -132,6 +132,17 @@ ul.plain { margin: 0; padding-left: 18px; }
 .chart .hit { fill: transparent; cursor: default; outline: none; }
 .chart g:hover .bar, .chart g:focus-within .bar { fill: var(--text); }
 .chart .base { stroke: var(--border); stroke-width: 1; }
+/* Линейные графики метрик: линия — среднее, бледная заливка — максимум
+   за точку (иначе всплеск исчезает при агрегации). Цвета рядов — из
+   токенов темы, чтобы работали обе темы. */
+.chart .line { fill: none; stroke-width: 1.5; }
+.chart .area { stroke: none; opacity: .16; }
+.chart .line.s1 { stroke: var(--accent); }
+.chart .area.s1 { fill: var(--accent); }
+.chart .line.s2 { stroke: var(--high); }
+.chart .area.s2 { fill: var(--high); }
+.chart .line.s3 { stroke: var(--low); }
+.chart .area.s3 { fill: var(--low); }
 .chart-axis { display: flex; justify-content: space-between; font-size: 12px; margin: 2px 0 10px; }
 .chart-tip { position: fixed; z-index: 25; pointer-events: none; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 12.5px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
 .chart-tip b { font-size: 14px; }
