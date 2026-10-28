@@ -11,10 +11,12 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
@@ -37,6 +39,9 @@ type Data struct {
 	// служба старой версии без /api/fail2ban. Панель есть, только когда
 	// Installed.
 	Fail2ban *model.Fail2banReport
+	// Metrics — метрики сервера за выбранное окно; nil — сбор выключен
+	// или служба старой версии без /api/metrics.
+	Metrics *metrics.View
 }
 
 // Source — откуда интерфейс берёт данные: из запущенной службы (через
@@ -47,6 +52,8 @@ type Source interface {
 	Rescan() error
 	// RunAudit — «Проверить сейчас» для настроек безопасности.
 	RunAudit() error
+	// SetRange задаёт окно графиков метрик (metrics.Range*).
+	SetRange(rng string)
 	// Describe — короткое описание источника для строки состояния.
 	Describe() i18n.Msg
 	Close()
@@ -61,7 +68,9 @@ type Source interface {
 // чтобы не мешать ей.
 type LocalSource struct {
 	sc      *scanner.Scanner
-	audit   *audit.Runner // nil — аудит выключен
+	audit   *audit.Runner      // nil — аудит выключен
+	met     *metrics.Collector // nil — метрики выключены
+	rng     atomic.Value       // окно графиков (строка)
 	cancel  context.CancelFunc
 	version string
 	demo    bool
@@ -71,7 +80,7 @@ type LocalSource struct {
 // NewLocalSource запускает сканер в фоне и ждёт первого снимка. Аудит
 // (ar может быть nil) выполняется сразу и затем только по клавише r: он
 // быстрый, а отдельная горутина интерфейсу не нужна.
-func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
+func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
 	if _, err := sc.ScanOnce(); err != nil {
 		return nil, err
 	}
@@ -79,6 +88,13 @@ func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, version string, demo 
 		ar.RunOnce()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	if mc != nil {
+		// Первый замер — сразу, чтобы в «Сводке» были значения; дальше
+		// метрики снимает своя горутина: ряды нужны чаще, чем идёт
+		// сканирование процессов.
+		_, _ = mc.Collect(time.Now())
+		go mc.Run(ctx)
+	}
 	go func() {
 		// Первый снимок уже есть: ждём интервал, затем Run сканирует сразу
 		// и дальше по таймеру.
@@ -89,7 +105,21 @@ func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, version string, demo 
 		}
 		sc.Run(ctx)
 	}()
-	return &LocalSource{sc: sc, audit: ar, cancel: cancel, version: version, demo: demo, note: note}, nil
+	l := &LocalSource{sc: sc, audit: ar, met: mc, cancel: cancel, version: version, demo: demo, note: note}
+	l.rng.Store(metrics.RangeHour)
+	return l, nil
+}
+
+// SetRange задаёт окно графиков метрик.
+func (l *LocalSource) SetRange(rng string) { l.rng.Store(metrics.ValidRange(rng)) }
+
+func (l *LocalSource) metricsView() *metrics.View {
+	if l.met == nil {
+		return nil
+	}
+	rng, _ := l.rng.Load().(string)
+	v := l.met.View(rng)
+	return &v
 }
 
 func (l *LocalSource) Fetch() (*Data, error) {
@@ -105,7 +135,11 @@ func (l *LocalSource) Fetch() (*Data, error) {
 		av = view.BuildAudit(true, l.audit.Running(), l.audit.Interval(), l.audit.Report())
 	}
 	st.Audit = av.Brief()
-	d := &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap), Exposure: view.Exposure(snap), Audit: &av}
+	if l.met != nil {
+		st.Metrics = l.met.Brief()
+	}
+	d := &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap),
+		Exposure: view.Exposure(snap), Audit: &av, Metrics: l.metricsView()}
 	if f := view.Fail2ban(snap); f.Installed {
 		d.Fail2ban = f
 	}
@@ -149,6 +183,7 @@ func (l *LocalSource) Close() { l.cancel() }
 // историю (с момента установки), а не только текущий сеанс.
 type RemoteSource struct {
 	path   string
+	rng    atomic.Value // окно графиков метрик (строка)
 	client *http.Client
 	// audit — последний полученный /api/audit: он меняется раз в час или
 	// по «Проверить сейчас», поэтому заново запрашивается, только когда
@@ -168,6 +203,7 @@ func DialSocket(path string) (*RemoteSource, error) {
 		MaxIdleConns: 2,
 	}
 	r := &RemoteSource{path: path, client: &http.Client{Transport: tr, Timeout: 10 * time.Second}}
+	r.rng.Store(metrics.RangeHour)
 	var st view.Status
 	if err := r.get("/api/status", &st); err != nil {
 		return nil, err
@@ -250,6 +286,17 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 			return nil, fmt.Errorf("/api/fail2ban: %w", err)
 		}
 	}
+	// Метрики запрашиваются, только если служба их собирает (сводка в
+	// /api/status): иначе раздела нет.
+	if d.Status.Metrics != nil {
+		rng, _ := r.rng.Load().(string)
+		var mv metrics.View
+		if err := r.get("/api/metrics?range="+url.QueryEscape(rng), &mv); err == nil && mv.Enabled {
+			d.Metrics = &mv
+		} else if err != nil && !errors.Is(err, errNotFound) {
+			return nil, fmt.Errorf("/api/metrics: %w", err)
+		}
+	}
 	if c, b := r.audit, d.Status.Audit; c != nil && c.Enabled == b.Enabled && c.Running == b.Running && c.Time.Equal(b.Time) {
 		d.Audit = c
 		return d, nil
@@ -301,6 +348,9 @@ func (r *RemoteSource) RunAudit() error {
 	}
 	return nil
 }
+
+// SetRange задаёт окно графиков метрик.
+func (r *RemoteSource) SetRange(rng string) { r.rng.Store(metrics.ValidRange(rng)) }
 
 func (r *RemoteSource) Describe() i18n.Msg { return i18n.T("tui.source_service", r.path) }
 

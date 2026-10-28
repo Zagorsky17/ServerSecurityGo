@@ -125,6 +125,7 @@ async function copyText(text) {
 
 const state = {
   csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null,
+  metrics: null, mrange: '1h',
   tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
 
@@ -505,6 +506,168 @@ function renderFail2ban() {
   ], (f.recent || []).filter((e) => has(e.ip, e.jail, e.action)), null, tr('web.f2b.no_events'));
 }
 
+// ---------------------------------------------------------------------
+// Метрики сервера
+// ---------------------------------------------------------------------
+
+// METRIC_NAMES — подписи рядов. Ключи каталога записаны литералом:
+// keys_test ищет в скриптах именно tr('...').
+const METRIC_NAMES = {
+  cpu: () => tr('tui.m.cpu'), cpu_user: () => tr('tui.m.cpu_user'), cpu_system: () => tr('tui.m.cpu_system'),
+  cpu_iowait: () => tr('tui.m.cpu_iowait'), steal: () => tr('tui.m.steal'), load1: () => tr('tui.m.load1'),
+  mem: () => tr('tui.m.mem'), swap: () => tr('tui.m.swap'), swap_used: () => tr('tui.m.swap_used'),
+  disk_read: () => tr('tui.m.disk_read'), disk_write: () => tr('tui.m.disk_write'), disk_busy: () => tr('tui.m.disk_busy'),
+  disk_full: () => tr('tui.m.disk_full'), net_rx: () => tr('tui.m.net_rx'), net_tx: () => tr('tui.m.net_tx'),
+  pps_in: () => tr('tui.m.pps_in'), pps_out: () => tr('tui.m.pps_out'),
+  psi_cpu: () => tr('tui.m.psi_cpu'), psi_mem: () => tr('tui.m.psi_mem'), psi_io: () => tr('tui.m.psi_io'),
+};
+const METRIC_ORDER = ['cpu', 'cpu_user', 'cpu_system', 'cpu_iowait', 'steal', 'load1', 'psi_cpu', 'mem', 'swap',
+  'psi_mem', 'disk_read', 'disk_write', 'disk_busy', 'disk_full', 'psi_io', 'net_rx', 'net_tx', 'pps_in', 'pps_out'];
+
+/** Значение метрики для таблицы: маленькие значения не должны выглядеть нулём. */
+function fmtMetric(v) {
+  if (!v) return '0';
+  if (v >= 100) return v.toFixed(0);
+  if (v >= 1) return v.toFixed(1);
+  return v.toFixed(2);
+}
+
+const RANGE_NAMES = { '1h': () => tr('tui.range.1h'), '24h': () => tr('tui.range.24h'), '30d': () => tr('tui.range.30d') };
+
+/** Подпись точки графика: в окне «час» — время, иначе дата и время. */
+function pointLabel(t, range) {
+  const d = new Date(t);
+  return range === '1h'
+    ? d.toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : d.toLocaleString(dateLocale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * Линейный график нескольких рядов по общей шкале. series:
+ * [{key, points}]. Для каждой точки ряда хранятся среднее и максимум:
+ * линия рисуется по среднему, бледная заливка — до максимума, иначе
+ * короткие всплески были бы не видны в окнах с агрегацией.
+ */
+function lineChart(boxId, series, title) {
+  const box = $(boxId);
+  const w = Math.max(box.clientWidth || 600, 120), ht = 96, pad = 2;
+  const sets = series.filter((s) => s.points && s.points.length);
+  if (!sets.length) {
+    box.replaceChildren(h('p', { class: 'muted' }, tr('web.metrics.empty')));
+    return;
+  }
+  const n = Math.max(...sets.map((s) => s.points.length));
+  const maxV = Math.max(1e-9, ...sets.flatMap((s) => s.points.map((p) => p.max)));
+  const x = (i) => (n === 1 ? w / 2 : (i * w) / (n - 1));
+  const y = (v) => ht - pad - (Math.max(v, 0) / maxV) * (ht - 2 * pad);
+  const root = svg('svg', { viewBox: `0 0 ${w} ${ht}`, width: w, height: ht });
+  root.setAttribute('aria-label', `${title}: ${fmtMetric(maxV)}`);
+  sets.forEach((s, si) => {
+    const pts = s.points;
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.avg).toFixed(1)}`).join('');
+    const area = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.max).toFixed(1)}`).join('')
+      + `L${x(pts.length - 1).toFixed(1)},${ht}L${x(0).toFixed(1)},${ht}Z`;
+    root.append(svg('path', { class: 'area s' + (si + 1), d: area }));
+    root.append(svg('path', { class: 'line s' + (si + 1), d: line }));
+  });
+  // Зона наведения на каждую точку: подсказка показывает все ряды.
+  const step = n > 1 ? w / (n - 1) : w;
+  for (let i = 0; i < n; i++) {
+    const hit = svg('rect', { class: 'hit', x: Math.max(0, x(i) - step / 2), y: 0, width: step, height: ht, tabindex: 0 });
+    const show = (e) => {
+      const first = sets.find((s) => s.points[i]);
+      if (!first) return;
+      const tip = $('chart-tip');
+      tip.replaceChildren(h('div', { class: 'muted' }, pointLabel(first.points[i].t, state.mrange)),
+        ...sets.filter((s) => s.points[i]).map((s) => h('div', null, h('b', null, fmtMetric(s.points[i].avg)),
+          ' ', label(METRIC_NAMES, s.key))));
+      tip.classList.remove('hidden');
+      let cx = e.clientX, cy = e.clientY;
+      if (cx === undefined) { const r = e.target.getBoundingClientRect(); cx = r.right; cy = r.top; }
+      tip.style.left = Math.min(cx + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
+      tip.style.top = Math.max(cy - tip.offsetHeight - 8, 8) + 'px';
+    };
+    hit.addEventListener('pointermove', show);
+    hit.addEventListener('focus', show);
+    hit.addEventListener('pointerleave', hideTip);
+    hit.addEventListener('blur', hideTip);
+    root.append(hit);
+  }
+  root.append(svg('line', { class: 'base', x1: 0, y1: ht - 0.5, x2: w, y2: ht - 0.5 }));
+  box.replaceChildren(root);
+}
+
+function renderMetrics() {
+  const m = state.metrics;
+  if (!m) return;
+  if (!m.enabled) { $('m-when').textContent = tr('web.metrics.disabled'); return; }
+  const now = m.now;
+  $('m-when').textContent = now
+    ? tr('web.metrics.when', fmtTime(now.time), label(RANGE_NAMES, m.range), m.stepSec, (m.series.cpu || []).length)
+    : tr('web.metrics.empty');
+  const notes = [m.container ? tr('web.metrics.container') : (m.vm ? tr('web.metrics.vm') : tr('web.metrics.bare'))];
+  if (!m.psi) notes.push(tr('web.metrics.no_psi'));
+  if (now) notes.push(tr('web.metrics.uptime', fmtDur(Math.round(now.uptimeSec / 60) * 60)));
+  $('m-notes').textContent = notes.join(' · ');
+  $('m-card-psi').classList.toggle('hidden', !m.psi);
+
+  const ser = (k) => ({ key: k, points: m.series[k] || [] });
+  lineChart('m-chart-cpu', [ser('cpu'), ser('steal'), ser('cpu_iowait')], tr('web.metrics.chart_cpu'));
+  lineChart('m-chart-load', [ser('load1')], tr('web.metrics.chart_load'));
+  lineChart('m-chart-mem', [ser('mem'), ser('swap')], tr('web.metrics.chart_mem'));
+  lineChart('m-chart-disk', [ser('disk_read'), ser('disk_write'), ser('disk_busy')], tr('web.metrics.chart_disk'));
+  lineChart('m-chart-net', [ser('net_rx'), ser('net_tx')], tr('web.metrics.chart_net'));
+  if (m.psi) lineChart('m-chart-psi', [ser('psi_cpu'), ser('psi_mem'), ser('psi_io')], tr('web.metrics.chart_psi'));
+
+  // Таблица рядов: текущее значение, среднее и максимум за окно.
+  const rows = METRIC_ORDER.filter((k) => m.series[k]).map((k) => {
+    const pts = m.series[k];
+    const sum = pts.reduce((a, p) => a + p.avg, 0);
+    return {
+      key: k, name: label(METRIC_NAMES, k), points: pts.length,
+      now: pts.length ? pts[pts.length - 1].avg : 0,
+      avg: pts.length ? sum / pts.length : 0,
+      max: pts.reduce((a, p) => Math.max(a, p.max), 0),
+    };
+  });
+  renderTable('t-metrics', [
+    { t: tr('web.col.check'), v: (r) => r.name, r: (r) => r.name },
+    { t: tr('web.metrics.now'), v: (r) => r.now, r: (r) => fmtMetric(r.now), c: 'num', desc: true },
+    { t: tr('web.metrics.avg'), v: (r) => r.avg, r: (r) => fmtMetric(r.avg), c: 'num', desc: true },
+    { t: tr('web.metrics.max'), v: (r) => r.max, r: (r) => fmtMetric(r.max), c: 'num', desc: true },
+  ], rows, null, tr('web.metrics.empty'));
+
+  renderTable('t-m-parts', [
+    { t: tr('web.col.point'), v: (p) => p.point, r: (p) => p.point, c: 'path' },
+    { t: tr('web.col.device'), v: (p) => p.device, r: (p) => p.device, c: 'path' },
+    { t: tr('web.col.used'), v: (p) => p.percent, r: (p) => h('span', { class: p.percent >= 90 ? 'st st-fail' : '' }, fmtMetric(p.percent) + ' %'), c: 'num', desc: true },
+    { t: tr('web.col.free'), v: (p) => p.free, r: (p) => fmtBytes(p.free), c: 'num' },
+    { t: tr('web.col.inodes'), v: (p) => p.inodePct, r: (p) => fmtMetric(p.inodePct) + ' %', c: 'num' },
+  ], (now && now.parts) || [], null, tr('web.metrics.empty'));
+
+  renderTable('t-m-cores', [
+    { t: tr('web.metrics.cores'), v: (c) => c.i, r: (c) => 'cpu' + c.i },
+    { t: tr('tui.m.cpu'), v: (c) => c.busy, r: (c) => fmtMetric(c.busy) + ' %', c: 'num', desc: true },
+    { t: tr('tui.m.steal'), v: (c) => c.steal, r: (c) => fmtMetric(c.steal) + ' %', c: 'num', desc: true },
+    { t: tr('tui.m.cpu_iowait'), v: (c) => c.iowait, r: (c) => fmtMetric(c.iowait) + ' %', c: 'num', desc: true },
+  ], ((now && now.cores) || []).map((c, i) => ({ ...c, i })), null, tr('web.metrics.empty'));
+
+  renderTable('t-m-disks', [
+    { t: tr('web.col.device'), v: (d) => d.name, r: (d) => d.name },
+    { t: tr('web.col.read'), v: (d) => d.readMBs, r: (d) => fmtMetric(d.readMBs), c: 'num', desc: true },
+    { t: tr('web.col.write'), v: (d) => d.writeMBs, r: (d) => fmtMetric(d.writeMBs), c: 'num', desc: true },
+    { t: tr('web.col.busy'), v: (d) => d.busyPct, r: (d) => fmtMetric(d.busyPct) + ' %', c: 'num', desc: true },
+  ], (now && now.disks) || [], null, tr('web.metrics.empty'));
+
+  renderTable('t-m-nets', [
+    { t: tr('web.col.device'), v: (x) => x.name, r: (x) => x.name },
+    { t: tr('web.col.rx'), v: (x) => x.rxMBs, r: (x) => fmtMetric(x.rxMBs), c: 'num', desc: true },
+    { t: tr('web.col.tx'), v: (x) => x.txMBs, r: (x) => fmtMetric(x.txMBs), c: 'num', desc: true },
+    { t: tr('web.col.pps'), v: (x) => x.rxPPS, r: (x) => fmtMetric(x.rxPPS) + ' / ' + fmtMetric(x.txPPS), c: 'num', desc: true },
+    { t: tr('web.col.drops'), v: (x) => x.rxDrops, r: (x) => fmtMetric(x.rxDrops), c: 'num', desc: true },
+  ], (now && now.nets) || [], null, tr('web.metrics.empty'));
+}
+
 function renderHistory() {
   const q = $('h-q').value.trim().toLowerCase();
   const type = $('h-type').value;
@@ -747,6 +910,11 @@ function renderSummary() {
       s.fail2ban.running ? s.fail2ban.banned : h('span', { class: 'st st-fail', title: tr('web.f2b.stopped') }, '⚠'),
       h('span', { class: 'muted', title: tr('web.stat.found24_title') }, ' · ' + s.fail2ban.found24h)), h('div', { class: 'lbl' }, tr('web.stat.fail2ban'))) : '',
     h('div', { class: 'stat', onclick: () => switchTab('system') }, h('div', { class: 'num' }, s.systemFindings || 0), h('div', { class: 'lbl' }, tr('web.stat.system'))),
+    // Карточка метрик — только когда служба их собирает.
+    s.metrics && s.metrics.ready ? h('div', { class: 'stat', onclick: () => switchTab('metrics') }, h('div', { class: 'num' },
+      fmtMetric(s.metrics.cpu) + ' / ' + fmtMetric(s.metrics.mem),
+      s.metrics.vm ? h('span', { class: s.metrics.stealOver ? 'st st-warn' : 'muted' }, ' · ' + fmtMetric(s.metrics.steal)) : ''),
+      h('div', { class: 'lbl' }, tr('web.stat.metrics'))) : '',
   );
   const banner = $('banner');
   if (s.warnings && s.warnings.length) {
@@ -760,6 +928,7 @@ function renderSummary() {
   $('cnt-ports').textContent = s.stats.publicPorts || 0;
   $('cnt-audit').textContent = s.audit && s.audit.ready ? s.audit.fail + s.audit.warn : '—';
   $('cnt-system').textContent = s.systemFindings || 0;
+  $('tabbtn-metrics').classList.toggle('hidden', !s.metrics);
   $('tabbtn-fail2ban').classList.toggle('hidden', !s.fail2ban);
   $('cnt-fail2ban').textContent = s.fail2ban ? s.fail2ban.banned : 0;
 }
@@ -776,6 +945,7 @@ function renderAll() {
     case 'fail2ban': renderFail2ban(); break;
     case 'history': renderHistory(); break;
     case 'system': renderSystem(); break;
+    case 'metrics': renderMetrics(); break;
   }
 }
 
@@ -788,6 +958,7 @@ async function loadTabData() {
     case 'fail2ban': state.fail2ban = await api('/api/fail2ban'); break;
     case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
     case 'system': state.system = await api('/api/system'); break;
+    case 'metrics': state.metrics = await api('/api/metrics?range=' + encodeURIComponent(state.mrange)); break;
   }
 }
 
@@ -806,6 +977,8 @@ async function refresh() {
     // fail2ban удалили (или вкладка запомнилась с другого сервера): раздела
     // больше нет — уходим на вкладку по умолчанию.
     if (state.tab === 'fail2ban' && !state.status.fail2ban) showTab('suspicious');
+    // Сбор метрик выключили — вкладки больше нет.
+    if (state.tab === 'metrics' && !state.status.metrics) showTab('suspicious');
     if (state.tab === 'suspicious' || state.tab === 'all') {
       state.processes = (await api('/api/processes')).processes || [];
     }
@@ -857,6 +1030,7 @@ async function init() {
   });
 
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+  $('m-range').addEventListener('change', (e) => { state.mrange = e.target.value; switchTab('metrics'); });
   for (const id of ['proc-filters', 'net-filters', 'ports-filters', 'audit-filters', 'f2b-filters', 'hist-filters']) {
     const form = $(id);
     form.addEventListener('input', () => { state.showAll = {}; renderAll(); });
@@ -865,7 +1039,13 @@ async function init() {
   }
   // Графики строятся по ширине карточки — перестраиваем при её изменении.
   let resizeT = null;
-  window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (state.tab === 'fail2ban') renderFail2ban(); }, 150); });
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeT);
+    resizeT = setTimeout(() => {
+      if (state.tab === 'fail2ban') renderFail2ban();
+      if (state.tab === 'metrics') renderMetrics();
+    }, 150);
+  });
   $('tree-q').addEventListener('input', renderTree);
   $('tree-kernel').addEventListener('change', renderTree);
   $('tree-expand').addEventListener('click', () => { state.collapsed.clear(); renderTree(); });

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
@@ -198,6 +199,9 @@ type Status struct {
 	// Fail2ban — есть, только если fail2ban установлен: по этому полю
 	// интерфейсы показывают или скрывают раздел.
 	Fail2ban *Fail2banBrief `json:"fail2ban,omitempty"`
+	// Metrics — сводка метрик сервера; nil — сбор выключен
+	// (SSG_METRICS_ENABLED=false) или служба старой версии.
+	Metrics *metrics.Brief `json:"metrics,omitempty"`
 }
 
 // Fail2banBrief — счётчики fail2ban для заголовка интерфейса.

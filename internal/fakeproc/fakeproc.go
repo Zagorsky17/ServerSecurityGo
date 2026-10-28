@@ -64,13 +64,19 @@ type Tree struct {
 	Procs      []*Proc
 	Socks      []Sock
 	HostFiles  map[string]string // путь относительно корня хоста → содержимое
-	// ProcFiles — путь относительно корня /proc → содержимое (параметры
-	// ядра из /proc/sys для аудита).
+	// ProcFiles — путь относительно корня /proc → содержимое: параметры
+	// ядра из /proc/sys для аудита, /proc/loadavg и другие файлы
+	// системы для метрик.
 	ProcFiles map[string]string
 	// HostModes — права файлов хоста (по умолчанию 0644): аудит проверяет
 	// права /etc/shadow, sudoers, ключей SSH.
 	HostModes map[string]os.FileMode
 	Kernel    string
+	// CPU — скорость счётчиков /proc/stat (тиков в секунду на все ядра):
+	// задаёт загрузку и steal в демо.
+	CPU CPUTicks
+	// SwapUsedKB — занятый swap в демо.
+	SwapUsedKB uint64
 	// Addrs — локальные адреса сервера: IPv4 пишутся в /proc/net/fib_trie,
 	// IPv6 — в /proc/net/if_inet6 (интерфейс lo для ::1, иначе eth0).
 	Addrs []string
@@ -93,9 +99,12 @@ func (t *Tree) Write(dir string) (procRoot, hostRoot string, err error) {
 		}
 		err = os.WriteFile(path, []byte(content), 0o644)
 	}
-	w(filepath.Join(procRoot, "stat"), fmt.Sprintf("cpu  1 2 3 4\nbtime %d\n", t.BootTime.Unix()))
-	w(filepath.Join(procRoot, "meminfo"), fmt.Sprintf("MemTotal:       %d kB\nMemFree:        1000 kB\n", t.MemTotalKB))
+	w(filepath.Join(procRoot, "stat"), t.statFile())
+	w(filepath.Join(procRoot, "meminfo"), t.meminfoFile())
 	w(filepath.Join(procRoot, "sys", "kernel", "osrelease"), t.Kernel+"\n")
+	w(filepath.Join(procRoot, "uptime"), fmt.Sprintf("%.2f %.2f\n", time.Since(t.BootTime).Seconds(), time.Since(t.BootTime).Seconds()*2))
+	w(filepath.Join(procRoot, "diskstats"), t.diskstatsFile())
+	w(filepath.Join(procRoot, "net", "dev"), t.netDevFile())
 	for path, content := range t.ProcFiles {
 		w(filepath.Join(procRoot, path), content)
 	}
@@ -123,6 +132,81 @@ func (t *Tree) Write(dir string) (procRoot, hostRoot string, err error) {
 		return "", "", err
 	}
 	return procRoot, hostRoot, nil
+}
+
+// HostCounters — счётчики системы (CPU, диски, сеть) на текущий момент:
+// значение каждого счётчика = скорость × время с загрузки. Метрики
+// считают скорости по разнице двух чтений, поэтому в демо эти файлы
+// нужно перезаписывать перед каждым замером.
+func (t *Tree) HostCounters(procRoot string) error {
+	up := time.Since(t.BootTime).Seconds()
+	for _, f := range []struct{ path, data string }{
+		{filepath.Join(procRoot, "stat"), t.statFile()},
+		{filepath.Join(procRoot, "diskstats"), t.diskstatsFile()},
+		{filepath.Join(procRoot, "net", "dev"), t.netDevFile()},
+		{filepath.Join(procRoot, "uptime"), fmt.Sprintf("%.2f %.2f\n", up, up*2)},
+	} {
+		if err := os.WriteFile(f.path, []byte(f.data), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CPUTicks — сколько тиков в секунду набегает каждой составляющей
+// времени процессора (на все ядра). Так демо показывает постоянную
+// загрузку и, если задан Steal, перегруженного хостера.
+type CPUTicks struct {
+	User, Nice, System, Idle, IOWait, IRQ, SoftIRQ, Steal float64
+}
+
+// statFile — /proc/stat: итог и два ядра. База — время с загрузки,
+// поэтому и первый замер (средний с загрузки) даёт те же проценты.
+func (t *Tree) statFile() string {
+	c := t.CPU
+	if c == (CPUTicks{}) {
+		c = CPUTicks{User: 20, System: 10, Idle: 170}
+	}
+	secs := time.Since(t.BootTime).Seconds()
+	var b strings.Builder
+	line := func(name string, share float64) {
+		v := func(rate float64) uint64 { return uint64(rate * share * secs) }
+		fmt.Fprintf(&b, "%s %d %d %d %d %d %d %d %d 0 0\n", name, v(c.User), v(c.Nice), v(c.System), v(c.Idle),
+			v(c.IOWait), v(c.IRQ), v(c.SoftIRQ), v(c.Steal))
+	}
+	line("cpu ", 1)
+	line("cpu0", 0.5)
+	line("cpu1", 0.5)
+	fmt.Fprintf(&b, "intr 0\nctxt %d\nbtime %d\nprocesses %d\nprocs_running 2\nprocs_blocked 0\n",
+		uint64(secs*900), t.BootTime.Unix(), uint64(secs*3))
+	return b.String()
+}
+
+func (t *Tree) meminfoFile() string {
+	avail := t.MemTotalKB * 39 / 100
+	return fmt.Sprintf("MemTotal:       %d kB\nMemFree:        %d kB\nMemAvailable:   %d kB\nBuffers:        120000 kB\nCached:         %d kB\nSwapTotal:      1048576 kB\nSwapFree:       %d kB\n",
+		t.MemTotalKB, t.MemTotalKB/10, avail, t.MemTotalKB/5, 1048576-t.SwapUsedKB)
+}
+
+// diskstatsFile — одно устройство vda и его раздел vda1 (раздел
+// метрики пропускают).
+func (t *Tree) diskstatsFile() string {
+	secs := time.Since(t.BootTime).Seconds()
+	rd, wr, ticks := uint64(200*secs), uint64(4000*secs), uint64(120*secs)
+	line := func(name string, minor int) string {
+		return fmt.Sprintf(" 253 %d %s 1000 0 %d 500 2000 0 %d 1500 0 %d 2000\n", minor, name, rd, wr, ticks)
+	}
+	return line("vda", 0) + line("vda1", 1)
+}
+
+func (t *Tree) netDevFile() string {
+	secs := time.Since(t.BootTime).Seconds()
+	rx, rxp := uint64(300000*secs), uint64(400*secs)
+	tx, txp := uint64(80000*secs), uint64(200*secs)
+	return "Inter-|   Receive                                                |  Transmit\n" +
+		" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n" +
+		fmt.Sprintf("    lo: %d %d 0 0 0 0 0 0 %d %d 0 0 0 0 0 0\n", rx/10, rxp/10, rx/10, rxp/10) +
+		fmt.Sprintf("  eth0: %d %d 0 3 0 0 0 0 %d %d 0 0 0 0 0 0\n", rx, rxp, tx, txp)
 }
 
 // writeAddrs пишет локальные адреса в формате ядра: fib_trie (лист

@@ -45,6 +45,17 @@ type Options struct {
 	// LogDays — за сколько дней разбирать журнал fail2ban
 	// (SSG_AUTH_LOG_DAYS); 0 — fail2ban.DefaultDays.
 	LogDays int
+	// Metrics — метрики сервера: их признаки (steal_high,
+	// disk_almost_full) попадают в системные находки, а оттуда в
+	// историю, «Систему» и scan. nil — сбор метрик выключен.
+	Metrics MetricsSource
+}
+
+// MetricsSource — то, что сканеру нужно от метрик: сборщик работает
+// своей горутиной с другим интервалом, сканирование только забирает
+// готовые признаки.
+type MetricsSource interface {
+	Findings() []model.SystemFinding
 }
 
 // Scanner — периодический сканер процессов.
@@ -69,6 +80,10 @@ func New(opt Options) *Scanner {
 	opt.Detect.ScanInterval = opt.Interval
 	return &Scanner{opt: opt, rescan: make(chan struct{}, 1), f2b: fail2ban.NewCollector()}
 }
+
+// SetMetrics подключает метрики после создания сканера (их сборщик
+// создаётся отдельно, со своим интервалом и каталогом данных).
+func (s *Scanner) SetMetrics(m MetricsSource) { s.opt.Metrics = m }
 
 // Snapshot возвращает последний снимок (nil до первого сканирования).
 func (s *Scanner) Snapshot() *model.Snapshot {
@@ -138,6 +153,9 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	snap.Fail2ban, f2bFindings = s.f2b.Build(fail2ban.Input{HostRoot: s.opt.FS.HostRoot, Procs: snap.Processes, Exposure: snap.Exposure,
 		Now: start, Days: s.opt.LogDays, Allowed: s.opt.Detect.Allowed})
 	snap.System = append(snap.System, f2bFindings...)
+	if m := s.opt.Metrics; m != nil {
+		snap.System = append(snap.System, m.Findings()...)
+	}
 	events := hist.Record(start, snap.Processes, snap.System)
 
 	snap.Stats = stats(snap)

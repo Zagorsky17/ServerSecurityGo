@@ -19,23 +19,24 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/web"
 )
 
 // demoScanner создаёт сканер над демонстрационным деревом.
 func demoScanner(t *testing.T) *scanner.Scanner {
-	sc, _ := demoEnv(t)
+	sc, _, _ := demoEnv(t)
 	return sc
 }
 
 // demoEnv — сканер и аудит над одним демо-деревом.
-func demoEnv(t *testing.T) (*scanner.Scanner, *audit.Runner) {
+func demoEnv(t *testing.T) (*scanner.Scanner, *audit.Runner, *metrics.Collector) {
 	t.Helper()
 	return demoEnvTree(t, fakeproc.Demo(time.Now()))
 }
 
-func demoEnvTree(t *testing.T, tree *fakeproc.Tree) (*scanner.Scanner, *audit.Runner) {
+func demoEnvTree(t *testing.T, tree *fakeproc.Tree) (*scanner.Scanner, *audit.Runner, *metrics.Collector) {
 	t.Helper()
 	procRoot, hostRoot, err := tree.Write(t.TempDir())
 	if err != nil {
@@ -43,10 +44,12 @@ func demoEnvTree(t *testing.T, tree *fakeproc.Tree) (*scanner.Scanner, *audit.Ru
 	}
 	hist, _ := history.Open(history.Options{})
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mc := metrics.New(metrics.Options{ProcRoot: procRoot, HostRoot: hostRoot, Interval: time.Hour,
+		DiskUsage: fakeproc.DemoUsage, Logger: quiet})
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist,
-		Interval: time.Hour, Logger: quiet, Hostname: "demo-host", Demo: true})
+		Interval: time.Hour, Logger: quiet, Hostname: "demo-host", Demo: true, Metrics: mc})
 	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, RootUID: os.Getuid(), Interval: time.Hour, Record: hist.RecordAudit, Logger: quiet})
-	return sc, ar
+	return sc, ar, mc
 }
 
 // newTestApp — интерфейс на демо-данных без настоящего терминала.
@@ -56,8 +59,8 @@ func newTestApp(t *testing.T, w, h int) (*App, *bytes.Buffer) {
 
 func newTestAppLang(t *testing.T, w, h int, lang i18n.Lang) (*App, *bytes.Buffer) {
 	t.Helper()
-	sc, ar := demoEnv(t)
-	src, err := NewLocalSource(sc, ar, "test", true, i18n.T("tui.source_demo"))
+	sc, ar, mc := demoEnv(t)
+	src, err := NewLocalSource(sc, ar, mc, "test", true, i18n.T("tui.source_demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,8 +769,8 @@ func TestNoFail2banPanel(t *testing.T) {
 		}
 	}
 	tree.Procs = procs
-	sc, ar := demoEnvTree(t, tree)
-	src, err := NewLocalSource(sc, ar, "test", true, i18n.T("tui.source_demo"))
+	sc, ar, mc := demoEnvTree(t, tree)
+	src, err := NewLocalSource(sc, ar, mc, "test", true, i18n.T("tui.source_demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +779,8 @@ func TestNoFail2banPanel(t *testing.T) {
 	a.w, a.h = 160, 45
 	a.load()
 	s := screen(a)
-	if strings.Contains(s, "fail2ban") || !strings.Contains(s, "[7] История") || !strings.Contains(s, "[8] Система") || !strings.Contains(s, "1-8/Tab") {
+	// Без fail2ban панелей девять: последняя — «Метрики».
+	if strings.Contains(s, "fail2ban") || !strings.Contains(s, "[7] История") || !strings.Contains(s, "[8] Система") || !strings.Contains(s, "1-9/Tab") {
 		t.Errorf("панели без fail2ban:\n%s", s)
 	}
 	press(a, r('8'))
@@ -784,14 +788,14 @@ func TestNoFail2banPanel(t *testing.T) {
 		t.Errorf("8 → %d, нужна «Система»", a.focus)
 	}
 	press(a, r('9'))
-	if a.focus != pSys {
-		t.Errorf("9 сменила панель: %d", a.focus)
+	if a.focus != pMetrics {
+		t.Errorf("9 → %d, нужны «Метрики»", a.focus)
 	}
 	press(a, Key{Kind: KeyTab})
 	if a.focus != pStatus {
 		t.Errorf("Tab после последней панели: %d", a.focus)
 	}
-	if a.minHeight() != 16 {
+	if a.minHeight() != 18 {
 		t.Errorf("минимальная высота без fail2ban: %d", a.minHeight())
 	}
 }
@@ -994,5 +998,75 @@ func TestLegacyMouse(t *testing.T) {
 	}
 	if a.focus != pProcs {
 		t.Errorf("щелчок X10 не выбрал панель: %d", a.focus)
+	}
+}
+
+// TestMetricsPanel: панель «Метрики» показывает ряды, подробности —
+// график и текущие значения, клавиша w меняет окно.
+func TestMetricsPanel(t *testing.T) {
+	sc, ar, mc := demoEnv(t)
+	// Два замера: по разнице счётчиков считаются проценты и скорости.
+	now := time.Now()
+	if _, err := mc.Collect(now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mc.Collect(now.Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	src, err := NewLocalSource(sc, ar, mc, "test", true, i18n.T("tui.source_demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(src.Close)
+	a := New(Options{Source: src, Out: &bytes.Buffer{}, Lang: i18n.RU})
+	a.w, a.h = 170, 50
+	a.load()
+	if !a.hasMetrics() {
+		t.Fatal("панель метрик не появилась")
+	}
+	press(a, r('0')) // десятая панель
+	if a.focus != pMetrics {
+		t.Fatalf("0 → %d, нужны «Метрики»", a.focus)
+	}
+	s := screen(a)
+	for _, want := range []string{"[10] Метрики", "Процессор, %", "Steal", "Заполненность раздела"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("на экране нет %q:\n%s", want, s)
+		}
+	}
+	// В «Сводке» — строка «Ресурсы» с текущими значениями.
+	press(a, r('1'))
+	if sv := screen(a); !strings.Contains(sv, "Ресурсы") || !strings.Contains(sv, "Steal") {
+		t.Errorf("в сводке нет строки ресурсов:\n%s", sv)
+	}
+	press(a, r('0'))
+	// Подробности выбранного ряда: график и разделы.
+	press(a, Key{Kind: KeyEnter})
+	s = screen(a)
+	for _, want := range []string{"График за окно", "Разделы", "/var"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("в подробностях нет %q:\n%s", want, s)
+		}
+	}
+	// w переключает окно: час → сутки.
+	press(a, r('w'))
+	if a.mrange != "24h" {
+		t.Errorf("окно после w: %q", a.mrange)
+	}
+	if !strings.Contains(screen(a), "сутки") {
+		t.Errorf("окно не показано:\n%s", screen(a))
+	}
+	// Признак заполненного раздела виден в «Системе».
+	if !strings.Contains(screen(a), "Метрики") {
+		t.Error("панель метрик исчезла")
+	}
+	found := false
+	for _, f := range a.data.System {
+		if f.ID == "disk_almost_full" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("признак disk_almost_full из метрик не попал в системные находки")
 	}
 }

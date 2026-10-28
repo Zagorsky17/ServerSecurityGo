@@ -27,9 +27,32 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
+
+// rangeName — подпись окна графиков метрик.
+func (a *App) rangeName(rng string) string {
+	switch rng {
+	case metrics.RangeDay:
+		return a.tr("tui.range.24h")
+	case metrics.RangeMonth:
+		return a.tr("tui.range.30d")
+	}
+	return a.tr("tui.range.1h")
+}
+
+// nextRange — следующее окно графиков метрик.
+func nextRange(cur string) string {
+	switch cur {
+	case metrics.RangeHour:
+		return metrics.RangeDay
+	case metrics.RangeDay:
+		return metrics.RangeMonth
+	}
+	return metrics.RangeHour
+}
 
 type panelID int
 
@@ -43,11 +66,13 @@ const (
 	pF2B // только при установленном fail2ban
 	pHist
 	pSys
+	pMetrics // только при включённом сборе метрик
 	nPanels
 )
 
 // panelKeys — ключи каталога для названий панелей.
-var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports", "tui.panel.audit", "tui.panel.f2b", "tui.panel.hist", "tui.panel.sys"}
+var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports",
+	"tui.panel.audit", "tui.panel.f2b", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics"}
 
 // sortKeys — режимы сортировки списка процессов (ключи каталога).
 var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
@@ -98,6 +123,8 @@ type App struct {
 	bans       []model.Fail2banBan
 	events     []model.Event
 	system     []model.SystemFinding
+	mrows      []metricRow
+	mrange     string // окно графиков метрик (metrics.Range*)
 	byKey      map[string]view.Summary
 
 	sortMode   int
@@ -142,7 +169,8 @@ func New(opt Options) *App {
 	if _, ok := i18n.Parse(string(opt.Lang)); !ok {
 		opt.Lang = i18n.Default()
 	}
-	return &App{src: opt.Source, out: opt.Out, refresh: opt.Refresh, lang: opt.Lang, focus: pSusp, expanded: pSusp, byKey: map[string]view.Summary{}}
+	return &App{src: opt.Source, out: opt.Out, refresh: opt.Refresh, lang: opt.Lang, focus: pSusp, expanded: pSusp,
+		mrange: metrics.RangeHour, byKey: map[string]view.Summary{}}
 }
 
 // tr — строка каталога на языке интерфейса.
@@ -279,9 +307,30 @@ func (a *App) visible() []panelID {
 		if p == pF2B && !a.hasF2B() {
 			continue
 		}
+		if p == pMetrics && !a.hasMetrics() {
+			continue
+		}
 		out = append(out, p)
 	}
 	return out
+}
+
+// hasMetrics — служба собирает метрики (данные о них пришли).
+func (a *App) hasMetrics() bool {
+	return a.data != nil && a.data.Metrics != nil && a.data.Metrics.Enabled
+}
+
+// metricRow — строка панели «Метрики»: ряд, его текущее значение,
+// среднее и максимум за окно.
+type metricRow struct {
+	Key   string  `json:"key"`
+	Name  string  `json:"name"`
+	Now   float64 `json:"now"`
+	Avg   float64 `json:"avg"`
+	Max   float64 `json:"max"`
+	Count int     `json:"points"`
+	// Vals — значения точек окна для графика.
+	Vals []float64 `json:"-"`
 }
 
 // hasF2B — fail2ban установлен (данные о нём пришли).
@@ -406,6 +455,7 @@ func (a *App) rebuild() {
 			a.system = append(a.system, f)
 		}
 	}
+	a.buildMetrics()
 	for p := pSusp; p < nPanels; p++ {
 		a.clamp(p)
 	}
@@ -475,6 +525,60 @@ func (a *App) buildTree() {
 	}
 }
 
+// metricOrder — порядок рядов на панели: сначала процессор и нагрузка,
+// потом память, диски и сеть. Ряды, которых в ответе нет (PSI выключен,
+// нет swap), пропускаются.
+var metricOrder = []string{metrics.KeyCPU, metrics.KeyCPUUser, metrics.KeyCPUSystem, metrics.KeyCPUIOWait, metrics.KeySteal,
+	metrics.KeyLoad1, metrics.KeyPSICPU, metrics.KeyMem, metrics.KeySwap, metrics.KeyPSIMem,
+	metrics.KeyDiskRead, metrics.KeyDiskWrite, metrics.KeyDiskBusy, metrics.KeyDiskFull, metrics.KeyPSIIO,
+	metrics.KeyNetRx, metrics.KeyNetTx, metrics.KeyPPSIn, metrics.KeyPPSOut}
+
+// metricNames — ключи каталога с названиями рядов. Литералы, а не
+// склейка «tui.m.» + имя ряда: keys_test сверяет ключи из кода с
+// каталогом и склейку не увидит.
+var metricNames = map[string]string{
+	metrics.KeyCPU: "tui.m.cpu", metrics.KeyCPUUser: "tui.m.cpu_user", metrics.KeyCPUSystem: "tui.m.cpu_system",
+	metrics.KeyCPUIOWait: "tui.m.cpu_iowait", metrics.KeySteal: "tui.m.steal", metrics.KeyLoad1: "tui.m.load1",
+	metrics.KeyMem: "tui.m.mem", metrics.KeySwap: "tui.m.swap", metrics.KeySwapUsed: "tui.m.swap_used",
+	metrics.KeyDiskRead: "tui.m.disk_read", metrics.KeyDiskWrite: "tui.m.disk_write", metrics.KeyDiskBusy: "tui.m.disk_busy",
+	metrics.KeyDiskFull: "tui.m.disk_full", metrics.KeyNetRx: "tui.m.net_rx", metrics.KeyNetTx: "tui.m.net_tx",
+	metrics.KeyPPSIn: "tui.m.pps_in", metrics.KeyPPSOut: "tui.m.pps_out",
+	metrics.KeyPSICPU: "tui.m.psi_cpu", metrics.KeyPSIMem: "tui.m.psi_mem", metrics.KeyPSIIO: "tui.m.psi_io",
+}
+
+// buildMetrics собирает строки панели «Метрики» с учётом фильтра.
+func (a *App) buildMetrics() {
+	a.mrows = a.mrows[:0]
+	mv := a.data.Metrics
+	if mv == nil {
+		return
+	}
+	for _, k := range metricOrder {
+		pts, ok := mv.Series[k]
+		if !ok {
+			continue
+		}
+		name := a.tr(metricNames[k])
+		if !matches(a.lists[pMetrics].filter, name, k) {
+			continue
+		}
+		r := metricRow{Key: k, Name: name, Count: len(pts)}
+		sum := 0.0
+		for i, p := range pts {
+			sum += p.Avg
+			r.Max = max(r.Max, p.Max)
+			r.Vals = append(r.Vals, p.Avg)
+			if i == len(pts)-1 {
+				r.Now = p.Avg
+			}
+		}
+		if len(pts) > 0 {
+			r.Avg = sum / float64(len(pts))
+		}
+		a.mrows = append(a.mrows, r)
+	}
+}
+
 func (a *App) count(p panelID) int {
 	switch p {
 	case pSusp:
@@ -493,6 +597,8 @@ func (a *App) count(p panelID) int {
 		return len(a.events)
 	case pSys:
 		return len(a.system)
+	case pMetrics:
+		return len(a.mrows)
 	}
 	return 0
 }
@@ -609,6 +715,11 @@ func (a *App) runeKey(r rune, list panelID) bool {
 		if vis := a.visible(); int(r-'1') < len(vis) {
 			a.focusPanel(vis[r-'1'])
 		}
+	case '0':
+		// Десятая панель: цифры кончились, 0 — её номер.
+		if vis := a.visible(); len(vis) >= 10 {
+			a.focusPanel(vis[9])
+		}
 	case '/':
 		if a.focus >= pSusp {
 			a.inMain = false
@@ -663,6 +774,14 @@ func (a *App) runeKey(r rune, list panelID) bool {
 			a.flash(a.tr("tui.flash.paused"), false)
 		} else {
 			a.flash(a.tr("tui.flash.resumed"), false)
+			a.load()
+		}
+	case 'w':
+		// Окно графиков метрик: час → сутки → 30 дней.
+		if a.hasMetrics() {
+			a.mrange = nextRange(a.mrange)
+			a.src.SetRange(a.mrange)
+			a.flash(a.tr("tui.flash.range", a.rangeName(a.mrange)), false)
 			a.load()
 		}
 	case 'L':
@@ -816,6 +935,12 @@ func (a *App) copyJSON() {
 		if f, ok := a.selSystem(); ok {
 			v = f
 		}
+	case pMetrics:
+		if m, ok := a.selMetric(); ok {
+			v = m
+		} else if a.data.Metrics != nil {
+			v = a.data.Metrics.Now
+		}
 	default:
 		if a.detail != nil {
 			v = a.detail
@@ -882,6 +1007,13 @@ func (a *App) selEvent() (model.Event, bool) {
 		return a.events[c], true
 	}
 	return model.Event{}, false
+}
+
+func (a *App) selMetric() (metricRow, bool) {
+	if c := a.lists[pMetrics].cursor; c < len(a.mrows) {
+		return a.mrows[c], true
+	}
+	return metricRow{}, false
 }
 
 func (a *App) selSystem() (model.SystemFinding, bool) {

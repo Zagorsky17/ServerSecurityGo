@@ -42,6 +42,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/report"
@@ -186,7 +187,11 @@ func cmdServe(args []string) error {
 	}
 	pfs := procfs.New(cfg.ProcRoot, cfg.HostRoot)
 	pfs.MaxFiles = cfg.MaxFiles
+	mc := metricsCollector(cfg, cfg.DataDir, log)
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log, LogDays: cfg.LogDays})
+	if mc != nil {
+		sc.SetMetrics(mc) // признаки метрик попадают в системные находки
+	}
 
 	// Без пароля панель только для LocalUIDs: владельца подключения служба
 	// определяет по /proc/net/tcp (см. web.Options.CheckPeer).
@@ -198,6 +203,9 @@ func cmdServe(args []string) error {
 	if ar != nil {
 		opts.Audit = ar // интерфейс: nil-указатель сюда не попадает
 	}
+	if mc != nil {
+		opts.Metrics = mc
+	}
 	srv := web.New(opts)
 	var connCtx func(context.Context, net.Conn) context.Context
 	if noAuth {
@@ -205,10 +213,14 @@ func cmdServe(args []string) error {
 	}
 	log.Info(i18n.S("log.start"), "version", version, "listen", cfg.ListenAddr, "interval", cfg.ScanInterval.String(), "data", cfg.DataDir,
 		"auth", !noAuth, "local_uids", fmt.Sprint(cfg.LocalUIDs), "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow),
-		"audit", cfg.AuditEnabled, "audit_interval", cfg.AuditInterval.String())
+		"audit", cfg.AuditEnabled, "audit_interval", cfg.AuditInterval.String(),
+		"metrics", cfg.MetricsEnabled, "metrics_interval", cfg.MetricsInterval.String())
 	var bg []func(context.Context)
 	if ar != nil {
 		bg = append(bg, ar.Run)
+	}
+	if mc != nil {
+		bg = append(bg, mc.Run)
 	}
 	return run(sc, srv, srv.LocalHandler(), connCtx, cfg, log, func() { _ = hist.Flush(time.Now()) }, bg...)
 }
@@ -221,6 +233,18 @@ func auditRunner(cfg config.Config, hist *history.Store, log *slog.Logger) *audi
 	}
 	return audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, StateDir: cfg.DataDir,
 		Record: hist.RecordAudit, Logger: log})
+}
+
+// metricsCollector создаёт сборщик метрик сервера (nil, если он
+// выключен через SSG_METRICS_ENABLED=false). stateDir пустой — агрегаты
+// только в памяти (терминальный интерфейс без службы, демо).
+func metricsCollector(cfg config.Config, stateDir string, log *slog.Logger) *metrics.Collector {
+	if !cfg.MetricsEnabled {
+		return nil
+	}
+	return metrics.New(metrics.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, Interval: cfg.MetricsInterval,
+		Retention: cfg.MetricsRetention, StateDir: stateDir, StealThreshold: cfg.StealThreshold,
+		DiskFullThreshold: cfg.DiskFullThreshold, Logger: log})
 }
 
 // run запускает сканер и HTTP-сервер и корректно останавливает их по
@@ -425,14 +449,18 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	pfs := procfs.New(cfg.ProcRoot, cfg.HostRoot)
 	pfs.MaxFiles = cfg.MaxFiles
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mc := metricsCollector(cfg, "", quiet)
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet, LogDays: cfg.LogDays})
+	if mc != nil {
+		sc.SetMetrics(mc)
+	}
 	// Аудит без каталога данных: базовая линия только на время сеанса,
 	// файлы службы не трогаются.
 	var ar *audit.Runner
 	if cfg.AuditEnabled {
 		ar = audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Logger: quiet})
 	}
-	return tui.NewLocalSource(sc, ar, version, false, note)
+	return tui.NewLocalSource(sc, ar, mc, version, false, note)
 }
 
 // cmdScan — разовое сканирование процессов с отчётом в консоль или файл.
@@ -481,6 +509,14 @@ func runScan(args []string) (int, error) {
 	pfs := procfs.New(cfg.ProcRoot, cfg.HostRoot)
 	pfs.MaxFiles = cfg.MaxFiles
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays})
+	// Метрики разового запуска: один замер без истории. Признаки с
+	// удержанием (steal_high, load_high) так не сработают — для них нужна
+	// работающая служба; disk_almost_full виден сразу.
+	if mc := metricsCollector(cfg, "", newLogger("error")); mc != nil {
+		if _, err := mc.Collect(time.Now()); err == nil {
+			sc.SetMetrics(mc)
+		}
+	}
 	snap, err := sc.ScanOnce()
 	if err != nil {
 		return 0, err
@@ -584,24 +620,31 @@ func cmdDemo(args []string) error {
 	det.CPUSustainScan = 3 // в демо признак длительной нагрузки появляется быстрее
 	hist, _ := history.Open(history.Options{CPUThreshold: cfg.CPUThreshold, MemThreshold: cfg.MemThreshold})
 	anim := fakeproc.NewAnimator(tree, procRoot)
+	// Метрики демо: поддельные /proc и заполненность разделов; признаки
+	// появляются через два замера, а не через 10 минут, иначе их не
+	// увидеть за время показа.
+	mc := metrics.New(metrics.Options{ProcRoot: procRoot, HostRoot: hostRoot, Interval: 2 * time.Second,
+		StealThreshold: cfg.StealThreshold, DiskFullThreshold: cfg.DiskFullThreshold, DiskUsage: fakeproc.DemoUsage,
+		BeforeCollect: anim.StepHost, FastHolds: true, Logger: log})
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
-		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true})
+		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true, Metrics: mc})
 	// Демо-файлы принадлежат текущему пользователю: он и считается root.
 	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Logger: log})
 	if *useTUI {
 		if !tui.IsTerminal() {
 			return i18n.Errorf("err.demo_tui_terminal")
 		}
-		ls, err := tui.NewLocalSource(sc, ar, version+" (demo)", true, i18n.T("tui.source_demo"))
+		ls, err := tui.NewLocalSource(sc, ar, mc, version+" (demo)", true, i18n.T("tui.source_demo"))
 		if err != nil {
 			return err
 		}
 		defer ls.Close()
 		return tui.New(tui.Options{Source: ls, Refresh: *interval}).Run()
 	}
-	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (demo)", ListenAddr: cfg.ListenAddr, Demo: true, Audit: ar})
+	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (demo)", ListenAddr: cfg.ListenAddr, Demo: true,
+		Audit: ar, Metrics: mc})
 	log.Info(i18n.S("log.demo"), "dir", dir)
-	return run(sc, srv, nil, nil, cfg, log, nil, ar.Run)
+	return run(sc, srv, nil, nil, cfg, log, nil, ar.Run, mc.Run)
 }
 
 func cmdHashPassword() error {
