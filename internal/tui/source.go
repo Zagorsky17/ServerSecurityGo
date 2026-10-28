@@ -42,6 +42,9 @@ type Data struct {
 	// Metrics — метрики сервера за выбранное окно; nil — сбор выключен
 	// или служба старой версии без /api/metrics.
 	Metrics *metrics.View
+	// Net — сетевая нагрузка; nil — наблюдение выключено или служба
+	// старой версии без /api/netload.
+	Net *view.NetLoadView
 }
 
 // Source — откуда интерфейс берёт данные: из запущенной службы (через
@@ -68,6 +71,7 @@ type Source interface {
 // чтобы не мешать ей.
 type LocalSource struct {
 	sc      *scanner.Scanner
+	netOn   bool               // наблюдение за сетевой нагрузкой включено
 	audit   *audit.Runner      // nil — аудит выключен
 	met     *metrics.Collector // nil — метрики выключены
 	rng     atomic.Value       // окно графиков (строка)
@@ -80,7 +84,7 @@ type LocalSource struct {
 // NewLocalSource запускает сканер в фоне и ждёт первого снимка. Аудит
 // (ar может быть nil) выполняется сразу и затем только по клавише r: он
 // быстрый, а отдельная горутина интерфейсу не нужна.
-func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
+func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector, netOn bool, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
 	if _, err := sc.ScanOnce(); err != nil {
 		return nil, err
 	}
@@ -105,7 +109,7 @@ func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector
 		}
 		sc.Run(ctx)
 	}()
-	l := &LocalSource{sc: sc, audit: ar, met: mc, cancel: cancel, version: version, demo: demo, note: note}
+	l := &LocalSource{sc: sc, audit: ar, met: mc, netOn: netOn, cancel: cancel, version: version, demo: demo, note: note}
 	l.rng.Store(metrics.RangeHour)
 	return l, nil
 }
@@ -140,6 +144,10 @@ func (l *LocalSource) Fetch() (*Data, error) {
 	}
 	d := &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap),
 		Exposure: view.Exposure(snap), Audit: &av, Metrics: l.metricsView()}
+	if l.netOn {
+		nv := view.NetLoad(snap.NetLoad, true)
+		d.Net = &nv
+	}
 	if f := view.Fail2ban(snap); f.Installed {
 		d.Fail2ban = f
 	}
@@ -295,6 +303,16 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 			d.Metrics = &mv
 		} else if err != nil && !errors.Is(err, errNotFound) {
 			return nil, fmt.Errorf("/api/metrics: %w", err)
+		}
+	}
+	// Сетевая нагрузка запрашивается, только если служба наблюдает
+	// (сводка в /api/status).
+	if d.Status.Net != nil {
+		var nv view.NetLoadView
+		if err := r.get("/api/netload", &nv); err == nil && nv.Enabled {
+			d.Net = &nv
+		} else if err != nil && !errors.Is(err, errNotFound) {
+			return nil, fmt.Errorf("/api/netload: %w", err)
 		}
 	}
 	if c, b := r.audit, d.Status.Audit; c != nil && c.Enabled == b.Enabled && c.Running == b.Running && c.Time.Equal(b.Time) {

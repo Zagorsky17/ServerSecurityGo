@@ -73,10 +73,23 @@ type Options struct {
 	// BeforeCollect вызывается перед каждым замером: демо этим
 	// «оживляет» поддельные счётчики /proc.
 	BeforeCollect func()
+	// Extra — дополнительные ряды, которые снимает та же горутина
+	// (internal/netload: счётчики /proc/net/*). nil — только метрики
+	// раздела 15.
+	Extra Sampler
 	// FastHolds — признаки появляются через два замера вместо 10–15
 	// минут (только демо: иначе их не увидеть за время показа).
 	FastHolds bool
 	Logger    *slog.Logger
+}
+
+// Sampler — источник дополнительных рядов для той же горутины метрик.
+// Так счётчики сетевой нагрузки снимаются с тем же интервалом и
+// хранятся в тех же кольцевых буферах, а не отдельным сборщиком.
+type Sampler interface {
+	// Sample снимает значения рядов. dt — секунды с прошлого замера
+	// (0 — первый замер, скорости считать не с чем).
+	Sample(now time.Time, dt float64) map[string]float64
 }
 
 // Collector снимает метрики и хранит ряды в памяти.
@@ -125,6 +138,14 @@ func New(opt Options) *Collector {
 	return c
 }
 
+// SetExtra подключает дополнительные ряды после создания сборщика
+// (netload создаётся позже: ему нужна база «как обычно» из метрик).
+func (c *Collector) SetExtra(s Sampler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.opt.Extra = s
+}
+
 // Interval — период замера.
 func (c *Collector) Interval() time.Duration { return c.opt.Interval }
 
@@ -161,18 +182,34 @@ func (c *Collector) Collect(now time.Time) (*Sample, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Дополнительные ряды снимаются до блокировки: netload читает свои
+	// файлы /proc и ничего не знает о состоянии сборщика.
+	var extra map[string]float64
+	if sampler := c.extra(); sampler != nil {
+		dt := 0.0
+		if prev := c.prevTime(); !prev.IsZero() {
+			dt = now.Sub(prev).Seconds()
+		}
+		extra = sampler.Sample(now, dt)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.sample(r)
 	c.last = s
 	c.prev = r
-	for k, v := range s.values() {
+	add := func(k string, v float64) {
 		ms := c.series[k]
 		if ms == nil {
 			ms = newMetricSeries(c.capMonth)
 			c.series[k] = ms
 		}
 		ms.add(now, v)
+	}
+	for k, v := range s.values() {
+		add(k, v)
+	}
+	for k, v := range extra {
+		add(k, v)
 	}
 	c.dirty = true
 	c.findings = c.check(s)
@@ -352,6 +389,56 @@ func (c *Collector) check(s *Sample) []model.SystemFinding {
 			i18n.T("ev.metrics_mem", round1(s.Mem.Percent), humanBytes(s.Mem.Available)))
 	}
 	return out
+}
+
+// extra — подключённый источник дополнительных рядов.
+func (c *Collector) extra() Sampler {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.opt.Extra
+}
+
+// prevTime — время прошлого замера (0 — замеров ещё не было).
+func (c *Collector) prevTime() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.prev.time
+}
+
+// minBaseline — сколько нужно данных, чтобы считать «как обычно».
+// Относительные пороги («в N раз больше обычного») без этого
+// сравнивали бы со случайным получасом после запуска службы.
+const minBaseline = 6 * time.Hour
+
+// Median — медиана ряда за последние window (по минутным точкам).
+// ok = false — данных меньше minBaseline: относительные пороги
+// применять нельзя.
+func (c *Collector) Median(key string, window time.Duration) (float64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	ms := c.series[key]
+	if ms == nil {
+		return 0, false
+	}
+	pts := ms.min1.all()
+	if len(pts) == 0 {
+		return 0, false
+	}
+	now := pts[len(pts)-1].T
+	if now.Sub(pts[0].T) < minBaseline {
+		return 0, false
+	}
+	var vals []float64
+	for _, p := range pts {
+		if now.Sub(p.T) <= window {
+			vals = append(vals, p.Avg)
+		}
+	}
+	if len(vals) == 0 {
+		return 0, false
+	}
+	sort.Float64s(vals)
+	return vals[len(vals)/2], true
 }
 
 // Findings — системные признаки последнего замера.

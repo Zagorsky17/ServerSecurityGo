@@ -50,6 +50,9 @@ type FS struct {
 	// MaxCmdline — сколько байт /proc/PID/cmdline читать (лимит по
 	// умолчанию для ReadProcess).
 	MaxCmdline int
+	// MaxSockets — предел числа сокетов на одно сетевое пространство
+	// имён (SSG_NET_MAX_SOCKETS); 0 — DefaultMaxSockets.
+	MaxSockets int
 	// MaxFiles — сколько открытых файлов сохранять в Process.Files.
 	// Сокеты сопоставляются всегда, независимо от лимита.
 	MaxFiles int

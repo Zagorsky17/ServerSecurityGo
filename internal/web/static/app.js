@@ -125,7 +125,7 @@ async function copyText(text) {
 
 const state = {
   csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null,
-  metrics: null, mrange: '1h',
+  metrics: null, mrange: '1h', netload: null,
   tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
 
@@ -520,9 +520,16 @@ const METRIC_NAMES = {
   disk_full: () => tr('tui.m.disk_full'), net_rx: () => tr('tui.m.net_rx'), net_tx: () => tr('tui.m.net_tx'),
   pps_in: () => tr('tui.m.pps_in'), pps_out: () => tr('tui.m.pps_out'),
   psi_cpu: () => tr('tui.m.psi_cpu'), psi_mem: () => tr('tui.m.psi_mem'), psi_io: () => tr('tui.m.psi_io'),
+  net_syn_rate: () => tr('tui.m.net_syn_rate'), net_cookies_fail: () => tr('tui.m.net_cookies_fail'),
+  net_listen_drops: () => tr('tui.m.net_listen_drops'), net_conntrack: () => tr('tui.m.net_conntrack'),
+  net_rx_drops: () => tr('tui.m.net_rx_drops'), net_udp_errors: () => tr('tui.m.net_udp_errors'),
+  net_estab: () => tr('tui.m.net_estab'), net_orphan: () => tr('tui.m.net_orphan'),
+  net_retrans: () => tr('tui.m.net_retrans'),
 };
 const METRIC_ORDER = ['cpu', 'cpu_user', 'cpu_system', 'cpu_iowait', 'steal', 'load1', 'psi_cpu', 'mem', 'swap',
-  'psi_mem', 'disk_read', 'disk_write', 'disk_busy', 'disk_full', 'psi_io', 'net_rx', 'net_tx', 'pps_in', 'pps_out'];
+  'psi_mem', 'disk_read', 'disk_write', 'disk_busy', 'disk_full', 'psi_io', 'net_rx', 'net_tx', 'pps_in', 'pps_out',
+  'net_syn_rate', 'net_cookies_fail', 'net_listen_drops', 'net_conntrack', 'net_rx_drops', 'net_udp_errors',
+  'net_estab', 'net_orphan', 'net_retrans'];
 
 /** Значение метрики для таблицы: маленькие значения не должны выглядеть нулём. */
 function fmtMetric(v) {
@@ -666,6 +673,76 @@ function renderMetrics() {
     { t: tr('web.col.pps'), v: (x) => x.rxPPS, r: (x) => fmtMetric(x.rxPPS) + ' / ' + fmtMetric(x.txPPS), c: 'num', desc: true },
     { t: tr('web.col.drops'), v: (x) => x.rxDrops, r: (x) => fmtMetric(x.rxDrops), c: 'num', desc: true },
   ], (now && now.nets) || [], null, tr('web.metrics.empty'));
+}
+
+// ---------------------------------------------------------------------
+// Сетевая нагрузка
+// ---------------------------------------------------------------------
+
+// NET_COUNTERS — какие счётчики ядра показывать и под какими подписями
+// (ключи те же, что у рядов метрик).
+const NET_COUNTERS = [
+  ['net_syn_rate', (c) => c.cookiesSent],
+  ['net_cookies_fail', (c) => c.cookiesFailed],
+  ['net_listen_drops', (c) => c.listenOverflows + c.listenDrops],
+  ['net_rx_drops', (c) => c.rxDrops + c.softnetDropped],
+  ['net_udp_errors', (c) => c.udpRcvbufErrors + c.udpInErrors],
+  ['net_retrans', (c) => c.retransSegs],
+  ['pps_in', (c) => c.ppsIn],
+  ['pps_out', (c) => c.ppsOut],
+  ['net_estab', (c) => c.currEstab],
+  ['net_orphan', (c) => c.tcpOrphan],
+];
+
+function renderNetload() {
+  const n = state.netload;
+  if (!n) return;
+  const state_ = $('nl-state');
+  if (!n.enabled) { state_.textContent = tr('web.netload.disabled'); return; }
+  if (!n.ready) { state_.textContent = tr('web.netload.empty'); return; }
+  const alerts = n.active || [];
+  const suspected = alerts.includes('net_ddos_suspected');
+  state_.replaceChildren(alerts.length
+    ? h('span', { class: suspected ? 'st st-fail' : 'st st-warn' }, tr('web.netload.alerts', alerts.join(', ')))
+    : h('span', { class: 'st st-pass' }, tr('web.netload.ok')));
+  const half = (n.listen || []).reduce((a, p) => a + p.halfOpen, 0);
+  const conns = (n.listen || []).reduce((a, p) => a + p.established, 0);
+  $('nl-when').textContent = tr('web.netload.when', fmtTime(n.time), conns, half);
+  const warn = [];
+  if (n.truncated) warn.push(tr('web.netload.truncated', n.dropped || 0));
+  if (!n.baseline) warn.push(tr('web.netload.no_baseline'));
+  if (n.trustedNets && n.trustedNets.length) warn.push(tr('web.netload.trusted', n.trustedNets.join(', ')));
+  $('nl-warn').replaceChildren(...warn.map((t) => h('li', null, t)));
+
+  renderTable('t-nl-ports', [
+    { t: tr('tui.k.proto'), v: (p) => p.proto, r: (p) => p.proto },
+    { t: tr('web.col.port'), v: (p) => p.port, r: (p) => p.port, c: 'num' },
+    { t: tr('web.col.halfopen'), v: (p) => p.halfOpen, r: (p) => h('span', { class: p.halfOpen >= 256 ? 'st st-warn' : '' }, p.halfOpen), c: 'num', desc: true },
+    { t: tr('web.col.estab'), v: (p) => p.established, r: (p) => p.established, c: 'num', desc: true },
+    { t: tr('web.col.queue'), v: (p) => p.acceptQueue, r: (p) => p.acceptQueue, c: 'num', desc: true },
+    { t: tr('web.col.backlog'), v: (p) => p.backlog, r: (p) => p.backlog, c: 'num' },
+    { t: tr('web.col.sources'), v: (p) => p.sources, r: (p) => p.sources, c: 'num', desc: true },
+    { t: tr('tui.title.process'), v: (p) => p.procName || '', r: (p) => (p.pid ? `${p.procName} (${p.pid})` : '—') },
+  ], n.listen || [], null, tr('web.netload.empty'));
+
+  renderTable('t-nl-sources', [
+    { t: tr('web.col.source'), v: (x) => x.addr, r: (x) => h('span', { class: 'mono' }, x.addr), c: 'path' },
+    { t: tr('web.col.estab'), v: (x) => x.conns, r: (x) => x.conns, c: 'num', desc: true },
+    { t: tr('web.col.halfopen'), v: (x) => x.halfOpen, r: (x) => x.halfOpen, c: 'num', desc: true },
+    { t: tr('web.col.sources'), v: (x) => x.addresses || 0, r: (x) => x.addresses || '—', c: 'num', desc: true },
+    { t: tr('web.col.port'), v: (x) => (x.ports || []).join(','), r: (x) => (x.ports || []).join(', ') },
+    { t: tr('tui.k.reach'), v: (x) => (x.trusted ? 0 : x.private ? 1 : 2), r: (x) => (x.trusted
+      ? h('span', { class: 'st st-pass' }, tr('web.netload.trusted_short'))
+      : x.private ? tr('tui.scope.private') : tr('tui.scope.public')) },
+  ], n.topSources || [], null, tr('web.netload.empty'));
+
+  const c = n.counters || {};
+  renderTable('t-nl-counters', [
+    { t: tr('web.col.check'), v: (row) => row.name, r: (row) => row.name },
+    { t: tr('web.metrics.now'), v: (row) => row.value, r: (row) => fmtMetric(row.value), c: 'num', desc: true },
+  ], NET_COUNTERS.map(([key, get]) => ({ name: label(METRIC_NAMES, key), value: get(c) || 0 }))
+    .concat(n.conntrack ? [{ name: label(METRIC_NAMES, 'net_conntrack'), value: n.conntrack.percent }] : []),
+  null, tr('web.netload.empty'));
 }
 
 function renderHistory() {
@@ -910,6 +987,10 @@ function renderSummary() {
       s.fail2ban.running ? s.fail2ban.banned : h('span', { class: 'st st-fail', title: tr('web.f2b.stopped') }, '⚠'),
       h('span', { class: 'muted', title: tr('web.stat.found24_title') }, ' · ' + s.fail2ban.found24h)), h('div', { class: 'lbl' }, tr('web.stat.fail2ban'))) : '',
     h('div', { class: 'stat', onclick: () => switchTab('system') }, h('div', { class: 'num' }, s.systemFindings || 0), h('div', { class: 'lbl' }, tr('web.stat.system'))),
+    // Карточка сетевой нагрузки: при сводном признаке — красная.
+    s.net ? h('div', { class: 'stat', onclick: () => switchTab('netload') }, h('div', { class: 'num' },
+      s.net.alerts ? h('span', { class: s.net.suspected ? 'risk risk-HIGH' : 'st st-warn' }, s.net.alerts) : '0'),
+      h('div', { class: 'lbl' }, tr('web.stat.netload'))) : '',
     // Карточка метрик — только когда служба их собирает.
     s.metrics && s.metrics.ready ? h('div', { class: 'stat', onclick: () => switchTab('metrics') }, h('div', { class: 'num' },
       fmtMetric(s.metrics.cpu) + ' / ' + fmtMetric(s.metrics.mem),
@@ -929,6 +1010,8 @@ function renderSummary() {
   $('cnt-audit').textContent = s.audit && s.audit.ready ? s.audit.fail + s.audit.warn : '—';
   $('cnt-system').textContent = s.systemFindings || 0;
   $('tabbtn-metrics').classList.toggle('hidden', !s.metrics);
+  $('tabbtn-netload').classList.toggle('hidden', !s.net);
+  $('cnt-netload').textContent = s.net ? s.net.alerts : 0;
   $('tabbtn-fail2ban').classList.toggle('hidden', !s.fail2ban);
   $('cnt-fail2ban').textContent = s.fail2ban ? s.fail2ban.banned : 0;
 }
@@ -946,6 +1029,7 @@ function renderAll() {
     case 'history': renderHistory(); break;
     case 'system': renderSystem(); break;
     case 'metrics': renderMetrics(); break;
+    case 'netload': renderNetload(); break;
   }
 }
 
@@ -959,6 +1043,7 @@ async function loadTabData() {
     case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
     case 'system': state.system = await api('/api/system'); break;
     case 'metrics': state.metrics = await api('/api/metrics?range=' + encodeURIComponent(state.mrange)); break;
+    case 'netload': state.netload = await api('/api/netload'); break;
   }
 }
 
@@ -977,8 +1062,9 @@ async function refresh() {
     // fail2ban удалили (или вкладка запомнилась с другого сервера): раздела
     // больше нет — уходим на вкладку по умолчанию.
     if (state.tab === 'fail2ban' && !state.status.fail2ban) showTab('suspicious');
-    // Сбор метрик выключили — вкладки больше нет.
+    // Сбор метрик выключили — вкладок метрик и сетевой нагрузки нет.
     if (state.tab === 'metrics' && !state.status.metrics) showTab('suspicious');
+    if (state.tab === 'netload' && !state.status.net) showTab('suspicious');
     if (state.tab === 'suspicious' || state.tab === 'all') {
       state.processes = (await api('/api/processes')).processes || [];
     }

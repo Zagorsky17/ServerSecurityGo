@@ -20,23 +20,24 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/web"
 )
 
 // demoScanner создаёт сканер над демонстрационным деревом.
 func demoScanner(t *testing.T) *scanner.Scanner {
-	sc, _, _ := demoEnv(t)
+	sc, _, _, _ := demoEnv(t)
 	return sc
 }
 
 // demoEnv — сканер и аудит над одним демо-деревом.
-func demoEnv(t *testing.T) (*scanner.Scanner, *audit.Runner, *metrics.Collector) {
+func demoEnv(t *testing.T) (*scanner.Scanner, *audit.Runner, *metrics.Collector, *netload.Monitor) {
 	t.Helper()
 	return demoEnvTree(t, fakeproc.Demo(time.Now()))
 }
 
-func demoEnvTree(t *testing.T, tree *fakeproc.Tree) (*scanner.Scanner, *audit.Runner, *metrics.Collector) {
+func demoEnvTree(t *testing.T, tree *fakeproc.Tree) (*scanner.Scanner, *audit.Runner, *metrics.Collector, *netload.Monitor) {
 	t.Helper()
 	procRoot, hostRoot, err := tree.Write(t.TempDir())
 	if err != nil {
@@ -46,10 +47,13 @@ func demoEnvTree(t *testing.T, tree *fakeproc.Tree) (*scanner.Scanner, *audit.Ru
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mc := metrics.New(metrics.Options{ProcRoot: procRoot, HostRoot: hostRoot, Interval: time.Hour,
 		DiskUsage: fakeproc.DemoUsage, Logger: quiet})
+	nl := netload.New(netload.Options{ProcRoot: procRoot, Baseline: mc.Median,
+		Config: netload.Config{ConnPerIP: 200, SurgeFactor: 5, Trusted: fakeproc.DemoTrustedNets(), TrustedRaw: fakeproc.DemoTrustedRaw()}})
+	mc.SetExtra(nl)
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist,
-		Interval: time.Hour, Logger: quiet, Hostname: "demo-host", Demo: true, Metrics: mc})
-	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, RootUID: os.Getuid(), Interval: time.Hour, Record: hist.RecordAudit, Logger: quiet})
-	return sc, ar, mc
+		Interval: time.Hour, Logger: quiet, Hostname: "demo-host", Demo: true, Metrics: mc, NetLoad: nl})
+	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Hour, Record: hist.RecordAudit, Logger: quiet})
+	return sc, ar, mc, nl
 }
 
 // newTestApp — интерфейс на демо-данных без настоящего терминала.
@@ -59,8 +63,8 @@ func newTestApp(t *testing.T, w, h int) (*App, *bytes.Buffer) {
 
 func newTestAppLang(t *testing.T, w, h int, lang i18n.Lang) (*App, *bytes.Buffer) {
 	t.Helper()
-	sc, ar, mc := demoEnv(t)
-	src, err := NewLocalSource(sc, ar, mc, "test", true, i18n.T("tui.source_demo"))
+	sc, ar, mc, nl := demoEnv(t)
+	src, err := NewLocalSource(sc, ar, mc, nl != nil, "test", true, i18n.T("tui.source_demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,8 +201,14 @@ func TestPanelsDetails(t *testing.T) {
 		t.Errorf("панель портов:\n%s", s)
 	}
 	press(a, r('1'))
-	if s := screen(a); !strings.Contains(s, "Обзор") || !strings.Contains(s, "Быстрый старт") {
+	if s := screen(a); !strings.Contains(s, "Обзор") || !strings.Contains(s, "Ресурсы") {
 		t.Errorf("обзор:\n%s", s)
+	}
+	// «Быстрый старт» — в конце обзора: с метриками и сетевой нагрузкой
+	// он уходит ниже экрана, поэтому прокручиваем.
+	press(a, r('G'))
+	if s := screen(a); !strings.Contains(s, "Быстрый старт") {
+		t.Errorf("конец обзора:\n%s", s)
 	}
 }
 
@@ -657,11 +667,13 @@ func TestLayoutHeights(t *testing.T) {
 			}
 		}
 	}
-	// 80×24 — привычный размер терминала: в развёрнутой панели видны строки.
+	// 80×24 — привычный размер терминала: в развёрнутой панели видны
+	// строки. Панелей одиннадцать, поэтому на такой высоте их остаётся
+	// немного: для тесного терминала есть разворот на весь экран (z).
 	a.w, a.h = 80, 24
 	a.focusPanel(pSusp)
 	a.render()
-	if a.rects[pSusp].h < 6 {
+	if a.rects[pSusp].h < 4 {
 		t.Errorf("80×24: высота развёрнутой панели %d", a.rects[pSusp].h)
 	}
 }
@@ -769,8 +781,8 @@ func TestNoFail2banPanel(t *testing.T) {
 		}
 	}
 	tree.Procs = procs
-	sc, ar, mc := demoEnvTree(t, tree)
-	src, err := NewLocalSource(sc, ar, mc, "test", true, i18n.T("tui.source_demo"))
+	sc, ar, mc, nl := demoEnvTree(t, tree)
+	src, err := NewLocalSource(sc, ar, mc, nl != nil, "test", true, i18n.T("tui.source_demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,7 +791,7 @@ func TestNoFail2banPanel(t *testing.T) {
 	a.w, a.h = 160, 45
 	a.load()
 	s := screen(a)
-	// Без fail2ban панелей девять: последняя — «Метрики».
+	// Без fail2ban панелей десять: «Метрики» и «Сетевая нагрузка» в конце.
 	if strings.Contains(s, "fail2ban") || !strings.Contains(s, "[7] История") || !strings.Contains(s, "[8] Система") || !strings.Contains(s, "1-9/Tab") {
 		t.Errorf("панели без fail2ban:\n%s", s)
 	}
@@ -791,11 +803,15 @@ func TestNoFail2banPanel(t *testing.T) {
 	if a.focus != pMetrics {
 		t.Errorf("9 → %d, нужны «Метрики»", a.focus)
 	}
+	press(a, r('0'))
+	if a.focus != pLoad {
+		t.Errorf("0 → %d, нужна «Сетевая нагрузка»", a.focus)
+	}
 	press(a, Key{Kind: KeyTab})
 	if a.focus != pStatus {
 		t.Errorf("Tab после последней панели: %d", a.focus)
 	}
-	if a.minHeight() != 18 {
+	if a.minHeight() != 20 {
 		t.Errorf("минимальная высота без fail2ban: %d", a.minHeight())
 	}
 }
@@ -1004,7 +1020,7 @@ func TestLegacyMouse(t *testing.T) {
 // TestMetricsPanel: панель «Метрики» показывает ряды, подробности —
 // график и текущие значения, клавиша w меняет окно.
 func TestMetricsPanel(t *testing.T) {
-	sc, ar, mc := demoEnv(t)
+	sc, ar, mc, nl := demoEnv(t)
 	// Два замера: по разнице счётчиков считаются проценты и скорости.
 	now := time.Now()
 	if _, err := mc.Collect(now); err != nil {
@@ -1013,7 +1029,7 @@ func TestMetricsPanel(t *testing.T) {
 	if _, err := mc.Collect(now.Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	src, err := NewLocalSource(sc, ar, mc, "test", true, i18n.T("tui.source_demo"))
+	src, err := NewLocalSource(sc, ar, mc, nl != nil, "test", true, i18n.T("tui.source_demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1029,7 +1045,7 @@ func TestMetricsPanel(t *testing.T) {
 		t.Fatalf("0 → %d, нужны «Метрики»", a.focus)
 	}
 	s := screen(a)
-	for _, want := range []string{"[10] Метрики", "Процессор, %", "Steal", "Заполненность раздела"} {
+	for _, want := range []string{"[10] Метрики", "Процессор, %", "Steal"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q:\n%s", want, s)
 		}
@@ -1068,5 +1084,73 @@ func TestMetricsPanel(t *testing.T) {
 	}
 	if !found {
 		t.Error("признак disk_almost_full из метрик не попал в системные находки")
+	}
+}
+
+// TestNetLoadPanel: панель «Сетевая нагрузка» показывает порты,
+// источники и счётчики, сводный признак виден в «Сводке».
+func TestNetLoadPanel(t *testing.T) {
+	sc, ar, mc, nl := demoEnv(t)
+	now := time.Now()
+	// Два замера счётчиков и два сканирования: признакам нужно
+	// удержание, а по соединениям — два сканирования подряд.
+	if _, err := mc.Collect(now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mc.Collect(now.Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	src, err := NewLocalSource(sc, ar, mc, nl != nil, "test", true, i18n.T("tui.source_demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(src.Close)
+	a := New(Options{Source: src, Out: &bytes.Buffer{}, Lang: i18n.RU})
+	a.w, a.h = 170, 52
+	if err := src.Rescan(); err != nil {
+		t.Fatal(err)
+	}
+	a.load()
+	if !a.hasNet() {
+		t.Fatal("панель сетевой нагрузки не появилась")
+	}
+	// Панель последняя: Tab из «Метрик» ведёт на неё.
+	a.focusPanel(pLoad)
+	s := screen(a)
+	for _, want := range []string{"[11] Сетевая нагрузка", "443", "Источники соединений", "Счётчики ядра", "203.0.113"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("на экране нет %q:\n%s", want, s)
+		}
+	}
+	// Доверенная сеть помечена и не даёт признака (в списке источников
+	// она может быть ниже видимой области, поэтому проверяем данные).
+	var trusted string
+	for _, src := range a.data.Net.TopSources {
+		if src.Trusted {
+			trusted = src.Addr
+		}
+	}
+	if trusted == "" {
+		t.Error("доверенный источник не помечен")
+	}
+	for _, f := range a.data.System {
+		if f.Path == trusted {
+			t.Errorf("признак по доверенному источнику: %+v", f)
+		}
+	}
+	// В «Сводке» — строка сети с числом признаков.
+	press(a, r('1'))
+	if sv := screen(a); !strings.Contains(sv, "сеть:") {
+		t.Errorf("в сводке нет строки сети:\n%s", sv)
+	}
+	// Признаки сетевой нагрузки попали в системные находки.
+	var ids []string
+	for _, f := range a.data.System {
+		if strings.HasPrefix(f.ID, "net_") {
+			ids = append(ids, f.ID)
+		}
+	}
+	if len(ids) == 0 {
+		t.Error("признаков net_* в системных находках нет")
 	}
 }

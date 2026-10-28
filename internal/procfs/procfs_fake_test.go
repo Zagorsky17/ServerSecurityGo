@@ -77,7 +77,7 @@ func TestReadProcessFake(t *testing.T) {
 		t.Errorf("несуществующий процесс: %v", err)
 	}
 
-	socks := fs.ReadNetTables(3101, "net:[4026531840]")
+	socks, _ := fs.ReadNetTables(3101, "net:[4026531840]")
 	found := false
 	for _, s := range socks {
 		if s.Inode == 2001 && s.RemotePort == 3333 && s.RemoteAddr == "198.51.100.77" {

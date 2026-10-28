@@ -51,6 +51,8 @@
   <button role="tab" data-tab="system"><span data-i18n="web.tab.system">Система</span> <span class="badge" id="cnt-system">0</span></button>
   <!-- Вкладка «Метрики» видна, только если служба их собирает (status.metrics). -->
   <button role="tab" data-tab="metrics" id="tabbtn-metrics" class="hidden" data-i18n="web.tab.metrics">Метрики</button>
+  <!-- Вкладка «Сетевая нагрузка» видна, только когда идёт наблюдение (status.net). -->
+  <button role="tab" data-tab="netload" id="tabbtn-netload" class="hidden"><span data-i18n="web.tab.netload">Сетевая нагрузка</span> <span class="badge" id="cnt-netload">0</span></button>
 </nav>
 
 <main>
@@ -245,6 +247,21 @@
       <div><h3 data-i18n="web.metrics.disks">Устройства</h3><div class="table-wrap"><table id="t-m-disks"></table></div></div>
       <div><h3 data-i18n="web.metrics.nets">Интерфейсы</h3><div class="table-wrap"><table id="t-m-nets"></table></div></div>
     </div>
+  </section>
+
+  <section id="tab-netload" class="tab">
+    <p class="hint" data-i18n="web.netload.hint">Нагрузка на сеть и признаки атаки. Только наблюдение.</p>
+    <div class="audit-head">
+      <b id="nl-state"></b>
+      <span id="nl-when" class="muted"></span>
+    </div>
+    <ul id="nl-warn" class="plain warn-list"></ul>
+    <h3 data-i18n="web.netload.ports">Порты</h3>
+    <div class="table-wrap"><table id="t-nl-ports"></table></div>
+    <h3 data-i18n="web.netload.sources">Источники соединений</h3>
+    <div class="table-wrap"><table id="t-nl-sources"></table></div>
+    <h3 data-i18n="web.netload.counters">Счётчики ядра</h3>
+    <div class="table-wrap"><table id="t-nl-counters"></table></div>
   </section>
 
   <section id="tab-system" class="tab">
