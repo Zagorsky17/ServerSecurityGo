@@ -155,3 +155,23 @@ func TestLogDays(t *testing.T) {
 		}
 	}
 }
+
+func TestPanelOff(t *testing.T) {
+	t.Setenv("SSG_LISTEN_ADDR", "OFF")
+	c, err := FromEnv()
+	if err != nil || c.ListenAddr != "" || c.PanelEnabled() {
+		t.Fatalf("off выключает панель: %v %q", err, c.ListenAddr)
+	}
+	// Без панели сеть не открывается: пароль и TLS не нужны.
+	if err := c.ValidateSecurity(); err != nil {
+		t.Errorf("выключенная панель не требует пароля: %v", err)
+	}
+	t.Setenv("SSG_LISTEN_ADDR", "0.0.0.0:8090")
+	c, err = FromEnv()
+	if err != nil || !c.PanelEnabled() {
+		t.Fatalf("адрес включает панель: %v %q", err, c.ListenAddr)
+	}
+	if err := c.ValidateSecurity(); err == nil {
+		t.Error("сетевой адрес без пароля должен быть ошибкой")
+	}
+}

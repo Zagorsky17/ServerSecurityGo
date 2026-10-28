@@ -106,6 +106,8 @@ Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
 		"log.socket_failed": {"локальный сокет для терминального интерфейса не создан", "local socket for the terminal interface was not created"},
 		"log.socket":        {"локальный сокет для терминального интерфейса", "local socket for the terminal interface"},
 		"log.panel_url":     {"веб-панель доступна", "web panel is available"},
+		"log.panel_off":     {"веб-панель выключена (SSG_LISTEN_ADDR=off)", "web panel is off (SSG_LISTEN_ADDR=off)"},
+		"log.no_ui":         {"выключены и веб-панель, и сокет: результаты только в журнале и в команде scan", "both the web panel and the socket are off: results only in the log and the scan command"},
 		"log.stop_signal":   {"остановка по сигналу", "stopping on signal"},
 		"log.demo":          {"демо-режим: данные вымышленные", "demo mode: the data is fictional"},
 		"log.peer_denied":   {"отклонён доступ к панели без пароля: пользователь не в SSG_LOCAL_UIDS", "denied passwordless panel access: user is not in SSG_LOCAL_UIDS"},

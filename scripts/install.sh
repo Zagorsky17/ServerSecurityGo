@@ -83,14 +83,21 @@ if health_check; then
   log "Готово. Версия: $("$APP_DIR/bin/serversecuritygo" version)"
 else
   journalctl -u "$APP_NAME" -n 30 --no-pager || true
-  die "служба не ответила на /healthz — см. журнал выше"
+  die "служба не запустилась — см. журнал выше"
+fi
+
+if [ "$(listen_addr)" = "off" ]; then
+  PANEL_INFO="Веб-панель: выключена (SSG_LISTEN_ADDR=off в .env)"
+else
+  PANEL_INFO="Веб-панель: http://$(listen_addr)/  (только с самого сервера), со своего компьютера через SSH-туннель:
+  ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>   →   http://127.0.0.1:8090
+  Не нужна постоянно — выключается: SSG_LISTEN_ADDR=off в .env (терминальный интерфейс продолжит работать)."
 fi
 
 cat <<INFO
 
 Терминальный интерфейс (на сервере):  serversecuritygo
-Веб-панель: http://$(listen_addr)/  (только с самого сервера), со своего компьютера через SSH-туннель:
-  ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>   →   http://127.0.0.1:8090
+$PANEL_INFO
 
 Разовая проверка в консоли:  $APP_DIR/bin/serversecuritygo scan --env-file $APP_DIR/.env
 Журнал:      $APP_DIR/scripts/logs.sh

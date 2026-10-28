@@ -164,10 +164,13 @@ func cmdServe(args []string) error {
 	if cfg.AuthPasswordHash != "" && !web.ValidHash(cfg.AuthPasswordHash) {
 		return i18n.Errorf("err.bad_hash")
 	}
-	if !cfg.IsLoopback() && len(cfg.AllowedHosts) == 0 {
+	if cfg.PanelEnabled() && !cfg.IsLoopback() && len(cfg.AllowedHosts) == 0 {
 		return i18n.Errorf("err.need_allowed_hosts")
 	}
 	log := newLogger(cfg.LogLevel)
+	if !cfg.PanelEnabled() && cfg.SocketPath == "" {
+		log.Warn(i18n.S("log.no_ui")) // ни панели, ни сокета: смотреть результат негде
+	}
 	if runtime.GOOS != "linux" {
 		log.Warn(i18n.S("log.not_linux"))
 	}
@@ -216,7 +219,11 @@ func cmdServe(args []string) error {
 	if noAuth {
 		connCtx = web.PeerContext(pfs.SocketOwner)
 	}
-	log.Info(i18n.S("log.start"), "version", version, "listen", cfg.ListenAddr, "interval", cfg.ScanInterval.String(), "data", cfg.DataDir,
+	listen := cfg.ListenAddr
+	if !cfg.PanelEnabled() {
+		listen = "off"
+	}
+	log.Info(i18n.S("log.start"), "version", version, "listen", listen, "interval", cfg.ScanInterval.String(), "data", cfg.DataDir,
 		"auth", !noAuth, "local_uids", fmt.Sprint(cfg.LocalUIDs), "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow),
 		"audit", cfg.AuditEnabled, "audit_interval", cfg.AuditInterval.String(),
 		"metrics", cfg.MetricsEnabled, "metrics_interval", cfg.MetricsInterval.String())
@@ -280,22 +287,30 @@ func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ln, err := net.Listen("tcp", cfg.ListenAddr)
-	if err != nil {
-		return i18n.Errorf("err.listen", cfg.ListenAddr, err)
-	}
-	httpSrv := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    64 << 10,
-		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
-		ConnContext:       connCtx,
-	}
-	if cfg.TLSEnabled() {
-		httpSrv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	// Веб-панель можно выключить (SSG_LISTEN_ADDR=off): служба продолжает
+	// сканировать и вести историю, а смотреть результат — терминальным
+	// интерфейсом через Unix-сокет.
+	var ln net.Listener
+	var httpSrv *http.Server
+	if cfg.PanelEnabled() {
+		var err error
+		ln, err = net.Listen("tcp", cfg.ListenAddr)
+		if err != nil {
+			return i18n.Errorf("err.listen", cfg.ListenAddr, err)
+		}
+		httpSrv = &http.Server{
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    64 << 10,
+			ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+			ConnContext:       connCtx,
+		}
+		if cfg.TLSEnabled() {
+			httpSrv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
 	}
 
 	go sc.Run(ctx)
@@ -318,24 +333,30 @@ func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.
 			log.Info(i18n.S("log.socket"), "path", cfg.SocketPath)
 		}
 	}
+	// Канал ошибки HTTP-сервера. С выключенной панелью в него никто не
+	// пишет, и служба просто ждёт сигнала остановки.
 	errCh := make(chan error, 1)
-	go func() {
-		var err error
+	if httpSrv != nil {
+		go func() {
+			var err error
+			if cfg.TLSEnabled() {
+				err = httpSrv.ServeTLS(ln, cfg.TLSCert, cfg.TLSKey)
+			} else {
+				err = httpSrv.Serve(ln)
+			}
+			if !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+			close(errCh)
+		}()
+		scheme := "http"
 		if cfg.TLSEnabled() {
-			err = httpSrv.ServeTLS(ln, cfg.TLSCert, cfg.TLSKey)
-		} else {
-			err = httpSrv.Serve(ln)
+			scheme = "https"
 		}
-		if !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-		close(errCh)
-	}()
-	scheme := "http"
-	if cfg.TLSEnabled() {
-		scheme = "https"
+		log.Info(i18n.S("log.panel_url"), "url", scheme+"://"+cfg.ListenAddr+"/")
+	} else {
+		log.Info(i18n.S("log.panel_off"), "socket", cfg.SocketPath)
 	}
-	log.Info(i18n.S("log.panel_url"), "url", scheme+"://"+cfg.ListenAddr+"/")
 
 	select {
 	case <-ctx.Done():
@@ -348,7 +369,9 @@ func run(sc *scanner.Scanner, handler, local http.Handler, connCtx func(context.
 	stop() // при ошибке HTTP-сервера контекст ещё не отменён
 	shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = httpSrv.Shutdown(shCtx)
+	if httpSrv != nil {
+		_ = httpSrv.Shutdown(shCtx)
+	}
 	if localSrv != nil {
 		_ = localSrv.Shutdown(shCtx)
 	}

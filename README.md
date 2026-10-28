@@ -160,6 +160,8 @@ ssh -L 8090:127.0.0.1:8090 root@<server-IP>
 
 If you connect with a dedicated key, add `-i ~/.ssh/<key> -o IdentitiesOnly=yes`.
 
+The dashboard does not have to run all the time: `SSG_LISTEN_ADDR=off` in `.env` plus `systemctl restart serversecuritygo` turns it off completely — no HTTP port is opened, while scanning, history, the audit and metrics keep running and stay visible in the terminal interface. To bring it back, put the address back and restart the service.
+
 While no password is set, the service lets only root into the dashboard: for every connection to `127.0.0.1` it looks up the socket owner in `/proc/net/tcp`. A tunnel opened as root works, while other users on the server (for example, a compromised `www-data`) get error 403. If you log in over SSH as your own user, add its UID to `SSG_LOCAL_UIDS` (for example, `0,1000`) or set a password.
 
 ## Features
@@ -398,7 +400,7 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | web dashboard address |
+| `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | web dashboard address (`off` disables the dashboard; the service keeps scanning) |
 | `SSG_SOCKET_PATH` | `/run/serversecuritygo/api.sock` | terminal UI socket (`off` disables it) |
 | `SSG_SCAN_INTERVAL` | `30s` | scan period (minimum `2s`) |
 | `SSG_AUTH_PASSWORD_HASH` | — | password hash (`serversecuritygo hash-password`) |
