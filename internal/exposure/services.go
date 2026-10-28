@@ -16,6 +16,7 @@ const (
 	ClassRemoteAccess = "remote_access" // удалённый рабочий стол и терминал
 	ClassFileSharing  = "file_sharing"  // общий доступ к файлам
 	ClassInfoService  = "info_service"  // сервисы, раскрывающие сведения о системе
+	ClassAmplifier    = "amplifier"     // публичные UDP-сервисы, которыми усиливают DDoS
 )
 
 // FindingID — ID признака для класса сервиса.
@@ -31,6 +32,7 @@ var classKeys = map[string][2]string{
 	ClassRemoteAccess: {"rule.exposed_remote_access.title", "rule.exposed_remote_access.rec"},
 	ClassFileSharing:  {"rule.exposed_file_sharing.title", "rule.exposed_file_sharing.rec"},
 	ClassInfoService:  {"rule.exposed_info_service.title", "rule.exposed_info_service.rec"},
+	ClassAmplifier:    {"rule.exposed_amplifier.title", "rule.exposed_amplifier.rec"},
 }
 
 // Title — заголовок признака доступности сервиса. Если порт закрыт
@@ -119,6 +121,22 @@ var services = []service{
 	{id: "snmp", name: "SNMP", class: ClassInfoService, ports: []portRange{{"udp", 161, 161}}, procs: []string{"snmpd"}, rec: "rec.exp_snmp", sev: model.RiskMedium},
 	{id: "prometheus_exporter", name: "Prometheus exporter", class: ClassInfoService, ports: tcp(9100), procs: []string{"node_exporter", "*_exporter"},
 		images: []string{"node-exporter", "*-exporter", "*_exporter"}, anyPort: true, rec: "rec.exp_prometheus_exporter", sev: model.RiskLow},
+	// Усилители DDoS: на запрос с подменённым адресом источника сервис
+	// отвечает пакетом в десятки раз больше, и поток летит в жертву.
+	// memcached и SNMP остались в своих классах: у них открытый доступ
+	// опасен прежде всего для самого сервера.
+	{id: "dns", name: "DNS", class: ClassAmplifier, ports: []portRange{{"udp", 53, 53}},
+		procs:  []string{"named", "unbound", "dnsmasq", "pdns_server", "pdns_recursor", "coredns", "systemd-resolve"},
+		images: []string{"bind9", "unbound", "coredns", "pdns*", "technitium*"}, rec: "rec.exp_dns", sev: model.RiskLow},
+	{id: "ntp", name: "NTP", class: ClassAmplifier, ports: []portRange{{"udp", 123, 123}}, procs: []string{"ntpd", "chronyd", "openntpd"},
+		rec: "rec.exp_ntp", sev: model.RiskMedium},
+	{id: "ssdp", name: "SSDP/UPnP", class: ClassAmplifier, ports: []portRange{{"udp", 1900, 1900}}, procs: []string{"minissdpd", "miniupnpd", "ssdpd"},
+		rec: "rec.exp_amplifier", sev: model.RiskMedium},
+	{id: "chargen", name: "chargen", class: ClassAmplifier, ports: []portRange{{"udp", 19, 19}}, rec: "rec.exp_amplifier", sev: model.RiskMedium},
+	{id: "cldap", name: "CLDAP", class: ClassAmplifier, ports: []portRange{{"udp", 389, 389}}, procs: []string{"slapd", "samba"},
+		rec: "rec.exp_amplifier", sev: model.RiskMedium},
+	{id: "wsd", name: "WS-Discovery", class: ClassAmplifier, ports: []portRange{{"udp", 3702, 3702}}, procs: []string{"wsdd", "wsdd2"},
+		rec: "rec.exp_amplifier", sev: model.RiskMedium},
 }
 
 // target — что известно о слушающем сокете для распознавания.

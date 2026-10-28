@@ -219,7 +219,7 @@ func auditRunner(cfg config.Config, hist *history.Store, log *slog.Logger) *audi
 	if !cfg.AuditEnabled {
 		return nil
 	}
-	return audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, Interval: cfg.AuditInterval, StateDir: cfg.DataDir,
+	return audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, StateDir: cfg.DataDir,
 		Record: hist.RecordAudit, Logger: log})
 }
 
@@ -430,7 +430,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	// файлы службы не трогаются.
 	var ar *audit.Runner
 	if cfg.AuditEnabled {
-		ar = audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Logger: quiet})
+		ar = audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Logger: quiet})
 	}
 	return tui.NewLocalSource(sc, ar, version, false, note)
 }
@@ -529,7 +529,7 @@ func runAudit(args []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot})
+	checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot})
 	host, _ := os.Hostname()
 	rep := &report.Audit{View: view.BuildAudit(true, false, 0, &model.AuditReport{Time: time.Now(), Checks: checks}), Hostname: host, Version: version, All: *all}
 	if err := report.Write(*output, func(w io.Writer) error { return rep.Render(w, f, i18n.Default()) }); err != nil {
@@ -587,7 +587,7 @@ func cmdDemo(args []string) error {
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
 		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true})
 	// Демо-файлы принадлежат текущему пользователю: он и считается root.
-	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Logger: log})
+	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Logger: log})
 	if *useTUI {
 		if !tui.IsTerminal() {
 			return i18n.Errorf("err.demo_tui_terminal")

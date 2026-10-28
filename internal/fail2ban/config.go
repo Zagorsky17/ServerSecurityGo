@@ -265,6 +265,17 @@ func (j jail) SSH() bool {
 	return strings.Contains(n, "ssh") || strings.HasPrefix(strings.ToLower(j.Filter), "sshd")
 }
 
+// SSHJail сообщает, есть ли включённый jail fail2ban для SSH (проверка
+// готовности в audit). Журналы при этом не читаются — только настройки.
+func SSHJail(hostRoot string) bool {
+	for _, j := range readJails(hostRoot).Jails {
+		if j.SSH() {
+			return true
+		}
+	}
+	return false
+}
+
 // readJails разбирает jail.conf и переопределения и возвращает
 // включённые jail. Секции DEFAULT и INCLUDES — служебные.
 func readJails(hostRoot string) jailConfig {

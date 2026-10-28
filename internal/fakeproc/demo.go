@@ -67,6 +67,16 @@ func Demo(now time.Time) *Tree {
 			"var/lib/docker/containers/" + stoppedID + "/config.v2.json": `{"ID":"` + stoppedID + `","Name":"/old","Config":{"Image":"redis:6"},` +
 				`"State":{"Running":false},"NetworkSettings":{"Ports":{"6379/tcp":[{"HostIp":"0.0.0.0","HostPort":"6380"}]}}}`,
 		},
+		// Параметры ядра для группы «Ядро» аудита: часть в порядке, часть
+		// со значениями по умолчанию, таблица conntrack маловата.
+		ProcFiles: map[string]string{
+			"sys/net/ipv4/tcp_syncookies":              "1\n",
+			"sys/net/ipv4/tcp_max_syn_backlog":         "512\n",
+			"sys/net/core/somaxconn":                   "4096\n",
+			"sys/net/ipv4/tcp_synack_retries":          "5\n",
+			"sys/net/ipv4/icmp_echo_ignore_broadcasts": "1\n",
+			"sys/net/netfilter/nf_conntrack_max":       "32768\n",
+		},
 		Addrs: []string{"127.0.0.1", "192.0.2.10", "10.0.0.5", "172.17.0.1", "::1", "2001:db8::10"},
 		HostModes: map[string]os.FileMode{"etc/shadow": 0o640, "etc/gshadow": 0o640, "etc/ssh/ssh_host_ed25519_key": 0o600,
 			"etc/sudoers": 0o440, "etc/sudoers.d/90-cloud-init-users": 0o440, "etc/sudoers.d/deploy": 0o440},

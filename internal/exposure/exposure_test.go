@@ -77,6 +77,10 @@ func TestRecognize(t *testing.T) {
 		{"слово elasticsearch в пути не делает процесс Elasticsearch", target{proto: "tcp", port: 9600, names: []string{"java"}, text: "/usr/share/logstash/jdk/bin/java -path.config /etc/elasticsearch/pipeline"}, "", "", false},
 		{"rabbit hint без порта не узнаётся", target{proto: "tcp", port: 25672, names: []string{"beam.smp"}, text: "/usr/lib/erlang/erts/bin/beam.smp -- -root /usr/lib/erlang -rabbit"}, "", "", false},
 		{"неизвестный сервис", target{proto: "tcp", port: 8443, names: []string{"myapp"}}, "", "", false},
+		{"DNS UDP", target{proto: "udp", port: 53, names: []string{"named"}}, "dns", "port+process", true},
+		{"DNS по TCP не усилитель", target{proto: "tcp", port: 53, names: []string{"named"}}, "", "", false},
+		{"NTP UDP", target{proto: "udp", port: 123, names: []string{"chronyd"}}, "ntp", "port+process", true},
+		{"WS-Discovery по одному порту", target{proto: "udp", port: 3702}, "wsd", "port", false},
 	}
 	for _, c := range cases {
 		svc, match, confident := recognize(c.t)
@@ -300,8 +304,15 @@ func TestUFW(t *testing.T) {
 			t.Errorf("%d/%s: %q, ожидалось %q", c.port, c.proto, got, c.want)
 		}
 	}
+	// Ограничение частоты: «limit» для 22/tcp есть, для 443 — нет.
+	if !u.RateLimited("tcp", 22) || u.RateLimited("tcp", 443) || u.RateLimited("udp", 22) {
+		t.Error("RateLimited: ожидалось ограничение только для 22/tcp")
+	}
 	// Политика ACCEPT: ufw ничего не закрывает — состояние неизвестно.
 	writeFiles(t, root, map[string]string{"etc/default/ufw": `DEFAULT_INPUT_POLICY="ACCEPT"` + "\n"})
+	if u := ReadUFW(root); u.RateLimited("tcp", 22) {
+		t.Error("RateLimited при политике ACCEPT: ufw частоту не ограничивает")
+	}
 	if u := ReadUFW(root); u.Info.DefaultInput != "ACCEPT" || u.PortState("tcp", 6379, Fam4) != "" {
 		t.Errorf("политика ACCEPT: %+v %q", u.Info, u.PortState("tcp", 6379, Fam4))
 	}

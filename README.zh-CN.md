@@ -192,7 +192,7 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 3. **进程树** —— 父子关系，可折叠分支，高亮匹配项。
 4. **网络** —— 套接字及其所属进程，可按协议、状态和外部地址过滤。
 5. **开放端口** —— 服务器监听了什么，以及从哪里可以访问；见[开放端口](#开放端口)。
-6. **审计结果** —— SSH、账户和 sudo 的审计；见[审计结果](#审计结果)。
+6. **审计结果** —— SSH、账户、sudo 和内核参数的审计；见[审计结果](#审计结果)。
 7. **历史** —— 进程启动和退出，exe、cmdline 或用户的变化，风险升高和降低，新指标，新的监听端口，系统发现，安全设置的变化。
 8. **系统** —— 服务器信息、扫描限制（权限、容器）、持久化检查和危险的开放端口。
 9. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
@@ -205,7 +205,7 @@ VPS 被入侵最常见的真实原因，是某个服务意外监听在 `0.0.0.0`
 
 - **可达范围**：*公网*（下列范围以外的任何地址，包括 `0.0.0.0` 和 `::`，即所有接口，旁边会列出服务器的公网地址）、*内网*（`10/8`、`172.16/12`、`192.168/16`、`100.64/10`、`fc00::/7`、链路本地地址）、*仅本机*（`127.0.0.0/8`、`::1`）或*容器内*（套接字位于自己的网络命名空间中，外部只能通过已发布的端口访问）；
 - 所属进程、用户和容器；对于 Docker，还有容器名称、镜像和端口映射；
-- 从内置表中**识别出的服务**：Redis、Docker API、MongoDB、Elasticsearch/OpenSearch、etcd、kubelet、Jupyter、memcached、PostgreSQL、MySQL/MariaDB、RabbitMQ、CouchDB、SMB、RDP、VNC、Telnet、FTP、rpcbind、NFS、SNMP、Prometheus exporter。服务根据端口和进程名（或容器镜像）识别；仅凭端口号匹配时等级降低一级，因为该端口上可能是别的程序；
+- 从内置表中**识别出的服务**：Redis、Docker API、MongoDB、Elasticsearch/OpenSearch、etcd、kubelet、Jupyter、memcached、PostgreSQL、MySQL/MariaDB、RabbitMQ、CouchDB、SMB、RDP、VNC、Telnet、FTP、rpcbind、NFS、SNMP、Prometheus exporter，以及被用于 DDoS 放大攻击的公网 UDP 服务（DNS、NTP、SSDP/UPnP、chargen、CLDAP、WS-Discovery）。服务根据端口和进程名（或容器镜像）识别；仅凭端口号匹配时等级降低一级，因为该端口上可能是别的程序；
 - 该端口的 **ufw** 状态：*开放*（有允许任意地址的规则）、*已阻止*（ufw 已启用，且未对所有人开放该端口）或*绕过 ufw*。
 
 等级表示服务可被访问的危险程度，而不是被入侵的迹象：可从互联网访问的 Redis 为 CRITICAL，PostgreSQL 为 HIGH，Prometheus exporter 为 LOW。如果 ufw 阻止了该端口，等级降为 LOW，并注明只有防火墙在保护该服务。每个危险的公网端口都会成为带有该等级的系统发现（显示在“系统”标签页、历史和日志中），并在占用该端口的进程卡片中成为 `exposure` 类别的指标。该指标不是“强”指标：单独出现时，合法进程的等级最高为 LOW。
@@ -227,6 +227,7 @@ VPS 被入侵最常见的真实原因，是某个服务意外监听在 `0.0.0.0`
 | SSH | `ssh_root_login`、`ssh_password_auth`、`ssh_empty_passwords`、`ssh_kbd_interactive`（即使 `PasswordAuthentication no`，也可通过 PAM 输入密码）、`ssh_max_auth_tries`、`ssh_x11_forwarding`、`ssh_tcp_forwarding`（`GatewayPorts`）、`ssh_weak_crypto`（CBC、3DES、RC4、MD5、SHA-1、DSA）、`ssh_authkeys_file`（非标准密钥文件或 `AuthorizedKeysCommand`）、`ssh_host_keys_perms`、`ssh_config_perms`，以及建议项 `ssh_allow_users`、`ssh_banner_version`、`ssh_port` |
 | 账户 | `acct_uid0_extra`、`acct_empty_password`、`acct_service_shell`、`acct_weak_hash`（MD5、DES）、`acct_new`、`acct_priv_groups`（`sudo`、`admin`、`wheel`、`docker`、`lxd`、`disk`、`adm`、`shadow`）、`acct_duplicate_ids`、`acct_passwd_perms`、`acct_home_perms`、`acct_root_path` |
 | sudo | `sudo_nopasswd_all`（对云镜像默认用户 `ubuntu`、`debian`、`admin` 等为 MEDIUM）、`sudo_no_auth`、`sudo_gtfobins`（`vim`、`less`、`find`、`systemctl` 等可轻易获得 root shell 的程序）、`sudo_wildcard`、`sudo_writable_cmd`、`sudo_env_keep`（`LD_PRELOAD`、`PYTHONPATH`、`!env_reset`）、`sudo_files_perms`、`sudo_changed` |
+| 内核 | 网络攻击准备情况：`net_syncookies`、`net_conntrack_max`（连接跟踪表被填满后内核会丢弃新连接）、`net_icmp_broadcast`（smurf 放大），以及建议项 `net_syn_backlog`、`net_somaxconn`、`net_synack_retries`、`fw_ssh_ratelimit`（SSH 端口的 `ufw limit` 规则或 fail2ban jail）。取值来自 `/proc/sys`；修复命令会把参数追加到 `/etc/sysctl.d/90-hardening.conf`。若未加载 conntrack 模块，则该检查为不适用 |
 
 sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每个键以第一个值为准，`Match` 块单独显示（“用户 X 允许密码登录”），缺失的键采用 OpenSSH 默认值。sudoers 解析支持 `@include`/`@includedir`（与 sudo 一样跳过文件名含点的文件）、别名、续行和 `Defaults`。
 
@@ -294,7 +295,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | 最近修改过的 `authorized_keys` | SSH 密钥最近被修改 | LOW（系统） |
 
 可用于白名单的完整规则 ID 列表：
-`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`。
+`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`、`exposed_amplifier`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`。
 
 ## 检测局限
 

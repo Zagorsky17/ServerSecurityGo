@@ -420,6 +420,8 @@ func AuditGroupText(g string) i18n.Msg {
 		return i18n.T("audit.group.accounts")
 	case model.AuditGroupSudo:
 		return i18n.T("audit.group.sudo")
+	case model.AuditGroupKernel:
+		return i18n.T("audit.group.kernel")
 	}
 	return i18n.L(g)
 }

@@ -213,6 +213,10 @@ func init() {
 		"rule.exposed_info_service.rec": {"Метрики и SNMP раскрывают версии ПО и устройство сервера: отдавайте их только системе мониторинга.",
 			"Metrics and SNMP reveal software versions and server layout: expose them only to the monitoring system."},
 
+		"rule.exposed_amplifier.title": {"Публичный UDP-сервис, которым усиливают DDoS: {0}", "Public UDP service abused for DDoS amplification: {0}"},
+		"rule.exposed_amplifier.rec": {"На запрос с подменённым адресом источника такой сервис отвечает пакетом в десятки раз больше, и поток летит в жертву: сервер становится участником атаки, а его канал — занятым. Оставьте сервис на 127.0.0.1 или в частной сети, а если он нужен снаружи — ограничьте адреса межсетевым экраном.",
+			"Such a service answers a request with a spoofed source address with a packet dozens of times larger, and the flood hits the victim: the server becomes part of the attack and its own link gets saturated. Keep the service on 127.0.0.1 or a private network; if it must be reachable, restrict addresses in the firewall."},
+
 		"rule.exposed.title_filtered": {"{0} слушает внешний адрес, от интернета закрыт только ufw", "{0} listens on an external address, only ufw blocks it from the internet"},
 
 		"rule.fw_docker_bypass.title": {"Порт контейнера открыт в обход ufw", "Container port is open despite ufw"},
