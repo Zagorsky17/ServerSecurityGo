@@ -110,7 +110,13 @@ type Socket struct {
 	Inode      uint64 `json:"inode"`
 	UID        int    `json:"uid"`
 	NetNS      string `json:"netns,omitempty"`
-	Path       string `json:"path,omitempty"` // путь Unix-сокета
+	// TxQueue, RxQueue — поле tx_queue:rx_queue из /proc/net/tcp. У
+	// слушающего сокета это backlog и текущая длина очереди accept
+	// (сколько соединений ждёт, пока приложение их примет), у
+	// остальных — байты в очередях отправки и приёма.
+	TxQueue uint64 `json:"txQueue,omitempty"`
+	RxQueue uint64 `json:"rxQueue,omitempty"`
+	Path    string `json:"path,omitempty"` // путь Unix-сокета
 	// Владелец сокета (заполняется при сопоставлении с fd процессов).
 	PID      int    `json:"pid,omitempty"`
 	ProcKey  string `json:"procKey,omitempty"`
@@ -229,6 +235,8 @@ type Stats struct {
 	// из них известные опасные сервисы (без подавленных allowlist).
 	PublicPorts    int `json:"publicPorts"`
 	DangerousPorts int `json:"dangerousPorts"`
+	// NetAlerts — сработавшие признаки сетевой нагрузки (netload).
+	NetAlerts int `json:"netAlerts"`
 }
 
 // Snapshot — результат одного сканирования.
@@ -242,6 +250,7 @@ type Snapshot struct {
 	System    []SystemFinding     `json:"system"`
 	Exposure  *ExposureReport     `json:"exposure,omitempty"`
 	Fail2ban  *Fail2banReport     `json:"fail2ban,omitempty"`
+	NetLoad   *NetLoadReport      `json:"netLoad,omitempty"`
 	Warnings  []i18n.Msg          `json:"warnings"`
 	Stats     Stats               `json:"stats"`
 	ByKey     map[string]*Process `json:"-"`
@@ -435,6 +444,116 @@ type Fail2banReport struct {
 	Bans24h      int              `json:"bans24h"`
 	Peak         Fail2banBucket   `json:"peak"` // час с наибольшим числом попыток
 	Warnings     []i18n.Msg       `json:"warnings,omitempty"`
+}
+
+// PortLoad — нагрузка на один слушающий порт сервера.
+type PortLoad struct {
+	Proto string `json:"proto"` // tcp или udp
+	Port  int    `json:"port"`
+	Addr  string `json:"addr,omitempty"`
+	// Процесс, который слушает порт (если известен).
+	PID      int    `json:"pid,omitempty"`
+	ProcName string `json:"procName,omitempty"`
+	ProcKey  string `json:"procKey,omitempty"`
+	// HalfOpen — полуоткрытые соединения (SYN_RECV и NEW_SYN_RECV):
+	// клиент начал рукопожатие и не ответил. При SYN-флуде их много.
+	HalfOpen    int `json:"halfOpen"`
+	Established int `json:"established"`
+	// AcceptQueue, Backlog — очередь принятия соединений и её предел:
+	// очередь у предела означает, что приложение не успевает принимать.
+	AcceptQueue int `json:"acceptQueue"`
+	Backlog     int `json:"backlog"`
+	// Sources — сколько разных удалённых адресов.
+	Sources int `json:"sources"`
+}
+
+// SourceLoad — один источник соединений: отдельный адрес или подсеть.
+type SourceLoad struct {
+	Addr string `json:"addr"` // IP или CIDR подсети
+	// Subnet — строка описывает подсеть (/24 для IPv4, /64 для IPv6).
+	Subnet bool `json:"subnet,omitempty"`
+	Conns  int  `json:"conns"`
+	// HalfOpen — из них полуоткрытых.
+	HalfOpen int `json:"halfOpen"`
+	// Addresses — сколько разных адресов в подсети.
+	Addresses int   `json:"addresses,omitempty"`
+	Ports     []int `json:"ports"`
+	// Trusted — адрес входит в SSG_NET_TRUSTED_NETS (CDN, прокси):
+	// источником флуда не считается.
+	Trusted bool `json:"trusted,omitempty"`
+	// Private — частная сеть: свой прокси или соседний контейнер.
+	Private bool `json:"private,omitempty"`
+}
+
+// NetLoadCounters — скорости счётчиков ядра (в секунду) и мгновенные
+// значения на момент замера.
+type NetLoadCounters struct {
+	// Скорости (в секунду).
+	CookiesSent     float64 `json:"cookiesSent"`
+	CookiesRecv     float64 `json:"cookiesRecv"`
+	CookiesFailed   float64 `json:"cookiesFailed"`
+	ListenOverflows float64 `json:"listenOverflows"`
+	ListenDrops     float64 `json:"listenDrops"`
+	ReqQFullDrop    float64 `json:"reqQFullDrop"`
+	BacklogDrop     float64 `json:"backlogDrop"`
+	AbortOnMemory   float64 `json:"abortOnMemory"`
+	PassiveOpens    float64 `json:"passiveOpens"`
+	AttemptFails    float64 `json:"attemptFails"`
+	RetransSegs     float64 `json:"retransSegs"`
+	UDPNoPorts      float64 `json:"udpNoPorts"`
+	UDPInErrors     float64 `json:"udpInErrors"`
+	UDPRcvbufErrors float64 `json:"udpRcvbufErrors"`
+	RxDrops         float64 `json:"rxDrops"`
+	SoftnetDropped  float64 `json:"softnetDropped"`
+	TimeSqueeze     float64 `json:"timeSqueeze"`
+	PPSIn           float64 `json:"ppsIn"`
+	PPSOut          float64 `json:"ppsOut"`
+	// Мгновенные значения.
+	CurrEstab   int `json:"currEstab"`
+	TCPInuse    int `json:"tcpInuse"`
+	TCPOrphan   int `json:"tcpOrphan"`
+	TCPTimeWait int `json:"tcpTimeWait"`
+	UDPInuse    int `json:"udpInuse"`
+	// Пределы ядра (/proc/sys): для процентов и рекомендаций.
+	MaxSynBacklog int `json:"maxSynBacklog"`
+	MaxOrphans    int `json:"maxOrphans"`
+	SomaxConn     int `json:"somaxconn"`
+	SynCookies    int `json:"synCookies"`
+	// Average — скорости посчитаны за время с загрузки (первый замер).
+	Average bool `json:"average,omitempty"`
+}
+
+// ConntrackInfo — таблица отслеживания соединений. nil в отчёте —
+// модуль conntrack не загружен (без firewall и Docker его нет).
+type ConntrackInfo struct {
+	Count   int     `json:"count"`
+	Max     int     `json:"max"`
+	Percent float64 `json:"percent"`
+	// Скорости потерь (в секунду): ядро уже теряет соединения.
+	Drop         float64 `json:"drop"`
+	EarlyDrop    float64 `json:"earlyDrop"`
+	InsertFailed float64 `json:"insertFailed"`
+}
+
+// NetLoadReport — сетевая нагрузка и признаки атаки. Только наблюдение:
+// приложение ничего не блокирует и не меняет правила firewall.
+type NetLoadReport struct {
+	Time       time.Time       `json:"time"`
+	Listen     []PortLoad      `json:"listen"`
+	TopSources []SourceLoad    `json:"topSources"`
+	Counters   NetLoadCounters `json:"counters"`
+	Conntrack  *ConntrackInfo  `json:"conntrack,omitempty"`
+	// Truncated — таблица сокетов больше SSG_NET_MAX_SOCKETS: показаны
+	// не все соединения, числа занижены.
+	Truncated bool `json:"truncated,omitempty"`
+	Dropped   int  `json:"dropped,omitempty"`
+	// Active — ID сработавших признаков (net_*).
+	Active []string `json:"active"`
+	// Baseline — есть ли база «как обычно» (метрик меньше шести часов —
+	// относительные пороги не применяются).
+	Baseline bool `json:"baseline"`
+	// TrustedNets — заданные владельцем доверенные сети.
+	TrustedNets []string `json:"trustedNets,omitempty"`
 }
 
 // Статусы проверки аудита конфигурации.

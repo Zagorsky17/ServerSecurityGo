@@ -25,6 +25,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
   - [Audit results](#audit-results)
   - [fail2ban](#fail2ban)
   - [Server metrics](#server-metrics)
+  - [Network load and signs of a DDoS](#network-load-and-signs-of-a-ddos)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
 - [Detection limitations](#detection-limitations)
@@ -115,7 +116,7 @@ serversecuritygo
 ↑↓ выбор  1-8/Tab панели  Enter подробности  / фильтр  r сканировать  y копировать  ? помощь  q выход
 ```
 
-On the left are nine panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, audit results, history, system checks and server metrics. If fail2ban is installed, another panel, fail2ban, appears before history, and the panels after it are renumbered; if metrics collection is off, there is no metrics panel. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
+On the left are ten panels: summary, suspicious processes, all processes (as a list or a tree), network connections, open ports, audit results, history, system checks, server metrics and network load. If fail2ban is installed, another panel, fail2ban, appears before history, and the panels after it are renumbered; if metrics collection is off, there are no metrics and network load panels. Panels numbered above ten are reached with `Tab`. On the right are the details of the selected item: the risk score with its explanation, indicators with facts, recommendations, the command line, the launch chain, sockets, open files and the process history. `L` switches the interface language between English and Russian.
 
 | Keys | Action |
 |---|---|
@@ -199,7 +200,8 @@ The **terminal UI** is described [above](#terminal-ui). **Web dashboard** (light
 7. **History** — process start and exit, changes of exe, cmdline or user, risk increases and decreases, new indicators, new listening ports, system findings, security setting changes.
 8. **System** — server details, scanning limitations (privileges, container), persistence checks and dangerous open ports.
 9. **Metrics** — CPU and steal, load, PSI, memory, disks and network with charts for the hour, the day and 30 days; see [Server metrics](#server-metrics).
-10. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
+10. **Network load** — half-open connections per port, connection sources, kernel counters and attack findings; see [Network load and signs of a DDoS](#network-load-and-signs-of-a-ddos).
+11. **Process card** — all collected data, the score explanation, facts behind every indicator, recommendations, the ancestor chain, children, sockets, open files and the process history. You can copy the command line and the card as JSON, and link directly to a card (`#p=<key>`).
 
 The dashboard refreshes automatically every 5 to 60 seconds, or not at all. Auto-refresh pauses while a process card is open.
 
@@ -288,6 +290,41 @@ Metrics **do not affect** process risk: an overloaded server is a question of VP
 
 A finding appears only after the condition holds (10–15 minutes) and is cleared as soon as it is gone: a single spike is not an alarm. That is why a one-off `serversecuritygo scan` reports only `disk_almost_full` out of these: the rest need the running service that samples metrics continuously.
 
+### Network load and signs of a DDoS
+
+The **Network load** tab (panel `11` in the terminal UI, `GET /api/netload`) answers the question "the server is not responding — is this an attack or the application?". The section appears together with metrics (`SSG_METRICS_ENABLED=true`): the same goroutine samples the kernel counters.
+
+**Boundaries.** The application only observes: it does not block addresses, does not change firewall rules and creates no load. There is no load testing in it: sending a flood of requests would make it an attack tool. And most importantly — **a volumetric attack that saturates the link to the server is not visible from inside at all**: the server only sees what reached it. Such an attack is stopped by the provider or a CDN, and the application says so plainly instead of promising "protection".
+
+What you see:
+
+- **ports**: half-open connections (`SYN_RECV`, `NEW_SYN_RECV` — a handshake started and never finished), established connections, the accept queue and its limit (the `backlog` from `tx_queue:rx_queue` of the listening socket), the number of distinct addresses and the owning process;
+- **sources**: individual addresses and subnets (/24 for IPv4, /64 for IPv6) with connection, half-open and address counts; trusted and private networks are marked;
+- **kernel counters** per second: SYN cookies, listen socket drops, receive drops, UDP errors, retransmits, packets, established connections, orphaned sockets and conntrack table usage. The same counters go into the metric series (`net_syn_rate`, `net_listen_drops`, `net_conntrack`, `net_rx_drops`, `net_udp_errors`, `net_estab`, `net_orphan`, `net_retrans`) and appear on the hour, day and 30-day charts.
+
+The data comes from `/proc` only: `net/netstat`, `net/snmp`, `net/sockstat`, `net/softnet_stat`, `net/stat/nf_conntrack`, `net/dev`, `sys/net/*` and the `net/tcp`, `net/tcp6` tables. There are no external IP reputation databases and never will be (the autonomy rule).
+
+| ID | Level | When |
+|---|---|---|
+| `net_syn_flood` | MEDIUM; HIGH at half-open ≥ 90% of backlog or dropped SYNs | SYN cookies > 50/s for over 30 s **or** ≥ 256 half-open and ≥ 50% of backlog on a port (two consecutive scans) |
+| `net_listen_overflow` | MEDIUM | `ListenOverflows`/`ListenDrops` > 10/s for over a minute **or** the accept queue ≥ 90% of backlog: the application is not accepting connections fast enough — an attack or too few workers |
+| `net_conn_flood_ip` | LOW; MEDIUM above 5 × the threshold | one address holds more than `SSG_NET_CONN_PER_IP` (200) connections, two consecutive scans |
+| `net_conn_flood_subnet` | MEDIUM | one subnet holds more than 4 × the threshold from ≥ 20 distinct addresses |
+| `net_conn_surge` | LOW | incoming connections ≥ 1000 and ≥ `SSG_NET_SURGE_FACTOR` × usual (needs six hours of baseline) |
+| `net_conntrack_full` | MEDIUM; HIGH at ≥ 95% or on losses | the conntrack table is ≥ 80% full for over a minute: the kernel starts dropping new connections |
+| `net_orphans_high` | LOW | orphaned sockets ≥ 50% of `tcp_max_orphans`, or `TCPAbortOnMemory` is growing |
+| `net_udp_flood` | MEDIUM / LOW | `RcvbufErrors` > 100/s (the application cannot read UDP fast enough) or `NoPorts` > 1000/s (a flood to closed ports) |
+| `net_rx_drops` | MEDIUM | receive drops > 1000/s: the kernel or the network card cannot keep up |
+| `net_pps_surge` | LOW | incoming packets ≥ 50,000/s and ≥ `SSG_NET_SURGE_FACTOR` × usual |
+| `net_ddos_suspected` | HIGH | findings from at least **two groups** fired (SYN, connections, kernel, UDP) — a single symptom also appears with a surge of real visitors |
+| `net_table_truncated` | INFO | more connections than `SSG_NET_MAX_SOCKETS`: the numbers in the section are understated |
+
+**Holding and hysteresis.** A finding appears only if the condition holds for 30–120 seconds (or two consecutive scans for the connection-based ones), and is cleared after five minutes without exceeding. A single spike is not an alarm, and during an attack the finding does not flicker and does not flood the history with events.
+
+**False positives.** For a site behind a CDN every visitor arrives from the CDN's addresses — put its ranges into `SSG_NET_TRUSTED_NETS` and they will no longer count as flood sources (the table marks them as trusted). For private networks and for subnets the threshold is automatically four times higher. Outgoing connections of the server never become sources, nor do connections to itself. Relative thresholds ("N times the usual") do not apply until there are six hours of metrics. Any finding can be suppressed by an allowlist rule with its ID.
+
+**Protecting the scanner itself.** During an attack `/proc/net/tcp` grows to hundreds of thousands of lines, so the number of sockets per network namespace is capped by `SSG_NET_MAX_SOCKETS` (100,000, about 200 bytes per socket); beyond the cap sockets are skipped and `net_table_truncated` appears. The per-address aggregates are size-capped too.
+
 ## How risk is scored
 
 Each rule produces an **indicator**: a set of facts saying what was read and where, for example `/proc/3101/exe → /dev/shm/.x/kworkerds`. An indicator by itself makes no claim about maliciousness. It has a weight, a category, and a "strong" flag if it is rarely legitimate on its own.
@@ -326,7 +363,7 @@ All examples are included in the demo data (`serversecuritygo demo`) and in the 
 | Recently modified `authorized_keys` | recent SSH key change | LOW (system) |
 
 Full list of rule IDs for the allowlist:
-`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`, `exposed_database`, `exposed_docker_api`, `exposed_admin_panel`, `exposed_remote_access`, `exposed_file_sharing`, `exposed_info_service`, `exposed_amplifier`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`, `fw_docker_bypass`, the `exposed_*` IDs above for dangerous public ports, `fail2ban_not_running`, `fail2ban_sshd_disabled`, `fail2ban_log_unavailable`, `steal_high`, `disk_almost_full`, `load_high`, `memory_pressure`, `oom_recent`.
+`exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`, `exposed_database`, `exposed_docker_api`, `exposed_admin_panel`, `exposed_remote_access`, `exposed_file_sharing`, `exposed_info_service`, `exposed_amplifier`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`, `fw_docker_bypass`, the `exposed_*` IDs above for dangerous public ports, `fail2ban_not_running`, `fail2ban_sshd_disabled`, `fail2ban_log_unavailable`, `steal_high`, `disk_almost_full`, `load_high`, `memory_pressure`, `oom_recent`, `net_syn_flood`, `net_listen_overflow`, `net_conn_flood_ip`, `net_conn_flood_subnet`, `net_conn_surge`, `net_conntrack_full`, `net_orphans_high`, `net_udp_flood`, `net_rx_drops`, `net_pps_surge`, `net_ddos_suspected`, `net_table_truncated`.
 
 ## Detection limitations
 
@@ -380,6 +417,10 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 | `SSG_METRICS_RETENTION` | `720h` | how long 15-minute metric aggregates are kept |
 | `SSG_STEAL_THRESHOLD` | `10` | steal threshold, %, for the `steal_high` finding |
 | `SSG_DISK_FULL_THRESHOLD` | `90` | partition usage threshold, %, for `disk_almost_full` |
+| `SSG_NET_CONN_PER_IP` | `200` | connections from one address for `net_conn_flood_ip` |
+| `SSG_NET_SURGE_FACTOR` | `5` | how many times the usual counts as a surge |
+| `SSG_NET_TRUSTED_NETS` | — | trusted networks (CDN, proxy): never counted as flood sources |
+| `SSG_NET_MAX_SOCKETS` | `100000` | socket limit per network namespace |
 
 After editing `.env`, run `systemctl restart serversecuritygo`.
 
@@ -571,6 +612,7 @@ internal/
   detect/                 rules, risk scoring, explanations, allowlist, system checks
   exposure/               open ports: reachability, dangerous services, ufw, published Docker ports
   audit/                  security settings audit: sshd_config, accounts, sudoers; background runner
+  netload/                network load: half-open connections per port, sources, /proc/net counters, attack findings with holding
   metrics/                server metrics: CPU and steal, load, PSI, memory, partitions, disks, network; ring buffers and metrics.json
   fail2ban/               fail2ban: jail configuration, log parsing (incl. .gz), current bans, brute-force statistics
   report/                 scan and audit reports: text, JSON, HTML, Markdown; exit codes
@@ -592,7 +634,7 @@ allowlist.example.json    allowlist example
 .github/workflows/        CI and releases
 ```
 
-API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/audit`, `/api/fail2ban`, `/api/metrics?range=1h|24h|30d`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` and `POST /api/audit/run` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
+API (JSON, for automation; text fields are described in [Language](#language)): `GET /api/status`, `/api/processes`, `/api/process/{key}`, `/api/tree`, `/api/connections`, `/api/exposure`, `/api/audit`, `/api/fail2ban`, `/api/metrics?range=1h|24h|30d`, `/api/netload`, `/api/events?limit=N`, `/api/system`, `POST /api/rescan` and `POST /api/audit/run` (with the `X-CSRF-Token` header from `/api/status`), `GET /healthz`.
 
 ## Security
 

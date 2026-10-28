@@ -15,6 +15,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 )
 
 // Summary — облегчённое представление процесса для таблиц.
@@ -202,6 +203,9 @@ type Status struct {
 	// Metrics — сводка метрик сервера; nil — сбор выключен
 	// (SSG_METRICS_ENABLED=false) или служба старой версии.
 	Metrics *metrics.Brief `json:"metrics,omitempty"`
+	// Net — сводка сетевой нагрузки; nil — наблюдение выключено или
+	// служба старой версии.
+	Net *NetBrief `json:"net,omitempty"`
 }
 
 // Fail2banBrief — счётчики fail2ban для заголовка интерфейса.
@@ -233,6 +237,22 @@ func BuildStatus(st Status, snap *model.Snapshot) Status {
 	}
 	if f := snap.Fail2ban; f != nil && f.Installed {
 		st.Fail2ban = &Fail2banBrief{Installed: true, Running: f.Running, LogAvailable: f.LogAvailable, Banned: len(f.Bans), Found24h: f.Found24h, Bans24h: f.Bans24h}
+	}
+	if n := snap.NetLoad; n != nil {
+		b := &NetBrief{Alerts: len(n.Active), Truncated: n.Truncated}
+		for _, id := range n.Active {
+			if id == netload.IDSuspected {
+				b.Suspected = true
+			}
+		}
+		for _, p := range n.Listen {
+			b.HalfOpen += p.HalfOpen
+			b.Conns += p.Established
+		}
+		if n.Conntrack != nil {
+			b.Conntrack = n.Conntrack.Percent
+		}
+		st.Net = b
 	}
 	return st
 }
@@ -290,6 +310,50 @@ func Exposure(snap *model.Snapshot) *model.ExposureReport {
 		r.Bindings = []model.PortBinding{}
 	}
 	return &r
+}
+
+// NetLoadView — вкладка «Сетевая нагрузка»: отчёт с пустыми списками
+// вместо nil и признак того, что наблюдение включено.
+type NetLoadView struct {
+	Enabled bool `json:"enabled"`
+	Ready   bool `json:"ready"`
+	*model.NetLoadReport
+}
+
+// NetLoad готовит отчёт для API и терминала.
+func NetLoad(rep *model.NetLoadReport, enabled bool) NetLoadView {
+	v := NetLoadView{Enabled: enabled}
+	if rep == nil {
+		v.NetLoadReport = &model.NetLoadReport{Listen: []model.PortLoad{}, TopSources: []model.SourceLoad{}, Active: []string{}}
+		return v
+	}
+	r := *rep
+	if r.Listen == nil {
+		r.Listen = []model.PortLoad{}
+	}
+	if r.TopSources == nil {
+		r.TopSources = []model.SourceLoad{}
+	}
+	if r.Active == nil {
+		r.Active = []string{}
+	}
+	v.Ready, v.NetLoadReport = true, &r
+	return v
+}
+
+// NetBrief — сводка сетевой нагрузки для шапки интерфейса.
+type NetBrief struct {
+	// Alerts — сработавшие признаки (net_*).
+	Alerts int `json:"alerts"`
+	// Suspected — сработал сводный признак net_ddos_suspected.
+	Suspected bool `json:"suspected"`
+	// HalfOpen — полуоткрытых соединений всего, Conns — входящих.
+	HalfOpen int `json:"halfOpen"`
+	Conns    int `json:"conns"`
+	// Conntrack — заполненность таблицы conntrack, % (0 — модуля нет).
+	Conntrack float64 `json:"conntrack,omitempty"`
+	// Truncated — таблица сокетов усечена: числа занижены.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // AuditCounts — число проверок по статусам.

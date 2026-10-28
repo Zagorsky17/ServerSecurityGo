@@ -25,6 +25,7 @@
   - [审计结果](#审计结果)
   - [fail2ban](#fail2ban)
   - [服务器指标](#服务器指标)
+  - [网络负载与 DDoS 迹象](#网络负载与-ddos-迹象)
 - [风险评分方式](#风险评分方式)
 - [可检测的异常示例](#可检测的异常示例)
 - [检测局限](#检测局限)
@@ -115,7 +116,7 @@ serversecuritygo
 ↑↓ select  1-8/Tab panels  Enter details  / filter  r scan  y copy  L русский  ? help  q quit
 ```
 
-左侧有九个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、审计结果、历史、系统检查和服务器指标。如果安装了 fail2ban，会在历史之前再出现一个面板 fail2ban，其后面板的编号随之顺延；若关闭了指标采集，则没有指标面板。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
+左侧有十个面板：概要、可疑进程、所有进程（列表或树形）、网络连接、开放端口、审计结果、历史、系统检查、服务器指标和网络负载。如果安装了 fail2ban，会在历史之前再出现一个面板 fail2ban，其后面板的编号随之顺延；若关闭了指标采集，则没有指标和网络负载面板。编号超过十的面板用 `Tab` 切换。右侧显示所选条目的详细信息：风险评分及其解释、带事实依据的指标、建议、命令行、启动链、套接字、打开的文件以及进程历史。按 `L` 可在英文和俄文之间切换界面语言。
 
 | 按键 | 作用 |
 |---|---|
@@ -199,7 +200,8 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 7. **历史** —— 进程启动和退出，exe、cmdline 或用户的变化，风险升高和降低，新指标，新的监听端口，系统发现，安全设置的变化。
 8. **系统** —— 服务器信息、扫描限制（权限、容器）、持久化检查和危险的开放端口。
 9. **指标** —— CPU 与 steal、负载、PSI、内存、磁盘和网络，附 1 小时、24 小时和 30 天的图表；见[服务器指标](#服务器指标)。
-10. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
+10. **网络负载** —— 按端口的半开连接、连接来源、内核计数器和攻击发现；见[网络负载与 DDoS 迹象](#网络负载与-ddos-迹象)。
+11. **进程卡片** —— 收集到的所有数据、评分解释、每个指标背后的事实、建议、祖先链、子进程、套接字、打开的文件和进程历史。可以复制命令行和 JSON 格式的卡片，也可以直接链接到某张卡片（`#p=<key>`）。
 
 面板每 5 到 60 秒自动刷新一次，也可以关闭自动刷新。打开进程卡片时自动刷新会暂停。
 
@@ -288,6 +290,41 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 发现只在条件持续（10–15 分钟）后出现，一旦条件消失立即撤销：单个尖峰不算告警。因此一次性的 `serversecuritygo scan` 只能看到其中的 `disk_almost_full`：其余发现需要持续采集指标的常驻服务。
 
+### 网络负载与 DDoS 迹象
+
+**网络负载**标签页（终端界面中的面板 `11`、`GET /api/netload`）回答“服务器没有响应——是攻击还是应用本身？”这个问题。该板块与指标一同出现（`SSG_METRICS_ENABLED=true`）：内核计数器由同一个 goroutine 采集。
+
+**边界。** 应用只做观察：不封禁地址、不修改防火墙规则、也不制造负载。它不含压力测试功能：发送请求洪流就等于做出攻击工具。更重要的是——**占满服务器上行链路的流量型攻击在服务器内部完全看不到**：服务器只能看到已经到达的部分。这类攻击只能由主机商或 CDN 拦截，应用会直接说明这一点，而不是承诺“防护”。
+
+可以看到：
+
+- **端口**：半开连接（`SYN_RECV`、`NEW_SYN_RECV`，即已开始但未完成的握手）、已建立连接、accept 队列及其上限（来自监听套接字 `tx_queue:rx_queue` 的 `backlog`）、不同地址的数量以及所属进程；
+- **来源**：单个地址和子网（IPv4 为 /24，IPv6 为 /64），含连接数、半开数和地址数；受信网络与私有网络会被标注；
+- **内核计数器**（每秒）：SYN cookies、监听套接字丢弃、接收丢弃、UDP 错误、重传、数据包、已建立连接、无主套接字以及 conntrack 表占用率。同样的计数器会进入指标序列（`net_syn_rate`、`net_listen_drops`、`net_conntrack`、`net_rx_drops`、`net_udp_errors`、`net_estab`、`net_orphan`、`net_retrans`），可在 1 小时、24 小时和 30 天的图表中查看。
+
+数据仅来自 `/proc`：`net/netstat`、`net/snmp`、`net/sockstat`、`net/softnet_stat`、`net/stat/nf_conntrack`、`net/dev`、`sys/net/*` 以及 `net/tcp`、`net/tcp6` 表。没有也不会有外部 IP 信誉库（自治原则）。
+
+| ID | 等级 | 条件 |
+|---|---|---|
+| `net_syn_flood` | MEDIUM；半开数 ≥ backlog 的 90 % 或 SYN 被丢弃时为 HIGH | SYN cookies > 50/秒且持续超过 30 秒，**或**某端口半开数 ≥ 256 且 ≥ backlog 的 50 %（连续两次扫描） |
+| `net_listen_overflow` | MEDIUM | `ListenOverflows`/`ListenDrops` > 10/秒且持续超过一分钟，**或** accept 队列 ≥ backlog 的 90 %：应用来不及接受连接——可能是攻击，也可能是工作进程不足 |
+| `net_conn_flood_ip` | LOW；超过阈值 5 倍时为 MEDIUM | 单个地址的连接数超过 `SSG_NET_CONN_PER_IP`（200），连续两次扫描 |
+| `net_conn_flood_subnet` | MEDIUM | 单个子网的连接数超过阈值的 4 倍，且来自 ≥ 20 个不同地址 |
+| `net_conn_surge` | LOW | 入站连接 ≥ 1000 且 ≥ `SSG_NET_SURGE_FACTOR` × 常态（需要六小时基线） |
+| `net_conntrack_full` | MEDIUM；≥ 95 % 或出现丢失时为 HIGH | conntrack 表占用 ≥ 80 % 且持续超过一分钟：内核开始丢弃新连接 |
+| `net_orphans_high` | LOW | 无主套接字 ≥ `tcp_max_orphans` 的 50 %，或 `TCPAbortOnMemory` 在增长 |
+| `net_udp_flood` | MEDIUM / LOW | `RcvbufErrors` > 100/秒（应用来不及读取 UDP）或 `NoPorts` > 1000/秒（流量打向关闭的端口） |
+| `net_rx_drops` | MEDIUM | 接收丢弃 > 1000/秒：内核或网卡处理不过来 |
+| `net_pps_surge` | LOW | 入站数据包 ≥ 50 000/秒且 ≥ `SSG_NET_SURGE_FACTOR` × 常态 |
+| `net_ddos_suspected` | HIGH | 至少**两组**发现同时触发（SYN、连接、内核、UDP）——单一症状在真实访客激增时也会出现 |
+| `net_table_truncated` | INFO | 连接数超过 `SSG_NET_MAX_SOCKETS`：本板块中的数字被低估 |
+
+**持续与回差。** 发现只在条件持续 30–120 秒（基于连接的发现为连续两次扫描）后出现，并在不再超限五分钟后撤销。单个尖峰不算告警；攻击期间发现不会反复闪烁，也不会把历史刷满事件。
+
+**误报。** 对于 CDN 后面的站点，所有访客都来自 CDN 的地址——把这些网段写入 `SSG_NET_TRUSTED_NETS`，它们就不再被视为洪流来源（表格中标为受信）。私有网络和子网的阈值会自动提高到四倍。服务器的出站连接不会计入来源，与自身的连接同样不计。在指标不足六小时之前，相对阈值（“常态的 N 倍”）不生效。任何发现都可以用其 ID 通过白名单规则抑制。
+
+**保护扫描器自身。** 攻击期间 `/proc/net/tcp` 会增长到数十万行，因此每个网络命名空间的套接字数量受 `SSG_NET_MAX_SOCKETS` 限制（100 000，每个套接字约 200 字节）；超出部分会被跳过，并出现 `net_table_truncated`。按地址聚合的数据同样有大小上限。
+
 ## 风险评分方式
 
 每条规则产生一个**指标**：一组说明读取了什么、从哪里读取的事实，例如 `/proc/3101/exe → /dev/shm/.x/kworkerds`。单个指标本身并不断定是否恶意。它有权重、类别，如果它单独出现时很少是合法的，还会带有“强”标记。
@@ -326,7 +363,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | 最近修改过的 `authorized_keys` | SSH 密钥最近被修改 | LOW（系统） |
 
 可用于白名单的完整规则 ID 列表：
-`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`、`exposed_amplifier`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`、`steal_high`、`disk_almost_full`、`load_high`、`memory_pressure`、`oom_recent`。
+`exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`、`exposed_amplifier`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`、`steal_high`、`disk_almost_full`、`load_high`、`memory_pressure`、`oom_recent`、`net_syn_flood`、`net_listen_overflow`、`net_conn_flood_ip`、`net_conn_flood_subnet`、`net_conn_surge`、`net_conntrack_full`、`net_orphans_high`、`net_udp_flood`、`net_rx_drops`、`net_pps_surge`、`net_ddos_suspected`、`net_table_truncated`。
 
 ## 检测局限
 
@@ -380,6 +417,10 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | `SSG_METRICS_RETENTION` | `720h` | 15 分钟聚合指标的保留时长 |
 | `SSG_STEAL_THRESHOLD` | `10` | `steal_high` 发现的 steal 阈值（%） |
 | `SSG_DISK_FULL_THRESHOLD` | `90` | `disk_almost_full` 的分区占用阈值（%） |
+| `SSG_NET_CONN_PER_IP` | `200` | `net_conn_flood_ip` 的单地址连接数 |
+| `SSG_NET_SURGE_FACTOR` | `5` | 超过常态多少倍算作激增 |
+| `SSG_NET_TRUSTED_NETS` | — | 受信网络（CDN、代理）：不计为洪流来源 |
+| `SSG_NET_MAX_SOCKETS` | `100000` | 每个网络命名空间的套接字上限 |
 
 修改 `.env` 后，执行 `systemctl restart serversecuritygo`。
 
@@ -571,6 +612,7 @@ internal/
   detect/                 规则、风险评分、解释、白名单、系统检查
   exposure/               开放端口：可达范围、危险服务、ufw、Docker 发布的端口
   audit/                  安全设置审计：sshd_config、账户、sudoers；后台运行
+  netload/                网络负载：按端口的半开连接、来源、/proc/net 计数器、带持续判定的攻击发现
   metrics/                服务器指标：CPU 与 steal、负载、PSI、内存、分区、磁盘、网络；环形缓冲与 metrics.json
   fail2ban/               fail2ban：jail 配置、日志解析（含 .gz）、当前封禁、暴力破解统计
   report/                 scan 和 audit 报告：文本、JSON、HTML、Markdown；退出码
@@ -592,7 +634,7 @@ allowlist.example.json    白名单示例
 .github/workflows/        CI 和发布
 ```
 
-API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/audit`、`/api/fail2ban`、`/api/metrics?range=1h|24h|30d`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan` 和 `POST /api/audit/run`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
+API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`GET /api/status`、`/api/processes`、`/api/process/{key}`、`/api/tree`、`/api/connections`、`/api/exposure`、`/api/audit`、`/api/fail2ban`、`/api/metrics?range=1h|24h|30d`、`/api/netload`、`/api/events?limit=N`、`/api/system`、`POST /api/rescan` 和 `POST /api/audit/run`（需带上来自 `/api/status` 的 `X-CSRF-Token` 请求头）、`GET /healthz`。
 
 ## 安全
 

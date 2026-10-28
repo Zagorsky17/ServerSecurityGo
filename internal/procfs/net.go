@@ -19,13 +19,25 @@ var tcpStates = map[string]string{
 	"09": "LAST_ACK", "0A": "LISTEN", "0B": "CLOSING", "0C": "NEW_SYN_RECV",
 }
 
+// DefaultMaxSockets — предел числа сокетов, которые читаются из таблиц
+// одного пространства имён. Во время SYN-флуда /proc/net/tcp
+// разрастается до сотен тысяч строк, и без предела снимок занял бы
+// сотни мегабайт. Сверх предела строки пропускаются, а их число
+// возвращается: интерфейсы пишут «таблица усечена».
+const DefaultMaxSockets = 100_000
+
 // ReadNetTables читает таблицы сокетов сетевого пространства имён,
 // в котором находится процесс pid (через /proc/PID/net/*). Если pid = 0,
 // читаются /proc/net/* — пространство имён самого сканера.
-func (f *FS) ReadNetTables(pid int, netns string) []model.Socket {
+// dropped — сколько сокетов не вошло в предел MaxSockets.
+func (f *FS) ReadNetTables(pid int, netns string) (socks []model.Socket, dropped int) {
 	base := f.path("net")
 	if pid > 0 {
 		base = f.path(strconv.Itoa(pid), "net")
+	}
+	limit := f.MaxSockets
+	if limit <= 0 {
+		limit = DefaultMaxSockets
 	}
 	var out []model.Socket
 	for _, proto := range []string{"tcp", "tcp6", "udp", "udp6"} {
@@ -33,12 +45,17 @@ func (f *FS) ReadNetTables(pid int, netns string) []model.Socket {
 		if err != nil {
 			continue
 		}
-		out = append(out, ParseNetTable(string(data), proto, netns)...)
+		t := ParseNetTable(string(data), proto, netns)
+		if n := limit - len(out); len(t) > n {
+			dropped += len(t) - max(n, 0)
+			t = t[:max(n, 0)]
+		}
+		out = append(out, t...)
 	}
 	if data, err := os.ReadFile(base + "/unix"); err == nil {
 		out = append(out, ParseUnixTable(string(data), netns)...)
 	}
-	return out
+	return out, dropped
 }
 
 // ParseNetTable разбирает /proc/net/{tcp,tcp6,udp,udp6}.
@@ -63,6 +80,13 @@ func ParseNetTable(data, proto, netns string) []model.Socket {
 		}
 		uid, _ := strconv.Atoi(f[7])
 		inode, _ := strconv.ParseUint(f[9], 10, 64)
+		// tx_queue:rx_queue — шестнадцатеричные. У слушающего сокета это
+		// предел очереди accept и её текущая длина.
+		var txq, rxq uint64
+		if tx, rx, ok := strings.Cut(f[4], ":"); ok {
+			txq, _ = strconv.ParseUint(tx, 16, 64)
+			rxq, _ = strconv.ParseUint(rx, 16, 64)
+		}
 		state := tcpStates[strings.ToUpper(f[3])]
 		if strings.HasPrefix(proto, "udp") {
 			// У UDP «07» означает несоединённый сокет, «01» — connect().
@@ -75,7 +99,7 @@ func ParseNetTable(data, proto, netns string) []model.Socket {
 		}
 		out = append(out, model.Socket{
 			Proto: proto, LocalAddr: la, LocalPort: lp, RemoteAddr: ra, RemotePort: rp,
-			State: state, UID: uid, Inode: inode, NetNS: netns,
+			State: state, UID: uid, Inode: inode, NetNS: netns, TxQueue: txq, RxQueue: rxq,
 		})
 	}
 	return out

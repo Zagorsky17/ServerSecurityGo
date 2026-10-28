@@ -24,6 +24,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
@@ -768,6 +769,100 @@ func TestMetricsAPI(t *testing.T) {
 		t.Errorf("сводка метрик: %v %+v", err, st.Metrics)
 	}
 	if w := do(sm, "POST", "/api/metrics", "127.0.0.1:8090", "", map[string]string{"X-CSRF-Token": sm.noAuthCSRF}); w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST: %d", w.Code)
+	}
+}
+
+// TestNetLoadAPI: без наблюдения раздел выключен, со наблюдением
+// отдаются порты, источники и счётчики, а признаки попадают в систему.
+func TestNetLoadAPI(t *testing.T) {
+	s := newTestServer(t, "")
+	w := do(s, "GET", "/api/netload", "127.0.0.1:8090", "", nil)
+	var off view.NetLoadView
+	if err := json.Unmarshal(w.Body.Bytes(), &off); err != nil || off.Enabled {
+		t.Fatalf("выключенное наблюдение: %v %+v", err, off)
+	}
+	var st view.Status
+	ws := do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil)
+	if err := json.Unmarshal(ws.Body.Bytes(), &st); err != nil || st.Net != nil {
+		t.Errorf("сводка без наблюдения: %v %+v", err, st.Net)
+	}
+
+	tree := fakeproc.Demo(time.Now())
+	procRoot, hostRoot, err := tree.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mc := metrics.New(metrics.Options{ProcRoot: procRoot, HostRoot: hostRoot, Interval: time.Second,
+		DiskUsage: fakeproc.DemoUsage, Logger: log})
+	nl := netload.New(netload.Options{ProcRoot: procRoot, Config: netload.Config{ConnPerIP: 200, SurgeFactor: 5,
+		Trusted: fakeproc.DemoTrustedNets(), TrustedRaw: fakeproc.DemoTrustedRaw()}, Baseline: mc.Median})
+	mc.SetExtra(nl)
+	if _, err := mc.Collect(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	hist, _ := history.Open(history.Options{})
+	fs := fakeproc.NewFS(procRoot, hostRoot)
+	sc := scanner.New(scanner.Options{FS: fs, Detect: detect.DefaultConfig(), History: hist, Logger: log, Metrics: mc, NetLoad: nl})
+	// Два сканирования: признаки по соединениям требуют двух подряд.
+	for range 2 {
+		if _, err := sc.ScanOnce(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sn := New(Options{Scanner: sc, Logger: log, Version: "test", ListenAddr: "127.0.0.1:8090", Metrics: mc, NetLoad: nl})
+	w = do(sn, "GET", "/api/netload", "127.0.0.1:8090", "", nil)
+	if w.Code != 200 {
+		t.Fatalf("код %d: %s", w.Code, w.Body)
+	}
+	var nv view.NetLoadView
+	if err := json.Unmarshal(w.Body.Bytes(), &nv); err != nil {
+		t.Fatal(err)
+	}
+	if !nv.Enabled || !nv.Ready || nv.NetLoadReport == nil {
+		t.Fatalf("ответ: %+v", nv)
+	}
+	p443, ok := func() (model.PortLoad, bool) {
+		for _, p := range nv.Listen {
+			if p.Port == 443 {
+				return p, true
+			}
+		}
+		return model.PortLoad{}, false
+	}()
+	if !ok || p443.HalfOpen < 500 || p443.Backlog != 1024 {
+		t.Errorf("порт 443: %+v", p443)
+	}
+	// Демо: флуд из 203.0.113.0/24 и доверенная сеть 198.51.100.0/24.
+	var flood, trusted bool
+	for _, src := range nv.TopSources {
+		if src.Addr == "203.0.113.0/24" && src.Conns > 500 {
+			flood = true
+		}
+		if src.Trusted {
+			trusted = true
+		}
+	}
+	if !flood || !trusted {
+		t.Errorf("источники: %+v", nv.TopSources)
+	}
+	if nv.Conntrack == nil || nv.Conntrack.Percent < 90 {
+		t.Errorf("conntrack: %+v", nv.Conntrack)
+	}
+	if len(nv.Active) == 0 {
+		t.Errorf("признаки: %+v", nv.Active)
+	}
+	// Признаки сетевой нагрузки попали в системные находки и в сводку.
+	ws = do(sn, "GET", "/api/system", "127.0.0.1:8090", "", nil)
+	if !strings.Contains(ws.Body.String(), "net_") {
+		t.Errorf("признаки netload не попали в /api/system: %s", ws.Body)
+	}
+	ws = do(sn, "GET", "/api/status", "127.0.0.1:8090", "", nil)
+	if err := json.Unmarshal(ws.Body.Bytes(), &st); err != nil || st.Net == nil || st.Net.Alerts == 0 {
+		t.Errorf("сводка сетевой нагрузки: %v %+v", err, st.Net)
+	}
+	if w := do(sn, "POST", "/api/netload", "127.0.0.1:8090", "", map[string]string{"X-CSRF-Token": sn.noAuthCSRF}); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST: %d", w.Code)
 	}
 }

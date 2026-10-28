@@ -44,6 +44,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/report"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
@@ -187,8 +188,11 @@ func cmdServe(args []string) error {
 	}
 	pfs := procfs.New(cfg.ProcRoot, cfg.HostRoot)
 	pfs.MaxFiles = cfg.MaxFiles
+	pfs.MaxSockets = cfg.NetMaxSockets
 	mc := metricsCollector(cfg, cfg.DataDir, log)
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log, LogDays: cfg.LogDays})
+	nl := netMonitor(cfg, detCfg, mc)
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log,
+		LogDays: cfg.LogDays, NetLoad: nl})
 	if mc != nil {
 		sc.SetMetrics(mc) // признаки метрик попадают в системные находки
 	}
@@ -206,6 +210,7 @@ func cmdServe(args []string) error {
 	if mc != nil {
 		opts.Metrics = mc
 	}
+	opts.NetLoad = nl
 	srv := web.New(opts)
 	var connCtx func(context.Context, net.Conn) context.Context
 	if noAuth {
@@ -245,6 +250,25 @@ func metricsCollector(cfg config.Config, stateDir string, log *slog.Logger) *met
 	return metrics.New(metrics.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, Interval: cfg.MetricsInterval,
 		Retention: cfg.MetricsRetention, StateDir: stateDir, StealThreshold: cfg.StealThreshold,
 		DiskFullThreshold: cfg.DiskFullThreshold, Logger: log})
+}
+
+// netMonitor создаёт наблюдателя за сетевой нагрузкой и подключает его
+// счётчики к горутине метрик: они нужны каждые несколько секунд, а не
+// раз в сканирование. nil — метрики выключены (SSG_METRICS_ENABLED=false):
+// без них скорости счётчиков считать негде.
+func netMonitor(cfg config.Config, det detect.Config, mc *metrics.Collector) *netload.Monitor {
+	if mc == nil {
+		return nil
+	}
+	nl := netload.New(netload.Options{
+		ProcRoot: cfg.ProcRoot,
+		Config: netload.Config{ConnPerIP: cfg.NetConnPerIP, SurgeFactor: cfg.NetSurgeFactor,
+			Trusted: cfg.NetTrustedNets, TrustedRaw: cfg.NetTrustedRaw},
+		Baseline: mc.Median,
+		Allowed:  func(id string) bool { return det.Allowed(nil, id) },
+	})
+	mc.SetExtra(nl)
+	return nl
 }
 
 // run запускает сканер и HTTP-сервер и корректно останавливает их по
@@ -450,7 +474,10 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	pfs.MaxFiles = cfg.MaxFiles
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mc := metricsCollector(cfg, "", quiet)
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet, LogDays: cfg.LogDays})
+	nl := netMonitor(cfg, detCfg, mc)
+	pfs.MaxSockets = cfg.NetMaxSockets
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet,
+		LogDays: cfg.LogDays, NetLoad: nl})
 	if mc != nil {
 		sc.SetMetrics(mc)
 	}
@@ -460,7 +487,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	if cfg.AuditEnabled {
 		ar = audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Logger: quiet})
 	}
-	return tui.NewLocalSource(sc, ar, mc, version, false, note)
+	return tui.NewLocalSource(sc, ar, mc, nl != nil, version, false, note)
 }
 
 // cmdScan — разовое сканирование процессов с отчётом в консоль или файл.
@@ -626,15 +653,21 @@ func cmdDemo(args []string) error {
 	mc := metrics.New(metrics.Options{ProcRoot: procRoot, HostRoot: hostRoot, Interval: 2 * time.Second,
 		StealThreshold: cfg.StealThreshold, DiskFullThreshold: cfg.DiskFullThreshold, DiskUsage: fakeproc.DemoUsage,
 		BeforeCollect: anim.StepHost, FastHolds: true, Logger: log})
+	// Сетевая нагрузка демо: пороги и удержание те же, но доверенная
+	// сеть задана (сценарий «посетители за Cloudflare»).
+	nl := netload.New(netload.Options{ProcRoot: procRoot, Config: netload.Config{ConnPerIP: cfg.NetConnPerIP,
+		SurgeFactor: cfg.NetSurgeFactor, Trusted: fakeproc.DemoTrustedNets(), TrustedRaw: fakeproc.DemoTrustedRaw()},
+		Baseline: mc.Median, FastHolds: true})
+	mc.SetExtra(nl)
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
-		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true, Metrics: mc})
+		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true, Metrics: mc, NetLoad: nl})
 	// Демо-файлы принадлежат текущему пользователю: он и считается root.
 	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Logger: log})
 	if *useTUI {
 		if !tui.IsTerminal() {
 			return i18n.Errorf("err.demo_tui_terminal")
 		}
-		ls, err := tui.NewLocalSource(sc, ar, mc, version+" (demo)", true, i18n.T("tui.source_demo"))
+		ls, err := tui.NewLocalSource(sc, ar, mc, true, version+" (demo)", true, i18n.T("tui.source_demo"))
 		if err != nil {
 			return err
 		}
@@ -642,7 +675,7 @@ func cmdDemo(args []string) error {
 		return tui.New(tui.Options{Source: ls, Refresh: *interval}).Run()
 	}
 	srv := web.New(web.Options{Scanner: sc, Logger: log, Version: version + " (demo)", ListenAddr: cfg.ListenAddr, Demo: true,
-		Audit: ar, Metrics: mc})
+		Audit: ar, Metrics: mc, NetLoad: nl})
 	log.Info(i18n.S("log.demo"), "dir", dir)
 	return run(sc, srv, nil, nil, cfg, log, nil, ar.Run, mc.Run)
 }

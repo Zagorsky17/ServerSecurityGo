@@ -24,6 +24,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/redact"
 )
@@ -45,6 +46,10 @@ type Options struct {
 	// LogDays — за сколько дней разбирать журнал fail2ban
 	// (SSG_AUTH_LOG_DAYS); 0 — fail2ban.DefaultDays.
 	LogDays int
+	// NetLoad — наблюдение за сетевой нагрузкой: отчёт строится по
+	// таблицам сокетов этого сканирования, счётчики ядра снимает
+	// горутина метрик. nil — наблюдение выключено.
+	NetLoad *netload.Monitor
 	// Metrics — метрики сервера: их признаки (steal_high,
 	// disk_almost_full) попадают в системные находки, а оттуда в
 	// историю, «Систему» и scan. nil — сбор метрик выключен.
@@ -67,6 +72,9 @@ type Scanner struct {
 	rescan chan struct{}
 	scanMu sync.Mutex // сканирования не должны пересекаться
 	f2b    *fail2ban.Collector
+	// sockDropped — сколько сокетов не вошло в предел на этом
+	// сканировании (под scanMu: сканирования не пересекаются).
+	sockDropped int
 }
 
 // New создаёт сканер.
@@ -131,6 +139,7 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 		s.opt.BeforeScan()
 	}
 	start := time.Now()
+	s.sockDropped = 0
 	snap, err := s.collect(start)
 	if err != nil {
 		return nil, err
@@ -140,7 +149,8 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	hist.Observe(start, snap.Processes)
 	// Поверхность атаки оценивается до анализа процессов: правило
 	// exposure берёт из неё опасные публичные порты.
-	snap.Exposure = exposure.Build(exposure.Input{Procs: snap.Processes, Sockets: snap.Sockets, Addrs: s.opt.FS.LocalAddrs(),
+	addrs := s.opt.FS.LocalAddrs()
+	snap.Exposure = exposure.Build(exposure.Input{Procs: snap.Processes, Sockets: snap.Sockets, Addrs: addrs,
 		HostRoot: s.opt.FS.HostRoot, Allowed: s.opt.Detect.Allowed})
 	snap.Warnings = append(snap.Warnings, snap.Exposure.Warnings...)
 	ctx := &detect.Context{Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
@@ -155,6 +165,12 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	snap.System = append(snap.System, f2bFindings...)
 	if m := s.opt.Metrics; m != nil {
 		snap.System = append(snap.System, m.Findings()...)
+	}
+	// Сетевая нагрузка: таблицы сокетов уже прочитаны, остаётся собрать
+	// агрегаты по портам и источникам и сверить их с порогами.
+	if nl := s.opt.NetLoad; nl != nil {
+		snap.NetLoad = nl.Build(netload.Input{Now: start, Sockets: snap.Sockets, Dropped: s.sockDropped, Addrs: addrs})
+		snap.System = append(snap.System, nl.Findings()...)
 	}
 	events := hist.Record(start, snap.Processes, snap.System)
 
@@ -331,7 +347,9 @@ func (s *Scanner) attachSockets(raws []*procfs.Raw, byPID map[int]*model.Process
 	byInode := map[uint64]model.Socket{}
 	var unowned []model.Socket
 	readTables := func(pid int, ns string) {
-		for _, sk := range fs.ReadNetTables(pid, ns) {
+		socks, dropped := fs.ReadNetTables(pid, ns)
+		s.sockDropped += dropped
+		for _, sk := range socks {
 			if sk.Inode == 0 {
 				// TIME_WAIT и т. п.: у сокета больше нет владельца.
 				if sk.Proto != "unix" {
@@ -451,6 +469,9 @@ func stats(snap *model.Snapshot) model.Stats {
 		st.ByRisk[r.String()] = 0
 	}
 	st.PublicPorts, st.DangerousPorts = exposure.Stats(snap.Exposure)
+	if nl := snap.NetLoad; nl != nil {
+		st.NetAlerts = len(nl.Active)
+	}
 	for _, p := range snap.Processes {
 		if p.Kernel {
 			st.Kernel++

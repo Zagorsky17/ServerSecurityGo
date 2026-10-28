@@ -1,6 +1,8 @@
 package fakeproc
 
 import (
+	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -91,6 +93,12 @@ func Demo(now time.Time) *Tree {
 			"sys/net/ipv4/tcp_synack_retries":  "5\n",
 			"sys/net/ipv4/icmp_echo_ignore_broadcasts": "1\n",
 			"sys/net/netfilter/nf_conntrack_max":       "32768\n",
+			// Таблица conntrack почти полна: ядро вот-вот начнёт
+			// отбрасывать новые соединения.
+			"sys/net/netfilter/nf_conntrack_count": "31460\n",
+			"net/stat/nf_conntrack":                "entries  searched found new invalid ignore delete delete_list insert insert_failed drop early_drop icmp_error expect_new expect_create expect_delete search_restart\n7AE4  0 0 0 12 0 0 0 0 2 1f 7 0 0 0 0 0\n",
+			"net/sockstat":                         "sockets: used 420\nTCP: inuse 24 orphan 180 tw 320 alloc 900 mem 48\nUDP: inuse 6 mem 2\nUDPLITE: inuse 0\nRAW: inuse 0\nFRAG: inuse 0 memory 0\n",
+			"sys/net/ipv4/tcp_max_orphans":         "262144\n",
 		},
 		Addrs: []string{"127.0.0.1", "192.0.2.10", "10.0.0.5", "172.17.0.1", "::1", "2001:db8::10"},
 		HostModes: map[string]os.FileMode{"etc/shadow": 0o640, "etc/gshadow": 0o640, "etc/ssh/ssh_host_ed25519_key": 0o600,
@@ -165,7 +173,9 @@ func Demo(now time.Time) *Tree {
 	t.Socks = []Sock{
 		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 22, State: "0A", Inode: 1001},
 		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 80, State: "0A", Inode: 1002, UID: 0},
-		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 443, State: "0A", Inode: 1003, UID: 0},
+		// У слушающего 443 backlog 1024 и очередь accept почти полна:
+		// приложение не успевает принимать соединения.
+		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 443, State: "0A", Inode: 1003, UID: 0, TxQueue: 1024, RxQueue: 980},
 		{Proto: "tcp", Local: "127.0.0.1", LocalPort: 5432, State: "0A", Inode: 1004, UID: 113},
 		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 3000, State: "0A", Inode: 1005, UID: 1000, NetNS: "net:[4026532300]"},
 		{Proto: "tcp", Local: "0.0.0.0", LocalPort: 6379, State: "0A", Inode: 1006, UID: 114},
@@ -176,8 +186,35 @@ func Demo(now time.Time) *Tree {
 		{Proto: "tcp", Local: "192.0.2.10", LocalPort: 60110, Remote: "203.0.113.50", RemotePort: 443, State: "01", Inode: 2004},
 		{Proto: "tcp", Local: "192.0.2.10", LocalPort: 22, Remote: "192.0.2.200", RemotePort: 50122, State: "06", Inode: 0},
 	}
+	t.Socks = append(t.Socks, demoFloodSocks()...)
 	return t
 }
+
+// Сценарий сетевой нагрузки для демо: SYN-флуд на 443 из подсети
+// 203.0.113.0/24 (полуоткрытые соединения, inode = 0 — владельца у них
+// нет) и наплыв настоящих посетителей из доверенной сети
+// 198.51.100.0/24 (он не должен давать признаков флуда).
+func demoFloodSocks() []Sock {
+	out := make([]Sock, 0, 820)
+	for i := range 600 {
+		out = append(out, Sock{Proto: "tcp", Local: "192.0.2.10", LocalPort: 443,
+			Remote: fmt.Sprintf("203.0.113.%d", 1+i%60), RemotePort: 20000 + i, State: "03"})
+	}
+	for i := range 220 {
+		out = append(out, Sock{Proto: "tcp", Local: "192.0.2.10", LocalPort: 443,
+			Remote: fmt.Sprintf("198.51.100.%d", 1+i%4), RemotePort: 40000 + i, State: "01", Inode: uint64(5000 + i)})
+	}
+	return out
+}
+
+// DemoTrustedNets, DemoTrustedRaw — доверенные сети демо: «сайт за
+// CDN», чьи адреса не считаются источниками флуда.
+func DemoTrustedNets() []netip.Prefix {
+	p, _ := netip.ParsePrefix("198.51.100.0/24")
+	return []netip.Prefix{p}
+}
+
+func DemoTrustedRaw() []string { return []string{"198.51.100.0/24"} }
 
 // Идентификаторы демо-контейнеров. webappID совпадает с контейнером из
 // cgroup процесса node (PID 1200).

@@ -47,7 +47,7 @@ func TestRealProc(t *testing.T) {
 	if fs.MemTotal() == 0 {
 		t.Error("MemTotal = 0")
 	}
-	if len(fs.ReadNetTables(0, "")) == 0 {
+	if socks, _ := fs.ReadNetTables(0, ""); len(socks) == 0 {
 		t.Log("таблицы сокетов пусты (возможно, нет сети в песочнице)")
 	}
 }

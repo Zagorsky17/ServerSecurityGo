@@ -55,6 +55,9 @@ type Sock struct {
 	Inode      uint64
 	UID        int
 	NetNS      string
+	// TxQueue, RxQueue — поле tx_queue:rx_queue. У слушающего сокета
+	// это backlog и текущая очередь accept.
+	TxQueue, RxQueue uint64
 }
 
 // Tree — поддельная система.
@@ -105,6 +108,9 @@ func (t *Tree) Write(dir string) (procRoot, hostRoot string, err error) {
 	w(filepath.Join(procRoot, "uptime"), fmt.Sprintf("%.2f %.2f\n", time.Since(t.BootTime).Seconds(), time.Since(t.BootTime).Seconds()*2))
 	w(filepath.Join(procRoot, "diskstats"), t.diskstatsFile())
 	w(filepath.Join(procRoot, "net", "dev"), t.netDevFile())
+	w(filepath.Join(procRoot, "net", "netstat"), netstatFile(0))
+	w(filepath.Join(procRoot, "net", "snmp"), snmpFile(0))
+	w(filepath.Join(procRoot, "net", "softnet_stat"), softnetFile(0))
 	for path, content := range t.ProcFiles {
 		w(filepath.Join(procRoot, path), content)
 	}
@@ -145,6 +151,9 @@ func (t *Tree) HostCounters(procRoot string) error {
 		{filepath.Join(procRoot, "diskstats"), t.diskstatsFile()},
 		{filepath.Join(procRoot, "net", "dev"), t.netDevFile()},
 		{filepath.Join(procRoot, "uptime"), fmt.Sprintf("%.2f %.2f\n", up, up*2)},
+		{filepath.Join(procRoot, "net", "netstat"), netstatFile(up)},
+		{filepath.Join(procRoot, "net", "snmp"), snmpFile(up)},
+		{filepath.Join(procRoot, "net", "softnet_stat"), softnetFile(up)},
 	} {
 		if err := os.WriteFile(f.path, []byte(f.data), 0o644); err != nil {
 			return err
@@ -207,6 +216,35 @@ func (t *Tree) netDevFile() string {
 		" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n" +
 		fmt.Sprintf("    lo: %d %d 0 0 0 0 0 0 %d %d 0 0 0 0 0 0\n", rx/10, rxp/10, rx/10, rxp/10) +
 		fmt.Sprintf("  eth0: %d %d 0 3 0 0 0 0 %d %d 0 0 0 0 0 0\n", rx, rxp, tx, txp)
+}
+
+// Демо-счётчики /proc/net: значение = скорость × время с загрузки,
+// поэтому и первый замер (средний с загрузки), и дельты дают одни и те
+// же скорости. Числа подобраны под сценарий «SYN-флуд на 443»:
+// 300 cookies/с (порог 50) и 50 отбросов очереди accept в секунду
+// (порог 10).
+func netstatFile(up float64) string {
+	v := func(rate float64) uint64 { return uint64(rate * up) }
+	return "TcpExt: SyncookiesSent SyncookiesRecv SyncookiesFailed ListenOverflows ListenDrops TCPReqQFullDrop TCPReqQFullDoCookies TCPBacklogDrop TCPAbortOnMemory\n" +
+		fmt.Sprintf("TcpExt: %d %d %d %d %d 0 %d %d 0\n", v(300), v(120), v(4), v(25), v(25), v(280), v(2)) +
+		"IpExt: InNoRoutes InTruncatedPkts\nIpExt: 0 0\n"
+}
+
+func snmpFile(up float64) string {
+	v := func(rate float64) uint64 { return uint64(rate * up) }
+	return "Tcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails EstabResets CurrEstab InSegs OutSegs RetransSegs\n" +
+		fmt.Sprintf("Tcp: 1 200 120000 -1 %d %d %d %d 820 %d %d %d\n", v(5), v(100), v(20), v(3), v(900), v(850), v(40)) +
+		"Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors\n" +
+		fmt.Sprintf("Udp: %d %d %d %d %d 0\n", v(200), v(50), v(10), v(180), v(10)) +
+		"Icmp: InMsgs InErrors\n" + fmt.Sprintf("Icmp: %d 0\n", v(5))
+}
+
+// softnetFile — по строке на ядро, значения шестнадцатеричные.
+func softnetFile(up float64) string {
+	v := func(rate float64) uint64 { return uint64(rate * up) }
+	line := fmt.Sprintf("%08x %08x %08x 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000\n",
+		v(400), v(5), v(2))
+	return line + line
 }
 
 // writeAddrs пишет локальные адреса в формате ядра: fib_trie (лист
@@ -349,8 +387,8 @@ func (t *Tree) writeNet(dir, netns string) error {
 		if orDefault(netns, def) != ns {
 			continue
 		}
-		fmt.Fprintf(tables[s.Proto], "%4d: %s %s %s 00000000:00000000 00:00000000 00000000 %5d        0 %d 1 0000000000000000 20 4 30 10 -1\n",
-			i, hexAddr(s.Local, s.LocalPort), hexAddr(s.Remote, s.RemotePort), s.State, s.UID, s.Inode)
+		fmt.Fprintf(tables[s.Proto], "%4d: %s %s %s %08X:%08X 00:00000000 00000000 %5d        0 %d 1 0000000000000000 20 4 30 10 -1\n",
+			i, hexAddr(s.Local, s.LocalPort), hexAddr(s.Remote, s.RemotePort), s.State, s.TxQueue, s.RxQueue, s.UID, s.Inode)
 	}
 	for proto, b := range tables {
 		if err := os.WriteFile(filepath.Join(dir, proto), []byte(b.String()), 0o644); err != nil {

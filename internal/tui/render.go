@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
 
@@ -280,6 +282,8 @@ func (a *App) columnsHeader(p panelID, w int) string {
 		return fit(a.tr("tui.cols.sys"), w)
 	case pMetrics:
 		return fit(a.tr("tui.cols.metrics"), w)
+	case pLoad:
+		return fit(a.tr("tui.cols.netload"), w)
 	}
 	return ""
 }
@@ -436,6 +440,26 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{riskShort(f.Risk.String()) + " ", riskStyle(f.Risk.String())},
 			{a.txt(f.Title) + " ", stNormal},
 			{f.Path, stDim},
+		}
+	case pLoad:
+		p := a.loadPorts[i]
+		// Полуоткрытые подсвечиваются: при SYN-флуде их сотни.
+		hst := stDim
+		if p.HalfOpen >= 256 {
+			hst = stWarn
+		}
+		owner := "—"
+		if p.PID != 0 {
+			owner = fmt.Sprintf("%s(%d)", p.ProcName, p.PID)
+		}
+		queue := fmt.Sprintf("%d/%d", p.AcceptQueue, p.Backlog)
+		return []seg{
+			{fit(p.Proto, 5) + " ", stDim},
+			{fitLeft(strconv.Itoa(p.Port), 6) + " ", stBold},
+			{fitLeft(strconv.Itoa(p.HalfOpen), 9) + "  ", hst},
+			{fitLeft(strconv.Itoa(p.Established), 7) + "  ", stNormal},
+			{fit(queue, 8) + " ", stDim},
+			{owner, stNormal},
 		}
 	case pMetrics:
 		m := a.mrows[i]
@@ -652,6 +676,13 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.systemDetail(b, f)
 		return a.tr("tui.title.check") + " · " + f.Path, b.lines
+	case pLoad:
+		a.netHeader(b)
+		if p, ok := a.selNetPort(); ok {
+			a.netPortDetail(b, p)
+		}
+		a.netOverview(b)
+		return a.tr("tui.panel.netload"), b.lines
 	case pMetrics:
 		a.metricsHeader(b)
 		m, ok := a.selMetric()
@@ -1348,6 +1379,24 @@ func (a *App) overview(b *lb) {
 			}
 		}
 		b.add(seg{"  " + mem, mst})
+		// Сеть одной строкой: подробности — на панели «Сетевая нагрузка».
+		if nv := a.data.Net; nv != nil && nv.Ready && nv.NetLoadReport != nil {
+			r := nv.NetLoadReport
+			half, conns := 0, 0
+			for _, p := range r.Listen {
+				half += p.HalfOpen
+				conns += p.Established
+			}
+			line, nst := a.tr("tui.net.summary", conns, half), stNormal
+			if n := len(r.Active); n > 0 {
+				line += " · " + a.tr("tui.net.alerts", n)
+				nst = stWarn
+				if slices.Contains(r.Active, netload.IDSuspected) {
+					nst = riskStyle("HIGH")
+				}
+			}
+			b.add(seg{"  " + line, nst})
+		}
 	}
 	if f := a.data.Fail2ban; f != nil && f.Installed {
 		b.header("fail2ban")
@@ -1445,6 +1494,106 @@ func (a *App) metricDetail(b *lb, m metricRow) {
 				seg{"↓ " + fmtMetric(n.RxMBs) + "  ", stDim}, seg{"↑ " + fmtMetric(n.TxMBs) + "  ", stDim},
 				seg{a.tr("web.col.pps") + " " + fmtMetric(n.RxPPS) + " / " + fmtMetric(n.TxPPS), stDim})
 		}
+	}
+}
+
+// netHeader — строка состояния панели «Сетевая нагрузка».
+func (a *App) netHeader(b *lb) {
+	nv := a.data.Net
+	if nv == nil || nv.NetLoadReport == nil || !nv.Ready {
+		b.para(a.tr("tui.netload.off"), stDim, 0)
+		return
+	}
+	r := nv.NetLoadReport
+	half, conns := 0, 0
+	for _, p := range r.Listen {
+		half += p.HalfOpen
+		conns += p.Established
+	}
+	b.add(seg{a.tr("tui.netload.when", fmtTime(r.Time), strconv.Itoa(conns), strconv.Itoa(half)), stDim})
+	if len(r.Active) > 0 {
+		st := stWarn
+		if slices.Contains(r.Active, netload.IDSuspected) {
+			st = riskStyle("HIGH")
+		}
+		b.para(a.tr("web.netload.alerts", strings.Join(r.Active, ", ")), st, 0)
+	} else {
+		b.para(a.tr("web.netload.ok"), stOK, 0)
+	}
+	if r.Truncated {
+		b.para(a.tr("web.netload.truncated", r.Dropped), stWarn, 0)
+	}
+	if !r.Baseline {
+		b.para(a.tr("web.netload.no_baseline"), stDim, 0)
+	}
+	if len(r.TrustedNets) > 0 {
+		b.para(a.tr("web.netload.trusted", strings.Join(r.TrustedNets, ", ")), stDim, 0)
+	}
+}
+
+// netPortDetail — подробности выбранного порта.
+func (a *App) netPortDetail(b *lb, p model.PortLoad) {
+	b.header(a.tr("web.netload.ports"))
+	b.kv(a.tr("tui.k.proto"), p.Proto)
+	b.kv(a.tr("web.col.port"), strconv.Itoa(p.Port))
+	b.kv(a.tr("web.col.halfopen"), strconv.Itoa(p.HalfOpen))
+	b.kv(a.tr("web.col.estab"), strconv.Itoa(p.Established))
+	b.kv(a.tr("web.col.queue"), strconv.Itoa(p.AcceptQueue)+" / "+strconv.Itoa(p.Backlog))
+	b.kv(a.tr("web.col.sources"), strconv.Itoa(p.Sources))
+	if p.PID != 0 {
+		b.kv(a.tr("tui.title.process"), fmt.Sprintf("%s (PID %d)", sanitize(p.ProcName), p.PID))
+	}
+}
+
+// netOverview — источники соединений и счётчики ядра.
+func (a *App) netOverview(b *lb) {
+	nv := a.data.Net
+	if nv == nil || nv.NetLoadReport == nil {
+		return
+	}
+	r := nv.NetLoadReport
+	if len(r.TopSources) > 0 {
+		b.header(a.tr("tui.h.net_sources"))
+		for _, s := range r.TopSources {
+			mark := ""
+			switch {
+			case s.Trusted:
+				mark = " · " + a.tr("web.netload.trusted_short")
+			case s.Private:
+				mark = " · " + a.tr("tui.scope.private")
+			}
+			st := stNormal
+			if s.HalfOpen > 0 {
+				st = stWarn
+			}
+			b.add(seg{"  " + fit(sanitize(s.Addr), 40), stAddr},
+				seg{fitLeft(strconv.Itoa(s.Conns), 7) + " ", st},
+				seg{a.tr("web.col.halfopen") + " " + strconv.Itoa(s.HalfOpen) + mark, stDim})
+		}
+	}
+	b.header(a.tr("tui.h.net_counters"))
+	c := r.Counters
+	for _, row := range []struct {
+		key string
+		val float64
+	}{
+		{"tui.m.net_syn_rate", c.CookiesSent},
+		{"tui.m.net_listen_drops", c.ListenOverflows + c.ListenDrops},
+		{"tui.m.net_rx_drops", c.RxDrops + c.SoftnetDropped},
+		{"tui.m.net_udp_errors", c.UDPRcvbufErrors + c.UDPInErrors},
+		{"tui.m.net_retrans", c.RetransSegs},
+		{"tui.m.net_estab", float64(c.CurrEstab)},
+		{"tui.m.net_orphan", float64(c.TCPOrphan)},
+	} {
+		b.kv(a.tr(row.key), fmtMetric(row.val))
+	}
+	if ct := r.Conntrack; ct != nil {
+		st := stNormal
+		if ct.Percent >= 80 {
+			st = stWarn
+		}
+		b.add(seg{"  " + fit(a.tr("tui.m.net_conntrack"), 34), stNormal},
+			seg{fmtMetric(ct.Percent) + fmt.Sprintf("  (%d / %d)", ct.Count, ct.Max), st})
 	}
 }
 

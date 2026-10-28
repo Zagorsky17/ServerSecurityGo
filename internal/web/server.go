@@ -35,6 +35,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
@@ -84,6 +85,9 @@ type Options struct {
 	// Metrics — метрики сервера (metrics.Collector); nil — выключены
 	// (SSG_METRICS_ENABLED=false).
 	Metrics MetricsSource
+	// NetLoad — сетевая нагрузка (netload.Monitor); nil — наблюдение
+	// выключено вместе с метриками.
+	NetLoad *netload.Monitor
 }
 
 // MetricsSource — то, что панели нужно от метрик сервера.
@@ -214,6 +218,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	s.mux.HandleFunc("GET /api/system", s.api(s.handleSystem))
 	s.mux.HandleFunc("GET /api/metrics", s.api(s.handleMetrics))
+	s.mux.HandleFunc("GET /api/netload", s.api(s.handleNetLoad))
 	s.mux.HandleFunc("POST /api/rescan", s.api(s.handleRescan))
 	s.mux.HandleFunc("GET /api/audit", s.api(s.handleAudit))
 	s.mux.HandleFunc("POST /api/audit/run", s.api(s.handleAuditRun))
@@ -565,6 +570,18 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request, _ session
 		return
 	}
 	writeJSON(w, http.StatusOK, s.opt.Metrics.View(r.URL.Query().Get("range")))
+}
+
+// handleNetLoad отдаёт сетевую нагрузку: порты с полуоткрытыми
+// соединениями и очередью accept, топ источников, счётчики ядра и
+// сработавшие признаки. Наблюдение выключено — {"enabled": false}.
+func (s *Server) handleNetLoad(w http.ResponseWriter, r *http.Request, _ session) {
+	snap := s.opt.Scanner.Snapshot()
+	if s.opt.NetLoad == nil || snap == nil {
+		writeJSON(w, http.StatusOK, view.NetLoad(nil, false))
+		return
+	}
+	writeJSON(w, http.StatusOK, view.NetLoad(snap.NetLoad, true))
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, _ session) {

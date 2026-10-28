@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 )
 
 // Config — все настройки приложения.
@@ -62,6 +64,19 @@ type Config struct {
 	// DiskFullThreshold — порог заполнения раздела, %, для признака
 	// disk_almost_full.
 	DiskFullThreshold float64
+	// NetConnPerIP — соединений с одного адреса для признака
+	// net_conn_flood_ip.
+	NetConnPerIP int
+	// NetSurgeFactor — во сколько раз выше обычного считается наплывом.
+	NetSurgeFactor float64
+	// NetTrustedNets — доверенные сети (CDN, прокси): их адреса не
+	// считаются источниками флуда.
+	NetTrustedNets []netip.Prefix
+	// NetTrustedRaw — те же сети, как их задал владелец.
+	NetTrustedRaw []string
+	// NetMaxSockets — предел числа сокетов на одно сетевое пространство
+	// имён при разборе таблиц.
+	NetMaxSockets int
 	// LogDays — глубина разбора журналов (SSG_AUTH_LOG_DAYS): сейчас —
 	// журнала fail2ban.
 	LogDays int
@@ -104,6 +119,10 @@ func Default() Config {
 		MetricsRetention:  30 * 24 * time.Hour,
 		StealThreshold:    10,
 		DiskFullThreshold: 90,
+
+		NetConnPerIP:   200,
+		NetSurgeFactor: 5,
+		NetMaxSockets:  100_000,
 	}
 }
 
@@ -218,6 +237,16 @@ func FromEnv() (Config, error) {
 	dur("SSG_METRICS_RETENTION", &c.MetricsRetention)
 	flt("SSG_STEAL_THRESHOLD", &c.StealThreshold)
 	flt("SSG_DISK_FULL_THRESHOLD", &c.DiskFullThreshold)
+	num("SSG_NET_CONN_PER_IP", &c.NetConnPerIP)
+	flt("SSG_NET_SURGE_FACTOR", &c.NetSurgeFactor)
+	num("SSG_NET_MAX_SOCKETS", &c.NetMaxSockets)
+	if v := os.Getenv("SSG_NET_TRUSTED_NETS"); strings.TrimSpace(v) != "" {
+		nets, raw, bad := netload.ParseNets(v)
+		if len(bad) > 0 {
+			errs = append(errs, i18n.Errorf("err.env_nets", strconv.Quote(strings.Join(bad, ", "))))
+		}
+		c.NetTrustedNets, c.NetTrustedRaw = nets, raw
+	}
 	if v := os.Getenv("SSG_ALLOWED_HOSTS"); v != "" {
 		for h := range strings.SplitSeq(v, ",") {
 			if h = strings.TrimSpace(h); h != "" {

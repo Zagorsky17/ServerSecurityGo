@@ -67,12 +67,13 @@ const (
 	pHist
 	pSys
 	pMetrics // только при включённом сборе метрик
+	pLoad    // сетевая нагрузка: только при включённом наблюдении
 	nPanels
 )
 
 // panelKeys — ключи каталога для названий панелей.
 var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports",
-	"tui.panel.audit", "tui.panel.f2b", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics"}
+	"tui.panel.audit", "tui.panel.f2b", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics", "tui.panel.netload"}
 
 // sortKeys — режимы сортировки списка процессов (ключи каталога).
 var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
@@ -124,7 +125,8 @@ type App struct {
 	events     []model.Event
 	system     []model.SystemFinding
 	mrows      []metricRow
-	mrange     string // окно графиков метрик (metrics.Range*)
+	loadPorts  []model.PortLoad // строки панели «Сетевая нагрузка»
+	mrange     string           // окно графиков метрик (metrics.Range*)
 	byKey      map[string]view.Summary
 
 	sortMode   int
@@ -310,6 +312,9 @@ func (a *App) visible() []panelID {
 		if p == pMetrics && !a.hasMetrics() {
 			continue
 		}
+		if p == pLoad && !a.hasNet() {
+			continue
+		}
 		out = append(out, p)
 	}
 	return out
@@ -318,6 +323,11 @@ func (a *App) visible() []panelID {
 // hasMetrics — служба собирает метрики (данные о них пришли).
 func (a *App) hasMetrics() bool {
 	return a.data != nil && a.data.Metrics != nil && a.data.Metrics.Enabled
+}
+
+// hasNet — служба наблюдает за сетевой нагрузкой.
+func (a *App) hasNet() bool {
+	return a.data != nil && a.data.Net != nil && a.data.Net.Enabled
 }
 
 // metricRow — строка панели «Метрики»: ряд, его текущее значение,
@@ -456,6 +466,7 @@ func (a *App) rebuild() {
 		}
 	}
 	a.buildMetrics()
+	a.buildNet()
 	for p := pSusp; p < nPanels; p++ {
 		a.clamp(p)
 	}
@@ -579,6 +590,20 @@ func (a *App) buildMetrics() {
 	}
 }
 
+// buildNet собирает строки панели «Сетевая нагрузка» с учётом фильтра.
+func (a *App) buildNet() {
+	a.loadPorts = a.loadPorts[:0]
+	if a.data.Net == nil || a.data.Net.NetLoadReport == nil {
+		return
+	}
+	f := a.lists[pLoad].filter
+	for _, p := range a.data.Net.Listen {
+		if matches(f, p.Proto, strconv.Itoa(p.Port), p.ProcName) {
+			a.loadPorts = append(a.loadPorts, p)
+		}
+	}
+}
+
 func (a *App) count(p panelID) int {
 	switch p {
 	case pSusp:
@@ -599,6 +624,8 @@ func (a *App) count(p panelID) int {
 		return len(a.system)
 	case pMetrics:
 		return len(a.mrows)
+	case pLoad:
+		return len(a.loadPorts)
 	}
 	return 0
 }
@@ -941,6 +968,12 @@ func (a *App) copyJSON() {
 		} else if a.data.Metrics != nil {
 			v = a.data.Metrics.Now
 		}
+	case pLoad:
+		if p, ok := a.selNetPort(); ok {
+			v = p
+		} else if a.data.Net != nil {
+			v = a.data.Net.NetLoadReport
+		}
 	default:
 		if a.detail != nil {
 			v = a.detail
@@ -1014,6 +1047,13 @@ func (a *App) selMetric() (metricRow, bool) {
 		return a.mrows[c], true
 	}
 	return metricRow{}, false
+}
+
+func (a *App) selNetPort() (model.PortLoad, bool) {
+	if c := a.lists[pLoad].cursor; c < len(a.loadPorts) {
+		return a.loadPorts[c], true
+	}
+	return model.PortLoad{}, false
 }
 
 func (a *App) selSystem() (model.SystemFinding, bool) {
