@@ -64,6 +64,9 @@ type Tree struct {
 	Procs      []*Proc
 	Socks      []Sock
 	HostFiles  map[string]string // путь относительно корня хоста → содержимое
+	// ProcFiles — путь относительно корня /proc → содержимое (параметры
+	// ядра из /proc/sys для аудита).
+	ProcFiles map[string]string
 	// HostModes — права файлов хоста (по умолчанию 0644): аудит проверяет
 	// права /etc/shadow, sudoers, ключей SSH.
 	HostModes map[string]os.FileMode
@@ -93,6 +96,9 @@ func (t *Tree) Write(dir string) (procRoot, hostRoot string, err error) {
 	w(filepath.Join(procRoot, "stat"), fmt.Sprintf("cpu  1 2 3 4\nbtime %d\n", t.BootTime.Unix()))
 	w(filepath.Join(procRoot, "meminfo"), fmt.Sprintf("MemTotal:       %d kB\nMemFree:        1000 kB\n", t.MemTotalKB))
 	w(filepath.Join(procRoot, "sys", "kernel", "osrelease"), t.Kernel+"\n")
+	for path, content := range t.ProcFiles {
+		w(filepath.Join(procRoot, path), content)
+	}
 	for path, content := range t.HostFiles {
 		w(filepath.Join(hostRoot, path), content)
 	}

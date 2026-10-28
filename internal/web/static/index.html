@@ -122,7 +122,7 @@
   </section>
 
   <section id="tab-audit" class="tab">
-    <p class="hint" data-i18n="web.audit.hint">Проверка настроек SSH, учётных записей и sudo. Это причины взлома, а не его признаки: исправив их, вы закрываете дыру заранее. Приложение ничего не меняет — команды исправления выполняете вы.</p>
+    <p class="hint" data-i18n="web.audit.hint">Проверка настроек SSH, учётных записей, sudo и параметров ядра. Это причины взлома, а не его признаки: исправив их, вы закрываете дыру заранее. Приложение ничего не меняет — команды исправления выполняете вы.</p>
     <div class="audit-head">
       <span id="audit-when" class="muted"></span>
       <b id="audit-score"></b>
@@ -143,6 +143,7 @@
         <option value="ssh" data-i18n="audit.group.ssh">SSH</option>
         <option value="accounts" data-i18n="audit.group.accounts">Учётные записи</option>
         <option value="sudo" data-i18n="audit.group.sudo">sudo</option>
+        <option value="kernel" data-i18n="audit.group.kernel">Ядро</option>
       </select>
       <button type="reset" class="secondary" data-i18n="web.btn.reset">Сбросить</button>
     </form>

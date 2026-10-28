@@ -12,7 +12,7 @@ func init() {
   serversecuritygo serve [--env-file PATH]          запустить сканер и веб-панель
   serversecuritygo scan [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--min-risk LOW] [--env-file PATH]
   serversecuritygo audit [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--all] [--env-file PATH]
-                                                    проверка настроек SSH, учётных записей, sudo
+                                                    проверка настроек SSH, учётных записей, sudo и ядра
   serversecuritygo demo [--tui] [--listen ADDR]     демонстрационные данные (веб или терминал)
   serversecuritygo hash-password                    хеш пароля для SSG_AUTH_PASSWORD_HASH
   serversecuritygo version
@@ -30,7 +30,7 @@ Usage:
   serversecuritygo serve [--env-file PATH]          run the scanner and the web panel
   serversecuritygo scan [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--min-risk LOW] [--env-file PATH]
   serversecuritygo audit [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--all] [--env-file PATH]
-                                                    check SSH, account and sudo settings
+                                                    check SSH, account, sudo and kernel settings
   serversecuritygo demo [--tui] [--listen ADDR]     demo data (web or terminal)
   serversecuritygo hash-password                    password hash for SSG_AUTH_PASSWORD_HASH
   serversecuritygo version

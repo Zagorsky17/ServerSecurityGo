@@ -151,6 +151,24 @@ func portIn(spec string, port int) bool {
 	return false
 }
 
+// RateLimited сообщает, ограничивает ли ufw частоту входящих
+// подключений к порту со всего интернета (правило «ufw limit»: больше
+// 6 попыток с одного адреса за 30 с отбрасываются). Правило только для
+// отдельного источника общую частоту не ограничивает и не считается.
+func (u *UFW) RateLimited(proto string, port int) bool {
+	if !u.active() {
+		return false
+	}
+	for _, rules := range [][]ufwRule{u.rules4, u.rules6} {
+		for _, r := range rules {
+			if r.in && r.action == "limit" && anyAddr(r.src) && (r.proto == "any" || r.proto == proto) && portIn(r.dport, port) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // PortState — что ufw делает с входящими на порт со всего интернета:
 // FwOpen (разрешено правилом для любых адресов), FwFiltered (не
 // разрешено) или "" (ufw выключен или пропускает всё по умолчанию —

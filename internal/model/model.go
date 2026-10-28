@@ -452,6 +452,7 @@ const (
 	AuditGroupSSH      = "ssh"
 	AuditGroupAccounts = "accounts"
 	AuditGroupSudo     = "sudo"
+	AuditGroupKernel   = "kernel"
 )
 
 // AuditCheck — результат одной проверки конфигурации. Severity —

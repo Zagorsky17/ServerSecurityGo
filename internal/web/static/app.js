@@ -60,7 +60,7 @@ const STATUS_NAMES = {
   pass: () => tr('audit.status.pass'), fail: () => tr('audit.status.fail'), warn: () => tr('audit.status.warn'),
   info: () => tr('audit.status.info'), 'n/a': () => tr('audit.status.na'), unknown: () => tr('audit.status.unknown'),
 };
-const GROUP_NAMES = { ssh: () => tr('audit.group.ssh'), accounts: () => tr('audit.group.accounts'), sudo: () => tr('audit.group.sudo') };
+const GROUP_NAMES = { ssh: () => tr('audit.group.ssh'), accounts: () => tr('audit.group.accounts'), sudo: () => tr('audit.group.sudo'), kernel: () => tr('audit.group.kernel') };
 const STATUS_CLASS = { pass: 'st-pass', fail: 'st-fail', warn: 'st-warn', info: 'st-info', 'n/a': 'st-na', unknown: 'st-unknown' };
 const STATUS_RANK = { fail: 0, warn: 1, unknown: 2, info: 3, pass: 4, 'n/a': 5 };
 const F2B_ACTIONS = {

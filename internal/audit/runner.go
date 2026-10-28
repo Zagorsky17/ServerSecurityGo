@@ -26,6 +26,8 @@ const maxBaselineFile = 16 << 20
 // RunnerOptions — параметры фонового аудита службы.
 type RunnerOptions struct {
 	HostRoot string
+	// ProcRoot — корень /proc для параметров ядра (audit.Options.ProcRoot).
+	ProcRoot string
 	RootUID  int
 	// Interval — период повторной проверки (SSG_AUDIT_INTERVAL).
 	Interval time.Duration
@@ -126,7 +128,7 @@ func (r *Runner) RunOnce() *model.AuditReport {
 
 	start := time.Now()
 	base := r.base
-	checks, next := Run(Options{HostRoot: r.opt.HostRoot, RootUID: r.opt.RootUID, Baseline: &base})
+	checks, next := Run(Options{HostRoot: r.opt.HostRoot, ProcRoot: r.opt.ProcRoot, RootUID: r.opt.RootUID, Baseline: &base})
 	r.base = next
 	r.saveBaseline()
 	rep := &model.AuditReport{Time: start, Duration: time.Since(start), Checks: checks}
