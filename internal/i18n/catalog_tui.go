@@ -218,6 +218,7 @@ func init() {
 		"tui.help.plain":        {"текстовый режим: подробности без рамок для выделения мышью (и без OSC 52)", "plain text mode: details without frames for mouse selection (works without OSC 52)"},
 		"tui.help.mouse_toggle": {"выключить/включить мышь — при выключенной работает выделение терминала", "turn the mouse off/on — when off, the terminal's own selection works"},
 		"tui.hint.plain":        {"текст", "text"},
+		"tui.hint.mouse":        {"мышь", "mouse"},
 		"tui.mouse_off_status":  {"мышь выкл. · m", "mouse off · m"},
 		"tui.flash.copied":      {"Скопировано: {0} · не вставилось? v — текст", "Copied: {0} · didn't paste? v for text"},
 		"tui.flash.mouse_off":   {"Мышь выключена: выделяйте текст терминалом · m — включить", "Mouse off: select text with the terminal · m to turn it on"},
