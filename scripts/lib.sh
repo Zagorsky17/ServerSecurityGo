@@ -98,10 +98,19 @@ listen_addr() {
   echo "${addr:-127.0.0.1:8090}"
 }
 
-# health_check ждёт ответа /healthz до 60 секунд.
+# health_check ждёт ответа /healthz до 60 секунд. С выключенной панелью
+# (SSG_LISTEN_ADDR=off) проверять нечего по HTTP: смотрим, что служба
+# поднялась и держится, а не перезапускается по кругу.
 health_check() {
   local addr port scheme="http" i
   addr="$(listen_addr)"
+  if [ "$addr" = "off" ] || [ -z "$addr" ]; then
+    for i in 1 2 3; do
+      sleep 2
+      systemctl is-active --quiet "$APP_NAME" || return 1
+    done
+    return 0
+  fi
   port="${addr##*:}"
   if grep -qE '^SSG_TLS_CERT=.+' "${APP_DIR}/.env" 2>/dev/null; then scheme="https"; fi
   for i in $(seq 1 30); do

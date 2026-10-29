@@ -160,6 +160,8 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 
 如果使用专用密钥连接，请加上 `-i ~/.ssh/<密钥> -o IdentitiesOnly=yes`。
 
+面板不必一直运行：在 `.env` 中设置 `SSG_LISTEN_ADDR=off` 并执行 `systemctl restart serversecuritygo`，即可完全关闭面板——不再打开 HTTP 端口，而扫描、历史、审计和指标继续工作，可在终端界面中查看。需要恢复面板时，把地址写回去并重启服务。
+
 在未设置密码时，服务只允许 root 进入面板：对每个到 `127.0.0.1` 的连接，它都会在 `/proc/net/tcp` 中查找套接字的所有者。以 root 身份打开的隧道可以使用，而服务器上的其他用户（例如被入侵的 `www-data`）会收到 403 错误。如果你以自己的用户身份通过 SSH 登录，请把该用户的 UID 加入 `SSG_LOCAL_UIDS`（例如 `0,1000`），或者设置密码。
 
 ## 功能
@@ -398,7 +400,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
-| `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | Web 面板地址 |
+| `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | Web 面板地址（`off` 表示关闭面板，扫描继续运行）|
 | `SSG_SOCKET_PATH` | `/run/serversecuritygo/api.sock` | 终端界面套接字（`off` 表示关闭） |
 | `SSG_SCAN_INTERVAL` | `30s` | 扫描周期（最小 `2s`） |
 | `SSG_AUTH_PASSWORD_HASH` | — | 密码哈希（`serversecuritygo hash-password`） |

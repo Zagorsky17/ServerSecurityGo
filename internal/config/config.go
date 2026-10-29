@@ -25,7 +25,7 @@ import (
 
 // Config — все настройки приложения.
 type Config struct {
-	ListenAddr       string
+	ListenAddr       string // адрес веб-панели; "" — панель выключена (SSG_LISTEN_ADDR=off)
 	SocketPath       string // локальный Unix-сокет для терминального интерфейса; "" — выключен
 	ScanInterval     time.Duration
 	DataDir          string
@@ -199,6 +199,9 @@ func FromEnv() (Config, error) {
 		}
 	}
 	str("SSG_LISTEN_ADDR", &c.ListenAddr)
+	if strings.EqualFold(c.ListenAddr, "off") {
+		c.ListenAddr = "" // панель выключена: служба работает без HTTP
+	}
 	str("SSG_SOCKET_PATH", &c.SocketPath)
 	if strings.EqualFold(c.SocketPath, "off") {
 		c.SocketPath = ""
@@ -301,6 +304,9 @@ func FromEnv() (Config, error) {
 	return c, errors.Join(errs...)
 }
 
+// PanelEnabled — веб-панель включена (SSG_LISTEN_ADDR не "off").
+func (c Config) PanelEnabled() bool { return c.ListenAddr != "" }
+
 // IsLoopback сообщает, что адрес прослушивания доступен только локально.
 func (c Config) IsLoopback() bool {
 	host, _, err := net.SplitHostPort(c.ListenAddr)
@@ -325,6 +331,9 @@ func (c Config) ValidateSecurity() error {
 	}
 	// За reverse proxy панель может быть доступна из интернета, даже если
 	// приложение слушает 127.0.0.1, поэтому пароль обязателен.
+	if !c.PanelEnabled() {
+		return nil // панель выключена: сеть не открывается, проверять нечего
+	}
 	if c.TrustProxyTLS && c.AuthPasswordHash == "" {
 		return i18n.Errorf("err.proxy_needs_password")
 	}
