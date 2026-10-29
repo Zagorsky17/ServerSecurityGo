@@ -1634,7 +1634,7 @@ func (a *App) drawBottom() {
 	default:
 		hints = [][2]string{{"↑↓", a.tr("tui.hint.select")}, {fmt.Sprintf("1-%d/Tab", min(len(a.visible()), 9)), a.tr("tui.hint.panels")}, {"Enter", a.tr("tui.hint.details")}, {"/", a.tr("tui.hint.filter")}, {"r", a.tr("tui.hint.scan")}, {"y/c", a.tr("tui.hint.copy")}, {"v", a.tr("tui.hint.plain")}}
 	}
-	hints = append(hints, [2]string{"L", a.tr("tui.hint.lang")}, [2]string{"?", a.tr("tui.hint.help")}, [2]string{"q", a.tr("tui.hint.quit")})
+	hints = append(hints, [2]string{"m", a.tr("tui.hint.mouse")}, [2]string{"L", a.tr("tui.hint.lang")}, [2]string{"?", a.tr("tui.hint.help")}, [2]string{"q", a.tr("tui.hint.quit")})
 	cx := 0
 	for _, h := range hints {
 		need := strWidth(h[0]) + strWidth(h[1]) + 3

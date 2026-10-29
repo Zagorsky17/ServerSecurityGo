@@ -93,7 +93,7 @@ func TestRenderPanels(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
 	s := screen(a)
 	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] Результаты аудита", "[7] fail2ban", "[8] История", "[9] Система",
-		"demo-host", "CRIT 4", "kworkerds", "CRITICAL", "Оценка риска", "q выход"} {
+		"demo-host", "CRIT 4", "kworkerds", "CRITICAL", "Оценка риска", "m мышь", "q выход"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q\n%s", want, s)
 		}
