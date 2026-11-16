@@ -226,13 +226,17 @@ func (r *Runner) Check(ctx context.Context) error {
 			}
 			accepted := r.opt.Allowed != nil && r.opt.Allowed("/"+p)
 			old, exists := r.base.Files[p]
-			if exists && old.Package == "" && old.SHA256 != sum.SHA256 {
+			if exists && old.SHA256 != sum.SHA256 {
 				again, err := budget.hash(ctx, root, p)
 				if err != nil || again != sum {
 					problems = append(problems, errChanged)
 					continue
 				}
-				out = append(out, finding("bin_modified", "/"+p, model.RiskHigh, i18n.T("rule.bin_modified.title", "/"+p), i18n.T("rule.bin_modified.rec"), i18n.T("ev.bin_sha", old.SHA256, sum.SHA256)))
+				risk := model.RiskHigh
+				if critical(p) {
+					risk = model.RiskCritical
+				}
+				out = append(out, finding("bin_modified", "/"+p, risk, i18n.T("rule.bin_modified.title", "/"+p), i18n.T("rule.bin_modified.rec"), i18n.T("ev.bin_sha", old.SHA256, sum.SHA256)))
 				next.Files[p] = old
 			} else {
 				f := finding("bin_unpackaged", "/"+p, model.RiskInfo, i18n.T("rule.bin_unpackaged.title", "/"+p), i18n.T("rule.bin_unpackaged.rec"), i18n.T("ev.bin_sha", "", sum.SHA256))
@@ -240,6 +244,8 @@ func (r *Runner) Check(ctx context.Context) error {
 				out = append(out, f)
 				if accepted {
 					next.Files[p] = baselineEntry{SHA256: sum.SHA256}
+				} else if exists && old.Package != "" {
+					next.Files[p] = old
 				}
 			}
 		}

@@ -69,26 +69,39 @@ func moduleSample(procRoot, hostRoot string) (map[string]string, map[string]modu
 	sys := make(map[string]module)
 	for _, e := range entries {
 		name := e.Name()
-		if !moduleName.MatchString(name) {
+		if !e.IsDir() || !moduleName.MatchString(name) {
 			continue
 		}
 		dir := filepath.Join(hostRoot, "sys/module", name)
 		state, fi, err := safefile.ReadRegular(filepath.Join(dir, "initstate"), 4096, false)
 		// Встроенные модули не имеют initstate; исчезновение при выгрузке тоже штатно.
 		if errors.Is(err, os.ErrNotExist) {
+			for _, marker := range []string{"refcnt", "sections"} {
+				if _, markerErr := os.Lstat(filepath.Join(dir, marker)); markerErr == nil {
+					return nil, nil, err
+				} else if !errors.Is(markerErr, os.ErrNotExist) {
+					return nil, nil, markerErr
+				}
+			}
 			continue
 		}
 		if err != nil {
 			return nil, nil, err
+		}
+		stateText := strings.TrimSpace(string(state))
+		if stateText != "live" && stateText != "coming" && stateText != "going" {
+			return nil, nil, i18n.Errorf("err.rootkit_field", dir+"/initstate")
 		}
 		taint, _, err := safefile.ReadRegular(filepath.Join(dir, "taint"), 4096, false)
 		if errors.Is(err, os.ErrNotExist) {
-			continue
+			if _, stateErr := os.Lstat(filepath.Join(dir, "initstate")); errors.Is(stateErr, os.ErrNotExist) {
+				continue
+			}
 		}
 		if err != nil {
 			return nil, nil, err
 		}
-		sys[name] = module{state: strings.TrimSpace(string(state)), taint: strings.TrimSpace(string(taint)), info: fi}
+		sys[name] = module{state: stateText, taint: strings.TrimSpace(string(taint)), info: fi}
 	}
 	return listed, sys, nil
 }

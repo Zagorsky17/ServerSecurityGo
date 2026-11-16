@@ -131,6 +131,7 @@ func moduleFixture(t *testing.T, h, name, state, taint string) {
 }
 func TestModulesStatesTaintAndIndex(t *testing.T) {
 	p, h := hostFixture(t)
+	write(t, h, "sys/module/compression", "zstd\n")
 	write(t, p, "modules", "known 100 0 - Live 0x0\nnvidia 200 0 - Live 0x0\nloading 100 0 - Loading 0x0\n")
 	moduleFixture(t, h, "known", "live", "EO")
 	moduleFixture(t, h, "nvidia", "live", "OE")
@@ -249,4 +250,25 @@ func TestSweepBoundariesAndConcurrency(t *testing.T) {
 func FuzzParseModules(f *testing.F) {
 	f.Add("x 100 0 - Live 0x0\n")
 	f.Fuzz(func(t *testing.T, s string) { _, _ = parseModules(s) })
+}
+
+func TestIncompleteModuleAttributesAreNotClean(t *testing.T) {
+	for _, kind := range []string{"missing-taint", "missing-initstate", "invalid-state"} {
+		t.Run(kind, func(t *testing.T) {
+			p, h := hostFixture(t)
+			moduleFixture(t, h, "testmod", "live", "")
+			switch kind {
+			case "missing-taint":
+				os.Remove(filepath.Join(h, "sys/module/testmod/taint"))
+			case "missing-initstate":
+				os.Remove(filepath.Join(h, "sys/module/testmod/initstate"))
+				write(t, h, "sys/module/testmod/refcnt", "0")
+			case "invalid-state":
+				write(t, h, "sys/module/testmod/initstate", "invalid")
+			}
+			if _, _, err := moduleChecks(context.Background(), p, h, nil, 0); err == nil {
+				t.Fatal("incomplete module accepted")
+			}
+		})
+	}
 }

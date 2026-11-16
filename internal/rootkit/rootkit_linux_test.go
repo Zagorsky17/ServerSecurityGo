@@ -17,7 +17,18 @@ import (
 func TestRealThreadsAreNotHiddenProcesses(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	other := make(chan int)
+	release := make(chan struct{})
+	go func() { runtime.LockOSThread(); defer runtime.UnlockOSThread(); other <- syscall.Gettid(); <-release }()
+	defer close(release)
+	otherTID := <-other
 	tid := syscall.Gettid()
+	if tid == os.Getpid() {
+		tid = otherTID
+	}
+	if tid == os.Getpid() {
+		t.Fatal("test must use a nonleader thread")
+	}
 	pid := os.Getpid()
 	p, err := processIdentity(filepath.Join("/proc", strconv.Itoa(tid)))
 	if err != nil {

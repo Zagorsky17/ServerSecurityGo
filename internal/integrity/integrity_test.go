@@ -342,3 +342,28 @@ func TestAcceptedFileDisappearanceIsIncomplete(t *testing.T) {
 		t.Fatal("lost reference")
 	}
 }
+
+func TestRemovedOwnershipCannotHideModifiedTrustedFile(t *testing.T) {
+	h, state := fixture(t)
+	r := runner(h, state)
+	ctx := context.Background()
+	if err := r.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	write(t, h, "var/lib/dpkg/info/tools.list", "/usr/bin/helper\n")
+	write(t, h, "var/lib/dpkg/info/tools.md5sums", md("helper good")+"  usr/bin/helper\n")
+	if err := r.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r.base.Files["usr/bin/ssh"].SHA256 == "" {
+		t.Fatal("lost existing trusted hash when ownership disappeared")
+	}
+	write(t, h, "usr/bin/ssh", "changed after ownership disappeared")
+	if err := r.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f := find(r, "bin_modified")
+	if len(f) != 1 || f[0].Risk != model.RiskCritical {
+		t.Fatalf("%+v", r.Findings())
+	}
+}
