@@ -320,8 +320,18 @@ func persistenceContent(path string, data []byte, fi os.FileInfo, now time.Time,
 			f.Suppressed = cfg.Allowed(&model.Process{Exe: path}, f.ID)
 			out = append(out, f)
 		}
-		if strings.HasPrefix(path, "/etc/init.d/") {
-			add("sysv_no_package", model.RiskInfo)
+		rcScript, _ := filepath.Match("/etc/rc*.d/*", path)
+		if strings.HasPrefix(path, "/etc/init.d/") || rcScript {
+			ownedTarget := false
+			if target, err := os.Readlink(filepath.Join(root.Name(), path)); err == nil {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(path), target)
+				}
+				ownedTarget = owners[filepath.Clean(target)]
+			}
+			if !ownedTarget {
+				add("sysv_no_package", model.RiskInfo)
+			}
 		}
 	}
 	// Объединение повторяющихся строк одного правила сохраняет стабильный ключ истории.

@@ -95,3 +95,25 @@ func TestPersistenceRejectsEscapeAndReportsLimit(t *testing.T) {
 		t.Fatal("missing incomplete state")
 	}
 }
+
+func TestSysVDirectScriptsAndPackagedLinks(t *testing.T) {
+	root := t.TempDir()
+	persistenceWrite(t, root, "etc/rc2.d/S99custom", "#!/bin/sh\nexit 0\n")
+	persistenceWrite(t, root, "etc/init.d/packaged", "#!/bin/sh\nexit 0\n")
+	if err := os.Symlink("../init.d/packaged", filepath.Join(root, "etc/rc2.d/S01packaged")); err != nil {
+		t.Fatal(err)
+	}
+	findings := SystemChecksWithContext(root, time.Now(), DefaultConfig(), map[string]bool{"/etc/init.d/packaged": true}, nil)
+	found := false
+	for _, f := range findings {
+		if f.ID == "sysv_no_package" {
+			if f.Path != "/etc/rc2.d/S99custom" {
+				t.Fatalf("packaged target marked unowned: %+v", f)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("direct rc script missed")
+	}
+}
