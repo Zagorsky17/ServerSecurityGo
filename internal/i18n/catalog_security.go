@@ -69,7 +69,7 @@ func init() {
 		"rule.ctr_sock_perms.rec":                  {"Сверьте права сокета и участников группы docker. Доступ к Docker API обычно даёт возможность управлять хостом.", "Review socket permissions and docker group members. Docker API access usually permits host control."},
 		"rule.container_unavailable.title":         {"Проверки Docker выполнены не полностью", "Docker checks are incomplete"},
 		"rule.container_unavailable.rec":           {"Проверьте доступ к указанным метаданным и лимиты. Docker API не вызывается.", "Review access to the listed metadata and limits. The Docker API is not called."},
-		"ev.persistence_line":                      {"Строка {0}: обнаружен шаблон; содержимое не сохраняется", "Line {0}: pattern detected; contents not retained"},
+		"ev.persistence_content_omitted":           {"содержимое не сохраняется", "contents not retained"},
 		"ev.library_upgrade":                       {"На хосте есть пакетная замена; возможно штатное обновление", "A package-owned replacement exists on the host; a legitimate update is possible"},
 		"ev.container_stopped":                     {"Контейнер остановлен; оценивается сохранённая конфигурация", "Container is stopped; findings describe saved configuration"},
 	})

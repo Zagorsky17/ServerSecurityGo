@@ -111,3 +111,10 @@ func TestProcessSecuritySuppressionAndContainerContext(t *testing.T) {
 		t.Fatalf("suppressed=%v context=%v: %+v", suppressed, context, p.Findings)
 	}
 }
+
+func TestNonLibrarySuffixDoesNotCreateLibraryFinding(t *testing.T) {
+	p := &model.Process{Exe: "/usr/bin/app", Maps: []model.MemoryMap{{Path: "/tmp/app.socket", Perms: "r-xp", Deleted: true}}}
+	if got := securityByID(p, &Context{}); len(got) != 0 {
+		t.Fatalf("non-library classified as library: %+v", got)
+	}
+}

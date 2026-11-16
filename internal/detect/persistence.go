@@ -240,7 +240,7 @@ func persistenceContent(path string, data []byte, fi os.FileInfo, now time.Time,
 			continue
 		}
 		// Сохраняем факт и номер строки; содержимое профиля может включать произвольные секреты.
-		ref := i18n.T("ev.persistence_line", i+1)
+		ref := i18n.T("ev.line", i+1, i18n.T("ev.persistence_content_omitted"))
 		if persistPattern.MatchString(t) && len(hits) < 5 {
 			hits = append(hits, ref)
 		} else if tempPattern.MatchString(t) && len(tempHits) < 5 {

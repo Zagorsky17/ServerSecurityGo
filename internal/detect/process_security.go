@@ -98,7 +98,7 @@ func ruleProcessSecurity(p *model.Process, c *Context) []model.Finding {
 			continue
 		}
 		base := filepath.Base(m.Path)
-		if !strings.Contains(base, ".so") {
+		if !strings.HasSuffix(base, ".so") && !strings.Contains(base, ".so.") {
 			continue
 		}
 		if (procfs.UnsafeLibraryPath(m.Path) || (p.EUID == 0 && knownDaemons[progName(p)] && (strings.HasPrefix(m.Path, "/home/") || strings.HasPrefix(m.Path, "/root/")))) && len(temp) < 8 {
