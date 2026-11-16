@@ -76,7 +76,7 @@ func TestInstallerBaselineAtomicAndCompatible(t *testing.T) {
 }
 
 func TestUpdateAndRollbackLifecycle(t *testing.T) {
-	for _, failure := range []string{"", "restart", "baseline"} {
+	for _, failure := range []string{"", "restart", "baseline", "checkout"} {
 		t.Run("failure="+failure, func(t *testing.T) {
 			f := setup(t)
 			app := filepath.Join(f.root, "app")
@@ -114,11 +114,11 @@ health_check() { :; }
 journalctl() { :; }
 systemctl() {
   echo "$*" >> "$TEST_ROOT/calls"
-  if [ "$1" = restart ] && [ "$TEST_FAILURE" = restart ] && [ ! -e "$TEST_ROOT/failed-once" ]; then
+  if [ "$1" = restart ] && { [ "$TEST_FAILURE" = restart ] || [ "$TEST_FAILURE" = checkout ]; } && [ ! -e "$TEST_ROOT/failed-once" ]; then
     touch "$TEST_ROOT/failed-once"; return 1
   fi
 }
-git() { cp "$TEST_ROOT/old-unit" "$APP_DIR/deploy/serversecuritygo.service"; }
+git() { if [ "$TEST_FAILURE" = checkout ]; then return 1; fi; cp "$TEST_ROOT/old-unit" "$APP_DIR/deploy/serversecuritygo.service"; }
 write_self_baseline() {
   if [ "$TEST_FAILURE" = baseline ]; then return 1; fi
   real_write_self_baseline "$TEST_ROOT"
@@ -161,6 +161,10 @@ write_self_baseline() {
 			got, _ := os.ReadFile(f.binary)
 			if string(got) != old {
 				t.Fatal("old binary not restored")
+			}
+			unit, _ := os.ReadFile(f.unit)
+			if string(unit) != "old unit" {
+				t.Fatal("old unit not restored")
 			}
 			restored, _ := os.ReadFile(f.baseline)
 			if string(restored) != string(original) {

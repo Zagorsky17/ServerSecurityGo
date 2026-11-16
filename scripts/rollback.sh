@@ -17,7 +17,6 @@ cp -f bin/serversecuritygo.prev bin/serversecuritygo
 if [ -f bin/.prev-ref ]; then
   git -c advice.detachedHead=false checkout -q "$(cat bin/.prev-ref)" || warn "не удалось вернуть исходники к $(cat bin/.prev-ref)"
 fi
-install_unit
 restore_self_baseline
 systemctl restart "$APP_NAME"
 if health_check; then

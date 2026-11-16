@@ -85,7 +85,6 @@ if [ -f bin/serversecuritygo.prev ]; then
   systemctl stop "$APP_NAME"
   cp -f bin/serversecuritygo.prev bin/serversecuritygo
   git -c advice.detachedHead=false checkout -q "$PREV_REF" || true
-  install_unit
   restore_self_baseline
   systemctl restart "$APP_NAME"
   if health_check; then

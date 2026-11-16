@@ -206,6 +206,7 @@ write_self_baseline() (
 
 # Для отката возвращаем прежний эталон, не принимая текущее содержимое файлов.
 save_self_baseline() {
+  cp -p -- "$UNIT_PATH" "$APP_DIR/bin/.prev-unit" || return 1
   if [ -f "$DATA_DIR/self.sha256" ] && [ ! -L "$DATA_DIR/self.sha256" ]; then
     cp -p -- "$DATA_DIR/self.sha256" "$APP_DIR/bin/.prev-self.sha256"
   else
@@ -214,6 +215,12 @@ save_self_baseline() {
 }
 
 restore_self_baseline() {
+  if [ -f "$APP_DIR/bin/.prev-unit" ]; then
+    install -m 0644 "$APP_DIR/bin/.prev-unit" "$UNIT_PATH" || return 1
+    systemctl daemon-reload || return 1
+  else
+    install_unit || return 1
+  fi
   if [ -f "$APP_DIR/bin/.prev-self.sha256" ]; then
     install -m 0600 "$APP_DIR/bin/.prev-self.sha256" "$DATA_DIR/.self.sha256.restore" || return 1
     mv -f -- "$DATA_DIR/.self.sha256.restore" "$DATA_DIR/self.sha256"
