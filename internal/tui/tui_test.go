@@ -317,7 +317,7 @@ func TestRemoteSourceOldService(t *testing.T) {
 	srv := web.New(web.Options{Scanner: sc, Version: "old", ListenAddr: "127.0.0.1:8090", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	local := srv.LocalHandler()
 	old := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/exposure" || r.URL.Path == "/api/audit" || r.URL.Path == "/api/fail2ban" {
+		if r.URL.Path == "/api/exposure" || r.URL.Path == "/api/audit" || r.URL.Path == "/api/fail2ban" || r.URL.Path == "/api/ufw" {
 			http.NotFound(w, r)
 			return
 		}
