@@ -250,6 +250,7 @@ type Snapshot struct {
 	Sockets   []Socket            `json:"sockets"`
 	System    []SystemFinding     `json:"system"`
 	Exposure  *ExposureReport     `json:"exposure,omitempty"`
+	UFW       *UFWReport          `json:"ufw,omitempty"`
 	Fail2ban  *Fail2banReport     `json:"fail2ban,omitempty"`
 	NetLoad   *NetLoadReport      `json:"netLoad,omitempty"`
 	Warnings  []i18n.Msg          `json:"warnings"`

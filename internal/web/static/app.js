@@ -124,7 +124,7 @@ async function copyText(text) {
 // ---------------------------------------------------------------------
 
 const state = {
-  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null,
+  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null, ufw: null,
   metrics: null, mrange: '1h', netload: null,
   tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
@@ -360,6 +360,21 @@ function renderAudit() {
 }
 
 // ---------------------------------------------------------------------
+function renderUFW() {
+  const u = state.ufw;
+  const opened = new Set([...$('ufw-files').querySelectorAll('details[open]')].map(el => el.dataset.path));
+  $('ufw-state').textContent = !u ? tr('web.ufw.unavailable') : u.state === 'absent' ? tr('web.ufw.absent') : '';
+  $('ufw-settings').replaceChildren(...(u && u.state !== 'absent' ? u.settings || [] : []).flatMap(s => [h('dt', null, tx(s.label)), h('dd', null, tx(s.value))]));
+  $('ufw-warn').replaceChildren(...(u ? u.warnings || [] : []).map(w => h('li', null, tx(w))));
+  $('ufw-files').replaceChildren(...(u && u.state !== 'absent' ? u.files || [] : []).map(f => {
+    const d = h('details', { class: 'card' }, h('summary', null, f.path),
+      f.status === 'ok' ? h('pre', null, f.content || tr('web.ufw.empty')) : h('p', { class: 'warn-list' }, tx(f.error)));
+    d.dataset.path = f.path;
+    d.open = opened.has(f.path);
+    return d;
+  }));
+}
+
 // fail2ban
 // ---------------------------------------------------------------------
 
@@ -1026,6 +1041,7 @@ function renderAll() {
     case 'ports': renderPorts(); break;
     case 'audit': renderAudit(); break;
     case 'fail2ban': renderFail2ban(); break;
+    case 'ufw': renderUFW(); break;
     case 'history': renderHistory(); break;
     case 'system': renderSystem(); break;
     case 'metrics': renderMetrics(); break;
@@ -1040,6 +1056,7 @@ async function loadTabData() {
     case 'ports': state.exposure = (await api('/api/exposure')).exposure || null; break;
     case 'audit': state.audit = await api('/api/audit'); break;
     case 'fail2ban': state.fail2ban = await api('/api/fail2ban'); break;
+    case 'ufw': state.ufw = await api('/api/ufw'); break;
     case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
     case 'system': state.system = await api('/api/system'); break;
     case 'metrics': state.metrics = await api('/api/metrics?range=' + encodeURIComponent(state.mrange)); break;

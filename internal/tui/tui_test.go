@@ -92,7 +92,7 @@ func r(c rune) Key { return Key{Kind: KeyRune, Rune: c} }
 func TestRenderPanels(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
 	s := screen(a)
-	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] Результаты аудита", "[7] fail2ban", "[8] История", "[9] Система",
+	for _, want := range []string{"[1] Сводка", "[2] Подозрительные", "[3] Процессы", "[4] Сеть", "[5] Порты", "[6] Результаты аудита", "[7] fail2ban", "[8] UFW", "[9] История", "[10] Система",
 		"demo-host", "CRIT 4", "kworkerds", "CRITICAL", "Оценка риска", "m мышь", "q выход"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q\n%s", want, s)
@@ -187,11 +187,11 @@ func TestPanelsDetails(t *testing.T) {
 	if s := screen(a); !strings.Contains(s, "Сокет") || !strings.Contains(s, "LISTEN") {
 		t.Errorf("панель сети:\n%s", s)
 	}
-	press(a, r('9'))
+	press(a, r('0'))
 	if s := screen(a); !strings.Contains(s, "ld.so.preload") {
 		t.Errorf("панель системы:\n%s", s)
 	}
-	press(a, r('8'))
+	press(a, r('9'))
 	if s := screen(a); !strings.Contains(s, "Начало") && !strings.Contains(s, "Признак") && !strings.Contains(s, "Аудит: «") {
 		t.Errorf("панель истории:\n%s", s)
 	}
@@ -342,7 +342,7 @@ func TestRemoteSourceOldService(t *testing.T) {
 	}
 	t.Cleanup(rs.Close)
 	d, err := rs.Fetch()
-	if err != nil || d.Exposure != nil || d.Audit != nil || d.Fail2ban != nil || len(d.Procs) == 0 {
+	if err != nil || d.Exposure != nil || d.Audit != nil || d.Fail2ban != nil || d.UFW != nil || len(d.Procs) == 0 {
 		t.Fatalf("Fetch у старой службы: %v %+v %+v", err, d.Exposure, d.Audit)
 	}
 	a := New(Options{Source: rs, Out: io.Discard, Lang: i18n.RU})
@@ -391,6 +391,9 @@ func TestRemoteSource(t *testing.T) {
 	}
 	if d.Exposure == nil || len(d.Exposure.Entries) == 0 || d.Exposure.Firewall.UFW != "active" {
 		t.Errorf("открытые порты: %+v", d.Exposure)
+	}
+	if d.UFW == nil || d.UFW.State != "enabled" || len(d.UFW.Files) < 10 {
+		t.Fatal("remote UFW data missing")
 	}
 	if d.Fail2ban == nil || !d.Fail2ban.Running || len(d.Fail2ban.Bans) == 0 {
 		t.Errorf("fail2ban: %+v", d.Fail2ban)
@@ -559,7 +562,7 @@ func TestAddrInTitle(t *testing.T) {
 // TestAddrInHistory: адрес в тексте события в панели «История».
 func TestAddrInHistory(t *testing.T) {
 	a, _ := newTestApp(t, 160, 45)
-	press(a, r('8'))
+	press(a, r('9'))
 	a.events[0].Details = i18n.T("hist.listen", "tcp 203.0.113.5:8443")
 	a.render()
 	cs := cellsAt(a, "203.0.113.5:8443")
@@ -654,7 +657,7 @@ func TestLayoutHeights(t *testing.T) {
 				if r.h == 0 && p == pStatus {
 					continue
 				}
-				if r.y != y || r.h < 2 {
+				if r.y != y || r.h < 1 {
 					t.Fatalf("h=%d, развёрнута %d: панель %d %+v (ожидалось y=%d)", h, exp, p, r, y)
 				}
 				y += r.h
@@ -792,18 +795,18 @@ func TestNoFail2banPanel(t *testing.T) {
 	a.load()
 	s := screen(a)
 	// Без fail2ban панелей десять: «Метрики» и «Сетевая нагрузка» в конце.
-	if strings.Contains(s, "fail2ban") || !strings.Contains(s, "[7] История") || !strings.Contains(s, "[8] Система") || !strings.Contains(s, "1-9/Tab") {
+	if strings.Contains(s, "fail2ban") || !strings.Contains(s, "[7] UFW") || !strings.Contains(s, "[9] Система") || !strings.Contains(s, "1-9/Tab") {
 		t.Errorf("панели без fail2ban:\n%s", s)
 	}
-	press(a, r('8'))
+	press(a, r('9'))
 	if a.focus != pSys {
 		t.Errorf("8 → %d, нужна «Система»", a.focus)
 	}
-	press(a, r('9'))
+	press(a, r('0'))
 	if a.focus != pMetrics {
 		t.Errorf("9 → %d, нужны «Метрики»", a.focus)
 	}
-	press(a, r('0'))
+	press(a, Key{Kind: KeyTab})
 	if a.focus != pLoad {
 		t.Errorf("0 → %d, нужна «Сетевая нагрузка»", a.focus)
 	}
@@ -811,7 +814,7 @@ func TestNoFail2banPanel(t *testing.T) {
 	if a.focus != pStatus {
 		t.Errorf("Tab после последней панели: %d", a.focus)
 	}
-	if a.minHeight() != 20 {
+	if a.minHeight() != 22 {
 		t.Errorf("минимальная высота без fail2ban: %d", a.minHeight())
 	}
 }
@@ -959,7 +962,7 @@ func TestMouseToggle(t *testing.T) {
 // злоумышленник) вырезаются, как и в обычной отрисовке.
 func TestPlainModeEscapes(t *testing.T) {
 	a, out := newTestApp(t, 120, 40)
-	press(a, r('8'))
+	press(a, r('9'))
 	a.events[0].Details = i18n.L("evil \x1b]52;c;ZXZpbA==\a \x1b[2J end")
 	a.events[0].Key = ""
 	out.Reset()
@@ -1040,12 +1043,12 @@ func TestMetricsPanel(t *testing.T) {
 	if !a.hasMetrics() {
 		t.Fatal("панель метрик не появилась")
 	}
-	press(a, r('0')) // десятая панель
+	press(a, r('0'), Key{Kind: KeyTab}) // одиннадцатая панель
 	if a.focus != pMetrics {
 		t.Fatalf("0 → %d, нужны «Метрики»", a.focus)
 	}
 	s := screen(a)
-	for _, want := range []string{"[10] Метрики", "Процессор, %", "Steal"} {
+	for _, want := range []string{"[11] Метрики", "Процессор, %", "Steal"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q:\n%s", want, s)
 		}
@@ -1055,7 +1058,7 @@ func TestMetricsPanel(t *testing.T) {
 	if sv := screen(a); !strings.Contains(sv, "Ресурсы") || !strings.Contains(sv, "Steal") {
 		t.Errorf("в сводке нет строки ресурсов:\n%s", sv)
 	}
-	press(a, r('0'))
+	press(a, r('0'), Key{Kind: KeyTab})
 	// Подробности выбранного ряда: график и разделы.
 	press(a, Key{Kind: KeyEnter})
 	s = screen(a)
@@ -1117,7 +1120,7 @@ func TestNetLoadPanel(t *testing.T) {
 	// Панель последняя: Tab из «Метрик» ведёт на неё.
 	a.focusPanel(pLoad)
 	s := screen(a)
-	for _, want := range []string{"[11] Сетевая нагрузка", "443", "Источники соединений", "Счётчики ядра", "203.0.113"} {
+	for _, want := range []string{"[12] Сетевая нагрузка", "443", "Источники соединений", "Счётчики ядра", "203.0.113"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("на экране нет %q:\n%s", want, s)
 		}
@@ -1152,5 +1155,41 @@ func TestNetLoadPanel(t *testing.T) {
 	}
 	if len(ids) == 0 {
 		t.Error("признаков net_* в системных находках нет")
+	}
+}
+
+func TestUFWPanelAndPIDTiming(t *testing.T) {
+	a, out := newTestApp(t, 160, 55)
+	if a.data.UFW == nil || a.data.UFW.State != "enabled" {
+		t.Fatal("missing local UFW report")
+	}
+	press(a, r('8'))
+	if a.focus != pUFW || a.panelNum(pF2B)+1 != a.panelNum(pUFW) {
+		t.Fatal("UFW not after fail2ban")
+	}
+	text := screen(a)
+	for _, want := range []string{"[8] UFW", "Политика входящего трафика", "DROP", "Сохранённая конфигурация UFW"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %s", want)
+		}
+	}
+	for i, f := range a.ufwFiles {
+		if f.Path == "/etc/ufw/user.rules" {
+			a.lists[pUFW].cursor = i
+			break
+		}
+	}
+	if text = screen(a); !strings.Contains(text, "--dport 22") {
+		t.Fatal("selected rule content missing")
+	}
+	out.Reset()
+	a.copyJSON()
+	if copied := osc52Text(t, out.String()); !strings.Contains(copied, "/etc/ufw/user.rules") {
+		t.Fatal(copied)
+	}
+	a.data.Status.Warnings = []i18n.Msg{i18n.T("rule.rootkit_sweep_running.title", "00:02:15", "00:05:40", 28)}
+	a.focusPanel(pStatus)
+	if text = screen(a); !strings.Contains(text, "00:02:15") || !strings.Contains(text, "00:05:40") {
+		t.Fatal("PID timers missing from overview")
 	}
 }

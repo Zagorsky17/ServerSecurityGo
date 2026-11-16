@@ -22,9 +22,7 @@ type seg struct {
 type line []seg
 
 // minHeight — минимальная высота окна для раскладки панелей: свёрнутые
-// панели — по рамке с заголовком (2 строки), у развёрнутой — хотя бы одна
-// строка списка, плюс строка подсказок. 16 строк при восьми панелях, 18 —
-// при девяти (с fail2ban).
+// панели занимают до 2 строк, плюс место для развёрнутой и подсказок.
 func (a *App) minHeight() int { return 2*(len(a.visible())-2) + 4 }
 
 // draw рисует кадр целиком и выводит его.
@@ -87,13 +85,13 @@ func (a *App) render() {
 // несколько строк.
 //
 // В низком окне (80×24) свёрнутые панели сжимаются до рамки с заголовком
-// (2 строки), а если и этого мало — прячется «Сводка»: развёрнутой
+// (до 1 строки), а если и этого мало — прячется «Сводка»: развёрнутой
 // панели нужно хотя бы несколько строк списка.
 func (a *App) layoutLeft(lw, contentH int) {
 	// Свёрнутые панели-списки: все, кроме развёрнутой.
 	lists := a.visible()[1:]
 	folded := len(lists) - 1
-	const bigMin = 6
+	const bigMin = 10
 	statusH := 6
 	if contentH-statusH < folded*2+bigMin {
 		statusH = max(0, contentH-(folded*2+bigMin))
@@ -106,7 +104,7 @@ func (a *App) layoutLeft(lw, contentH int) {
 	small := min(max(avail/(folded+3), 3), 7)
 	big := avail - small*folded
 	if big < bigMin {
-		small = max(2, min(3, (avail-bigMin)/folded))
+		small = max(1, min(3, (avail-bigMin)/folded))
 		big = avail - small*folded
 	}
 	y := statusH
@@ -199,6 +197,15 @@ func (a *App) listTitle(p panelID) string {
 func (a *App) drawList(p panelID, r rect) {
 	s := a.scr
 	active := a.panelActive(p)
+	if r.h == 1 {
+		st := stDim
+		if active {
+			st = stNormal
+		}
+		s.Text(r.x, r.y, r.w, a.listTitle(p), st)
+		a.headers[p] = 0
+		return
+	}
 	s.Box(r.x, r.y, r.w, r.h, a.listTitle(p), active)
 	iw := r.w - 2
 	ih := r.h - 2
@@ -274,6 +281,8 @@ func (a *App) columnsHeader(p panelID, w int) string {
 		return fit(a.tr("tui.cols.ports"), w)
 	case pAudit:
 		return fit(a.tr("tui.cols.audit"), w)
+	case pUFW:
+		return fit(a.tr("web.ufw.files"), w)
 	case pF2B:
 		return fit(a.tr("tui.cols.f2b"), w)
 	case pHist:
@@ -400,6 +409,14 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{fit(a.groupName(c.Group), 8) + " ", stDim},
 			{a.txt(c.Title), stNormal},
 		}
+	case pUFW:
+		f := a.ufwFiles[i]
+		st := stNormal
+		if f.Status != "ok" {
+			st = stWarn
+		}
+		return []seg{{f.Path, st}}
+
 	case pF2B:
 		b := a.bans[i]
 		until := a.tr("web.f2b.forever")
@@ -659,6 +676,10 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.auditDetail(b, c)
 		return a.tr("tui.panel.audit") + " · " + auditShort(c.Status), b.lines
+	case pUFW:
+		a.ufwDetail(b)
+		return a.tr("tui.panel.ufw"), b.lines
+
 	case pF2B:
 		// Сверху — выбранный бан, ниже — состояние и статистика fail2ban.
 		title := a.tr("tui.panel.f2b")
@@ -1731,5 +1752,34 @@ func (a *App) drawHelp() {
 		}
 		s.Text(x+4, row, 26, k, stKey)
 		s.Text(x+31, row, w-33, a.tr(hl[1]), stNormal)
+	}
+}
+
+func (a *App) ufwDetail(b *lb) {
+	b.para(a.tr("web.ufw.hint"), stDim, 0)
+	u := a.data.UFW
+	if u == nil {
+		b.para(a.tr("web.ufw.unavailable"), stWarn, 0)
+		return
+	}
+	if u.State == "absent" {
+		b.para(a.tr("web.ufw.absent"), stDim, 0)
+		return
+	}
+	for _, f := range u.Settings {
+		b.para(a.txt(f.Label)+": "+a.txt(f.Value), stNormal, 0)
+	}
+	for _, w := range u.Warnings {
+		b.para(a.txt(w), stWarn, 0)
+	}
+	if f, ok := a.selUFW(); ok {
+		b.header(f.Path)
+		if f.Status != "ok" {
+			b.para(a.txt(f.Error), stWarn, 0)
+			return
+		}
+		for _, line := range strings.Split(f.Content, "\n") {
+			b.para(line, stNormal, 0)
+		}
 	}
 }

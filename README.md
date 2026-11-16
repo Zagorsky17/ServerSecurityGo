@@ -327,6 +327,14 @@ The data comes from `/proc` only: `net/netstat`, `net/snmp`, `net/sockstat`, `ne
 
 **Protecting the scanner itself.** During an attack `/proc/net/tcp` grows to hundreds of thousands of lines, so the number of sockets per network namespace is capped by `SSG_NET_MAX_SOCKETS` (100,000, about 200 bytes per socket); beyond the cap sockets are skipped and `net_table_truncated` appears. The per-address aggregates are size-capped too.
 
+### UFW and PID sweep timing
+
+The **UFW** section follows fail2ban (or audit when fail2ban is absent). It shows saved incoming, outgoing and forwarding policies, IPv6, logging, application profiles, conntrack modules and the sysctl file. Open the full contents of `ufw.conf`, `/etc/default/ufw`, `before/user/after.rules` and their IPv6 counterparts, `before/after.init`, `sysctl.conf`, the file selected by `IPT_SYSCTL` and `applications.d` profiles. In the TUI, select a file and press Enter to scroll its details; `/` filters paths and contents, and `c` copies JSON. Expand a file in the web panel. API: `GET /api/ufw`, with the same authorization as other sections.
+
+This is on-disk configuration; changes may not have been applied. Active kernel rules and third-party Docker rules are not verified here. Reads execute no commands and are limited to 1 MiB per file, 4 MiB total and 1000 profiles; errors, exceeded limits and missing required files are explicit. Missing settings are not replaced with assumed defaults. [UFW evaluation order](https://manpages.ubuntu.com/manpages/noble/man8/ufw-framework.8.html): before → user → after, separately for IPv4 and IPv6.
+
+During a full PID sweep, the warning shows elapsed time, approximate remaining time and the percentage of the range covered. Times use `HH:MM:SS`; the estimate uses the current sweep's average speed and varies with load. It shows “calculating” until initial measurements are available. Cancellation or failure freezes the elapsed time; each new pass resets it. Display updates with scanner snapshots (`SSG_SCAN_INTERVAL`), and a successful result includes total duration.
+
 ### Hidden processes, kernel modules and package integrity
 
 Results appear in **System**, history and `scan` reports. The service compares `/proc` listings with task TGIDs and parent PIDs, then confirms a missing process leader by PID and start time twice, 50 ms apart. Ordinary thread IDs, exited processes and reused PIDs are excluded. A separate worker probes all PID numbers in batches of 1,024 with 100 ms pauses, repeating after `SSG_ROOTKIT_INTERVAL` (default `10m`). A large PID range takes several minutes; short-lived processes can be missed. `loadavg` task counts are not used as proof of hiding because namespaces and concurrent task creation make that inference unreliable.
