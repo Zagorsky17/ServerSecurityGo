@@ -328,6 +328,14 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 **保护扫描器自身。** 攻击期间 `/proc/net/tcp` 会增长到数十万行，因此每个网络命名空间的套接字数量受 `SSG_NET_MAX_SOCKETS` 限制（100 000，每个套接字约 200 字节）；超出部分会被跳过，并出现 `net_table_truncated`。按地址聚合的数据同样有大小上限。
 
+### UFW 与 PID 扫描耗时
+
+**UFW** 位于 fail2ban 后面（未安装 fail2ban 时位于审计后面）。显示已保存的入站、出站和转发策略、IPv6、日志、应用程序配置、conntrack 模块及 sysctl 文件。可以查看 `ufw.conf`、`/etc/default/ufw`、`before/user/after.rules` 及其 IPv6 版本、`before/after.init`、`sysctl.conf`、`IPT_SYSCTL` 指定的文件和 `applications.d` 配置的完整内容。TUI 中选择文件后按 Enter 滚动详情；`/` 按路径和内容过滤，`y` 复制路径，`Y` 复制 JSON。网页中展开文件即可。API 为 `GET /api/ufw`，采用与其他接口相同的授权机制。
+
+这里展示磁盘上的配置，文件修改可能尚未生效；不验证内核当前规则或 Docker 的第三方规则。读取时不执行命令，每个文件限制 1 MiB，总计 4 MiB，应用配置最多 1000 个；读取错误、超限和必需文件缺失会明确显示。缺失设置不会被假定的默认值代替。[UFW 处理顺序](https://manpages.ubuntu.com/manpages/noble/man8/ufw-framework.8.html) 为 before → user → after，IPv4 和 IPv6 分别处理。
+
+完整 PID 扫描期间，警告显示已用时间、预计剩余时间和已扫描范围百分比。时间格式为 `HH:MM:SS`；预估按本次扫描的平均速度计算，随负载变化。尚无初始测量时显示正在计算。取消或失败后耗时停止增长，新一轮扫描重新计时。显示随扫描器快照（`SSG_SCAN_INTERVAL`）更新，成功完成后显示总耗时。
+
 ### 隐藏进程、内核模块与软件包完整性
 
 结果显示在**系统**、历史记录和 `scan` 报告中。服务将 `/proc` 列表与线程 TGID、父进程 PID 对照，并根据 PID 和启动时间，两次确认缺失的进程组组长，两次间隔 50 毫秒。普通线程、已退出进程和复用的 PID 被排除。独立工作线程每批探测 1024 个 PID，批次之间暂停 100 毫秒，完成后按 `SSG_ROOTKIT_INTERVAL`（默认 `10m`）重新运行。较大的 PID 范围需要数分钟，短命进程可能被漏掉。`loadavg` 的任务总数不作为隐藏进程的证据，因为命名空间和并发创建任务会使这种推断不可靠。

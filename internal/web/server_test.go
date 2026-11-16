@@ -907,3 +907,42 @@ func TestSelfCheckStatusAndStaleHealth(t *testing.T) {
 		}
 	}
 }
+
+func TestUFWAPI(t *testing.T) {
+	tree := fakeproc.Demo(time.Now())
+	tree.HostFiles["etc/ufw/after.rules"] = "*nat\n# <script>alert(1)</script>\n-A PREROUTING -j REDIRECT\nCOMMIT\n"
+	s := newTreeServer(t, tree, "")
+	w := do(s, "GET", "/api/ufw", "127.0.0.1:8090", "", nil)
+	var report model.UFWReport
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.State != "enabled" || len(report.Files) < 10 || len(report.Settings) != 10 {
+		t.Fatalf("%+v", report)
+	}
+	found := false
+	for _, f := range report.Files {
+		if f.Path == "/etc/ufw/after.rules" && strings.Contains(f.Content, "PREROUTING") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("raw rules lost")
+	}
+	if strings.Contains(w.Body.String(), "<script>") {
+		t.Fatal("unescaped HTML in JSON")
+	}
+	hash, _ := HashPassword("correct horse battery")
+	if w := do(newTestServer(t, hash), "GET", "/api/ufw", "127.0.0.1:8090", "", nil); w.Code != http.StatusUnauthorized {
+		t.Fatal("unauthenticated UFW read", w.Code)
+	}
+	if w := do(s, "GET", "/api/ufw", "evil.example", "", nil); w.Code == 200 {
+		t.Fatal("foreign Host allowed")
+	}
+	if w := do(s, "POST", "/api/ufw", "127.0.0.1:8090", "", nil); w.Code == 200 {
+		t.Fatal("UFW modification endpoint")
+	}
+}

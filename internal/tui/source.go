@@ -39,6 +39,7 @@ type Data struct {
 	// служба старой версии без /api/fail2ban. Панель есть, только когда
 	// Installed.
 	Fail2ban *model.Fail2banReport
+	UFW      *model.UFWReport
 	// Metrics — метрики сервера за выбранное окно; nil — сбор выключен
 	// или служба старой версии без /api/metrics.
 	Metrics *metrics.View
@@ -144,7 +145,7 @@ func (l *LocalSource) Fetch() (*Data, error) {
 		st.Metrics = l.met.Brief()
 	}
 	d := &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap),
-		Exposure: view.Exposure(snap), Audit: &av, Metrics: l.metricsView()}
+		UFW: snap.UFW, Exposure: view.Exposure(snap), Audit: &av, Metrics: l.metricsView()}
 	if l.netOn {
 		nv := view.NetLoad(snap.NetLoad, true)
 		d.Net = &nv
@@ -285,6 +286,10 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 		return nil, fmt.Errorf("/api/exposure: %w", err)
 	}
 	d.Exposure = exp.Exposure
+	if err := r.get("/api/ufw", &d.UFW); err != nil && !errors.Is(err, errNotFound) {
+		return nil, fmt.Errorf("/api/ufw: %w", err)
+	}
+
 	// fail2ban запрашивается, только если он установлен: так говорит сводка
 	// в /api/status (старая служба сводки не присылает — раздела нет).
 	if d.Status.Fail2ban != nil {

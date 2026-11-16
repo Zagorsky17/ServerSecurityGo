@@ -47,6 +47,7 @@
   <button role="tab" data-tab="audit"><span data-i18n="web.tab.audit">Результаты аудита</span> <span class="badge" id="cnt-audit">0</span></button>
   <!-- Вкладка fail2ban видна, только если fail2ban установлен (status.fail2ban). -->
   <button role="tab" data-tab="fail2ban" id="tabbtn-fail2ban" class="hidden"><span data-i18n="web.tab.fail2ban">fail2ban</span> <span class="badge" id="cnt-fail2ban">0</span></button>
+  <button role="tab" data-tab="ufw"><span data-i18n="tui.panel.ufw">UFW</span></button>
   <button role="tab" data-tab="history" data-i18n="web.tab.history">История</button>
   <button role="tab" data-tab="system"><span data-i18n="web.tab.system">Система</span> <span class="badge" id="cnt-system">0</span></button>
   <!-- Вкладка «Метрики» видна, только если служба их собирает (status.metrics). -->
@@ -192,6 +193,15 @@
     </div>
     <h3 data-i18n="web.f2b.recent">Последние события</h3>
     <div class="table-wrap"><table id="t-f2b-recent"></table></div>
+  </section>
+
+  <section id="tab-ufw" class="tab">
+    <p class="hint" data-i18n="web.ufw.hint"></p>
+    <p id="ufw-state"></p>
+    <dl id="ufw-settings" class="kv"></dl>
+    <ul id="ufw-warn" class="plain warn-list"></ul>
+    <h3 data-i18n="web.ufw.files"></h3>
+    <div id="ufw-files"></div>
   </section>
 
   <section id="tab-history" class="tab">

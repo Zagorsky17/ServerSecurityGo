@@ -34,6 +34,8 @@ jobs:
           go test -race -c -o /tmp/integrity.test ./internal/integrity
           sudo /tmp/rootkit.test -test.v -test.run '^TestReal'
           sudo /tmp/integrity.test -test.v -test.run '^TestReal'
+          go test -race -c -o /tmp/ufw.test ./internal/ufw
+          sudo /tmp/ufw.test -test.v -test.run '^TestReal'
       - name: Разовое сканирование настоящей системы
         run: |
           go build -o /tmp/ssg ./cmd/serversecuritygo

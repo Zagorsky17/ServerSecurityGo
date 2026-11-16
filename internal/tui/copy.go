@@ -59,6 +59,11 @@ func (a *App) copyItems() []copyItem {
 		return nil
 	}
 	switch a.focus {
+	case pUFW:
+		if f, ok := a.selUFW(); ok {
+			add("tui.copy.path", f.Path)
+		}
+		return out
 	case pAudit:
 		if c, ok := a.selCheck(); ok {
 			add("tui.copy.fix", c.FixCommand)

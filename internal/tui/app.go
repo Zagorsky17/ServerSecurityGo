@@ -64,6 +64,7 @@ const (
 	pPorts
 	pAudit
 	pF2B // только при установленном fail2ban
+	pUFW
 	pHist
 	pSys
 	pMetrics // только при включённом сборе метрик
@@ -73,7 +74,7 @@ const (
 
 // panelKeys — ключи каталога для названий панелей.
 var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports",
-	"tui.panel.audit", "tui.panel.f2b", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics", "tui.panel.netload"}
+	"tui.panel.audit", "tui.panel.f2b", "tui.panel.ufw", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics", "tui.panel.netload"}
 
 // sortKeys — режимы сортировки списка процессов (ключи каталога).
 var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
@@ -122,6 +123,7 @@ type App struct {
 	ports      []model.Exposure
 	checks     []model.AuditCheck
 	bans       []model.Fail2banBan
+	ufwFiles   []model.UFWFile
 	events     []model.Event
 	system     []model.SystemFinding
 	mrows      []metricRow
@@ -436,6 +438,15 @@ func (a *App) rebuild() {
 			}
 		}
 	}
+	a.ufwFiles = a.ufwFiles[:0]
+	if u := a.data.UFW; u != nil {
+		for _, f := range u.Files {
+			if matches(a.lists[pUFW].filter, f.Path, f.Content) {
+				a.ufwFiles = append(a.ufwFiles, f)
+			}
+		}
+	}
+
 	a.bans = a.bans[:0]
 	if f := a.data.Fail2ban; f != nil {
 		for _, b := range f.Bans {
@@ -618,6 +629,8 @@ func (a *App) count(p panelID) int {
 		return len(a.checks)
 	case pF2B:
 		return len(a.bans)
+	case pUFW:
+		return len(a.ufwFiles)
 	case pHist:
 		return len(a.events)
 	case pSys:
@@ -948,6 +961,13 @@ func (a *App) copyJSON() {
 		if c, ok := a.selCheck(); ok {
 			v = c
 		}
+	case pUFW:
+		if f, ok := a.selUFW(); ok {
+			v = f
+		} else {
+			v = a.data.UFW
+		}
+
 	case pF2B:
 		if b, ok := a.selBan(); ok {
 			v = b
@@ -1116,3 +1136,10 @@ func eventName(l i18n.Lang, t string) string {
 // IsTerminal сообщает, что стандартный ввод — терминал (можно запускать
 // интерфейс).
 func IsTerminal() bool { return isTerminal(int(os.Stdin.Fd())) }
+
+func (a *App) selUFW() (model.UFWFile, bool) {
+	if c := a.lists[pUFW].cursor; c >= 0 && c < len(a.ufwFiles) {
+		return a.ufwFiles[c], true
+	}
+	return model.UFWFile{}, false
+}

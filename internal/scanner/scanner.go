@@ -30,6 +30,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/redact"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/rootkit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/selfcheck"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/ufw"
 )
 
 // Options — параметры сканера.
@@ -210,6 +211,8 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	ctx := &detect.Context{Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
 	detect.Analyze(snap.Processes, ctx)
 	snap.System = append(detect.SystemChecks(s.opt.FS.HostRoot, start, s.opt.Detect), exposure.SystemFindings(snap.Exposure)...)
+	snap.UFW = ufw.Read(s.opt.FS.HostRoot)
+
 	// fail2ban: из журнала читаются только новые строки, а сводка
 	// пересчитывается, лишь когда что-то изменилось (и не чаще раза в
 	// минуту без изменений).

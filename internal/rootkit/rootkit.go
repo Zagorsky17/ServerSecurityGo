@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -35,7 +37,8 @@ type Checker struct {
 	baseErr                  error
 	sweep                    []model.SystemFinding
 	checked, total           int
-	finished                 time.Time
+	started, finished        time.Time
+	running                  bool
 	complete                 bool
 	list                     func(string) (map[int]bool, error)
 	confirmDelay, batchPause time.Duration
@@ -117,26 +120,69 @@ func (c *Checker) Check(ctx context.Context) []model.SystemFinding {
 	}
 	c.mu.RLock()
 	out = append(out, c.sweep...)
-	checked, total, done, complete := c.checked, c.total, c.finished, c.complete
+	out = append(out, c.sweepFinding(time.Now()))
 	c.mu.RUnlock()
-	if !complete {
-		out = append(out, finding("rootkit_sweep_pending", "/proc", model.RiskInfo, i18n.T("rule.rootkit_sweep_pending.title"), i18n.T("rule.rootkit_sweep_pending.rec"), i18n.T("ev.rootkit_sweep", checked, total)))
-	} else {
-		out = append(out, finding("rootkit_sweep_complete", "/proc", model.RiskInfo, i18n.T("rule.rootkit_sweep_complete.title"), i18n.T("rule.rootkit_sweep_complete.rec"), i18n.T("ev.rootkit_completed", checked, done.UTC().Format(time.RFC3339))))
-	}
 	return out
+}
+
+// sweepFinding вызывается под c.mu; таймер остановленной проверки заморожен.
+func (c *Checker) sweepFinding(now time.Time) model.SystemFinding {
+	title := i18n.T("rule.rootkit_sweep_pending.title")
+	id := "rootkit_sweep_pending"
+	if !c.started.IsZero() {
+		end := now
+		if !c.running {
+			end = c.finished
+		}
+		elapsed := max(end.Sub(c.started), 0)
+		percent := min(100, c.checked*100/max(c.total-1, 1))
+		switch {
+		case c.complete:
+			id = "rootkit_sweep_complete"
+			title = i18n.T("rule.rootkit_sweep_complete.title", sweepDuration(elapsed))
+		case !c.running:
+			title = i18n.T("rule.rootkit_sweep_stopped.title", sweepDuration(elapsed), percent)
+		default:
+			percent = min(percent, 99)
+			title = i18n.T("rule.rootkit_sweep_estimate.title", sweepDuration(elapsed), percent)
+			if c.checked > 0 && elapsed >= time.Second && c.checked < c.total-1 {
+				remaining := math.Ceil(elapsed.Seconds() * float64(c.total-1-c.checked) / float64(c.checked))
+				if remaining < float64((1<<63-1)/int64(time.Second)) {
+					title = i18n.T("rule.rootkit_sweep_running.title", sweepDuration(elapsed), sweepDuration(time.Duration(remaining)*time.Second), percent)
+				}
+			}
+		}
+	}
+	rec := i18n.T("rule.rootkit_sweep_pending.rec")
+	evidence := i18n.T("ev.rootkit_sweep", c.checked, c.total)
+	if c.complete {
+		rec = i18n.T("rule.rootkit_sweep_complete.rec")
+		evidence = i18n.T("ev.rootkit_completed", c.checked, c.finished.UTC().Format(time.RFC3339))
+	}
+	return finding(id, "/proc", model.RiskInfo, title, rec, evidence)
+}
+
+func sweepDuration(d time.Duration) string {
+	seconds := int64(d / time.Second)
+	return fmt.Sprintf("%02d:%02d:%02d", seconds/3600, seconds/60%60, seconds%60)
 }
 
 // Sweep проходит всё пространство PID порциями, не блокируя основной сканер.
 func (c *Checker) Sweep(ctx context.Context) (result error) {
 	c.sweepMu.Lock()
 	defer c.sweepMu.Unlock()
+	c.mu.Lock()
+	c.started, c.finished = time.Now(), time.Time{}
+	c.running, c.complete = true, false
+	c.checked, c.total = 0, 0
+	c.mu.Unlock()
 	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.running, c.finished = false, time.Now()
 		if result != nil {
-			c.mu.Lock()
 			c.complete = false
 			c.sweep = []model.SystemFinding{unavailable(c.opt.ProcRoot, result)}
-			c.mu.Unlock()
 		}
 	}()
 	data, _, err := safefile.ReadRegular(filepath.Join(c.opt.ProcRoot, "sys/kernel/pid_max"), 4096, false)
