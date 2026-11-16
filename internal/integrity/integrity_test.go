@@ -412,3 +412,24 @@ func TestStatusCRLFDoesNotLoseConffiles(t *testing.T) {
 		t.Fatal("CRLF lost conffile exclusion")
 	}
 }
+
+func TestPackageDiversionAllowsDifferentChecksumsForOriginalPath(t *testing.T) {
+	h, state := fixture(t)
+	status, _ := os.ReadFile(filepath.Join(h, "var/lib/dpkg/status"))
+	for _, pkg := range []string{"libpq-dev", "postgresql-common"} {
+		status = append(status, []byte("Package: "+pkg+"\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\n\n")...)
+		write(t, h, "var/lib/dpkg/info/"+pkg+".list", "/usr/bin/pg_config\n")
+		write(t, h, "var/lib/dpkg/info/"+pkg+".md5sums", md(pkg)+"  usr/bin/pg_config\n")
+	}
+	write(t, h, "var/lib/dpkg/status", string(status))
+	write(t, h, "var/lib/dpkg/diversions", "/usr/bin/pg_config\n/usr/bin/pg_config.libpq-dev\npostgresql-common\n")
+	write(t, h, "usr/bin/pg_config", "postgresql-common")
+	write(t, h, "usr/bin/pg_config.libpq-dev", "libpq-dev")
+	r := runner(h, state)
+	if err := r.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(find(r, "bin_modified")) != 0 || len(find(r, "bin_unpackaged")) != 0 {
+		t.Fatalf("%+v", r.Findings())
+	}
+}

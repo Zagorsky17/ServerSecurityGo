@@ -151,6 +151,29 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 	if err != nil {
 		return nil, i18n.Errorf("err.integrity_metadata", "var/lib/dpkg/status", err)
 	}
+	div, err := read("var/lib/dpkg/diversions", true)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSuffix(string(div), "\n"), "\n")
+	if len(div) > 0 {
+		if len(lines)%3 != 0 {
+			return nil, errDatabase
+		}
+		for i := 0; i < len(lines); i += 3 {
+			for _, line := range lines[i : i+2] {
+				if !strings.HasPrefix(line, "/") || !validPath(line[1:]) {
+					return nil, errDatabase
+				}
+				p := db.canonical(line[1:])
+				db.excluded[p] = true
+				db.owned[p] = true
+			}
+			if lines[i+2] != ":" && !packageName.MatchString(lines[i+2]) {
+				return nil, errDatabase
+			}
+		}
+	}
 	names := make([]string, 0, len(packages))
 	for name := range packages {
 		names = append(names, name)
@@ -209,29 +232,6 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 		}
 		if len(db.owned) > 200_000 || len(db.files) > 200_000 {
 			return nil, safefile.ErrTooLarge
-		}
-	}
-	div, err := read("var/lib/dpkg/diversions", true)
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(strings.TrimSuffix(string(div), "\n"), "\n")
-	if len(div) > 0 {
-		if len(lines)%3 != 0 {
-			return nil, errDatabase
-		}
-		for i := 0; i < len(lines); i += 3 {
-			for _, line := range lines[i : i+2] {
-				if !strings.HasPrefix(line, "/") || !validPath(line[1:]) {
-					return nil, errDatabase
-				}
-				p := db.canonical(line[1:])
-				db.excluded[p] = true
-				db.owned[p] = true
-			}
-			if lines[i+2] != ":" && !packageName.MatchString(lines[i+2]) {
-				return nil, errDatabase
-			}
 		}
 	}
 	for p := range db.files {
@@ -305,7 +305,7 @@ func (db *database) parseSums(data, pkg string) error {
 			return errDatabase
 		}
 		p = db.canonical(p)
-		if !selected(p) {
+		if !selected(p) || db.excluded[p] {
 			continue
 		}
 		next := expected{pkg, strings.ToLower(sum)}
