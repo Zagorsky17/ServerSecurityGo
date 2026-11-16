@@ -57,6 +57,9 @@ func Read(hostRoot string) *model.UFWReport {
 			continue
 		}
 		for _, key := range []string{"ENABLED", "LOGLEVEL", "IPV6", "DEFAULT_INPUT_POLICY", "DEFAULT_OUTPUT_POLICY", "DEFAULT_FORWARD_POLICY", "DEFAULT_APPLICATION_POLICY", "MANAGE_BUILTINS", "IPT_SYSCTL", "IPT_MODULES"} {
+			if (key == "ENABLED" || key == "LOGLEVEL") != (f.Path == "/etc/ufw/ufw.conf") {
+				continue
+			}
 			value, found := setting(f.Content, key)
 			if found {
 				settings[key] = value
@@ -91,6 +94,9 @@ func Read(hostRoot string) *model.UFWReport {
 	}
 	for _, name := range []string{"before.rules", "user.rules", "after.rules", "before6.rules", "user6.rules", "after6.rules", "sysctl.conf", "before.init", "after.init"} {
 		required := strings.HasSuffix(name, ".rules") && (!strings.Contains(name, "6.") || strings.ToLower(settings["IPV6"]) != "no")
+		if name == "sysctl.conf" && settings["IPT_SYSCTL"] == "/etc/ufw/sysctl.conf" {
+			required = true
+		}
 		read("etc/ufw/"+name, required)
 	}
 	if custom := settings["IPT_SYSCTL"]; custom != "" && !seen[strings.TrimPrefix(custom, "/")] {

@@ -144,3 +144,26 @@ func FuzzSetting(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string) { setting(s, "ENABLED") })
 }
+
+func TestConfigSourcesAndMissingSelectedSysctl(t *testing.T) {
+	root := fixture(t)
+	put(t, root, "etc/default/ufw", "ENABLED=no\nLOGLEVEL=off\nIPT_SYSCTL=/etc/ufw/sysctl.conf\n")
+	r := Read(root)
+	if r.State != "enabled" {
+		t.Fatal("defaults file overrode ufw.conf")
+	}
+	for _, s := range r.Settings {
+		if s.Key == "LOGLEVEL" && s.Value.In(i18n.EN) != "low" {
+			t.Fatal("wrong logging source")
+		}
+	}
+	found := false
+	for _, w := range r.Warnings {
+		if strings.Contains(w.In(i18n.EN), "/etc/ufw/sysctl.conf") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing selected sysctl file was not reported")
+	}
+}
