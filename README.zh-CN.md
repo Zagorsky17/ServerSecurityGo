@@ -387,7 +387,7 @@ Web 面板和终端界面会以所选语言显示这段文字。
 
 ### 持久化、进程内存与 Docker 安全
 
-持久化检查覆盖 `/etc/passwd` 中具有登录 shell 的用户，包括 `/home` 之外的主目录：shell 配置、cron/at/incron、systemd 服务/定时器/用户单元/drop-in/生成器、PAM、motd、udev、Xsession/autostart、SysV init、网络/apt/logrotate 钩子、SSH rc/config，以及 `/opt/*` 和 `/var/www/*` 下的 Git hooks。临时目录中的 PAM 命令评为 CRITICAL；不属于软件包的本地 systemd/SysV 文件属于清单信息。只有完整的本地 dpkg 索引才能支持“无软件包归属”的判断。标准目录中找不到的 PAM 模块引用为 INFO：可选模块可能未安装；实际存在但无软件包归属的模块仍为 HIGH。hosts 中的软件仓库域名覆盖需要核查；DNS 地址和空 shell 历史本身不能证明篡改。用户符号链接、读取失败或超限会使检查不完整。限制为每文件 1 MiB、每轮 32 MiB、每目录 4,096 项和 20,000 个候选路径。
+持久化检查覆盖 `/etc/passwd` 中具有登录 shell 的用户，包括 `/home` 之外的主目录：shell 配置、cron/at/incron、systemd 服务/定时器/用户单元/drop-in/生成器、PAM、motd、udev、Xsession/autostart、SysV init、网络/apt/logrotate 钩子、SSH rc/config，以及 `/opt/*` 和 `/var/www/*` 下的 Git hooks。临时目录中的 PAM 命令评为 CRITICAL；不属于软件包的本地 systemd/SysV 文件属于清单信息。只有完整的本地 dpkg 索引才能支持“无软件包归属”的判断。标准目录中找不到的 PAM 模块引用为 INFO：可选模块可能未安装；实际存在但无软件包归属的模块仍为 HIGH。hosts 中的软件仓库域名覆盖需要核查；DNS 地址和空 shell 历史本身不能证明篡改。系统符号链接在被检查主机根目录内解析，并限制跳转次数。用户符号链接、读取失败或超限会使检查不完整。限制为每文件 1 MiB、每轮 32 MiB、每目录 4,096 项和 20,000 个候选路径。
 
 进程详情显示 TracerPid、具名的 CapEff/CapPrm/CapBnd/CapAmb、NoNewPrivs 和 Seccomp。可执行内存映射用于检查临时/已删除库和匿名可执行内存。已知 JIT 运行时降低权重；只有进程根目录中存在替代文件且主机软件包索引适用时，已删除库才降低权重。不同挂载命名空间不会继承主机的软件包归属。跟踪器关联要求 PID 与启动时间同时匹配。maps 限制为每进程 1 MiB、256 个不同可执行映射，每轮 32 MiB。environ 流式读取限制为每进程 8 MiB、每轮 32 MiB，每项仅分析前 4,096 字节。超限和拒绝访问均明确显示。仅保留环境信号，不保留变量值；`/proc/environ` 可能不反映 shell 启动后的变量更改。
 

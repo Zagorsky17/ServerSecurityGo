@@ -2,7 +2,6 @@ package detect
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
@@ -32,7 +32,7 @@ var persistenceMessages = map[string][2]string{
 
 func persistenceFinding(id, path string, risk model.Risk, facts ...i18n.Msg) model.SystemFinding {
 	keys := persistenceMessages[id]
-	return sys(model.Finding{ID: id, Title: i18n.T(keys[0]), Category: model.CatPersistence, Evidence: facts, Recommendation: i18n.T(keys[1])}, path, risk, time.Time{})
+	return sys(model.Finding{ID: id, Title: i18n.T(keys[0]), Category: model.CatPersistence, Weight: exposure.Weight(risk), Evidence: facts, Recommendation: i18n.T(keys[1])}, path, risk, time.Time{})
 }
 
 type userHome struct {
@@ -152,36 +152,44 @@ func persistenceChecks(hostRoot string, now time.Time, cfg Config, owners map[st
 	slices.Sort(names)
 	for _, p := range names {
 		data, fi, err := read(p)
-		if errors.Is(err, safefile.ErrNotRegular) && fi != nil && fi.Mode()&os.ModeSymlink != 0 {
-			// Системные ссылки (например rc?.d) читаются только внутри корня хоста.
-			if strings.HasPrefix(p, "etc/") || strings.HasPrefix(p, "lib/") || strings.HasPrefix(p, "usr/lib/") {
-				target, readErr := os.Readlink(filepath.Join(hostRoot, p))
-				if readErr == nil && target == "/dev/null" {
-					continue
+
+		symbolic := errors.Is(err, safefile.ErrNotRegular) && fi != nil && fi.Mode()&os.ModeSymlink != 0
+		masked := false
+		if symbolic && (strings.HasPrefix(p, "etc/") || strings.HasPrefix(p, "lib/") || strings.HasPrefix(p, "usr/lib/")) {
+			current := p
+			// os.Root отвергает абсолютные ссылки даже внутри корня: переводим цель в путь относительно hostRoot.
+			for depth := 0; errors.Is(err, safefile.ErrNotRegular) && fi != nil && fi.Mode()&os.ModeSymlink != 0; depth++ {
+				if depth == 16 {
+					err = syscall.ELOOP
+					break
 				}
-				f, e := root.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-				if e == nil {
-					fi, e = f.Stat()
-					if e == nil && fi.Mode().IsRegular() {
-						data, e = io.ReadAll(io.LimitReader(f, min(budget, maxSystemFile)+1))
-						if int64(len(data)) > min(budget, maxSystemFile) {
-							e = safefile.ErrTooLarge
-						}
-						budget -= int64(len(data))
-					} else if e == nil {
-						e = safefile.ErrNotRegular
-					}
-					f.Close()
+				target, e := os.Readlink(filepath.Join(hostRoot, current))
+				if e != nil {
+					err = e
+					break
 				}
-				err = e
+				if filepath.IsAbs(target) {
+					current = strings.TrimPrefix(filepath.Clean(target), "/")
+				} else {
+					current = filepath.Join(filepath.Dir(current), target)
+				}
+				if current == "dev/null" {
+					masked = true
+					break
+				}
+				data, fi, err = read(current)
 			}
 		}
+		if masked {
+			continue
+		}
 		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
+			if symbolic || !errors.Is(err, os.ErrNotExist) {
 				issue(p)
 			}
 			continue
 		}
+
 		rel := "/" + p
 		out = append(out, persistenceContent(rel, data, fi, now, cfg, owners, root)...)
 	}
@@ -354,6 +362,7 @@ func persistenceContent(path string, data []byte, fi os.FileInfo, now time.Time,
 		if idx, ok := seen[f.ID]; ok {
 			old := &result[idx]
 			old.Risk = max(old.Risk, f.Risk)
+			old.Weight = max(old.Weight, f.Weight)
 			if len(old.Evidence) < 8 {
 				old.Evidence = append(old.Evidence, f.Evidence...)
 			}
