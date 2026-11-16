@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +27,17 @@ func TestRealProc(t *testing.T) {
 		t.Fatalf("собственный процесс: %v", err)
 	}
 	p := self.Proc
+	if p.Security == nil || p.Security.CapEff == nil || p.Security.CapBnd == nil || p.Security.Seccomp == nil || p.Security.NoNewPrivs == nil {
+		t.Fatalf("missing kernel security fields: %+v", p.Security)
+	}
+	if len(p.Maps) == 0 {
+		t.Fatal("no executable mappings")
+	}
+	for _, access := range p.Access {
+		if strings.HasPrefix(access, "maps") {
+			t.Fatalf("incomplete self maps: %v", p.Access)
+		}
+	}
 	if p.PPID != os.Getppid() {
 		t.Errorf("PPID = %d, ожидался %d", p.PPID, os.Getppid())
 	}

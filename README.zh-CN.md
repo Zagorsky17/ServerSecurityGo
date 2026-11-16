@@ -385,6 +385,19 @@ Web 面板和终端界面会以所选语言显示这段文字。
 可用于白名单的完整规则 ID 列表：
 `exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`、`exposed_amplifier`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`、`steal_high`、`disk_almost_full`、`load_high`、`memory_pressure`、`oom_recent`、`net_syn_flood`、`net_listen_overflow`、`net_conn_flood_ip`、`net_conn_flood_subnet`、`net_conn_surge`、`net_conntrack_full`、`net_orphans_high`、`net_udp_flood`、`net_rx_drops`、`net_pps_surge`、`net_ddos_suspected`、`net_table_truncated`。
 
+### 持久化、进程内存与 Docker 安全
+
+持久化检查覆盖 `/etc/passwd` 中具有登录 shell 的用户，包括 `/home` 之外的主目录：shell 配置、cron/at/incron、systemd 服务/定时器/用户单元/drop-in/生成器、PAM、motd、udev、Xsession/autostart、SysV init、网络/apt/logrotate 钩子、SSH rc/config，以及 `/opt/*` 和 `/var/www/*` 下的 Git hooks。临时目录中的 PAM 命令评为 CRITICAL；不属于软件包的本地 systemd/SysV 文件属于清单信息。只有完整的本地 dpkg 索引才能支持“无软件包归属”的判断。hosts 中的软件仓库域名覆盖需要核查；DNS 地址和空 shell 历史本身不能证明篡改。用户符号链接、读取失败或超限会使检查不完整。限制为每文件 1 MiB、每轮 32 MiB、每目录 4,096 项和 20,000 个候选路径。
+
+进程详情显示 TracerPid、具名的 CapEff/CapPrm/CapBnd/CapAmb、NoNewPrivs 和 Seccomp。可执行内存映射用于检查临时/已删除库和匿名可执行内存。已知 JIT 运行时降低权重；只有进程根目录中存在替代文件且主机软件包索引适用时，已删除库才降低权重。不同挂载命名空间不会继承主机的软件包归属。跟踪器关联要求 PID 与启动时间同时匹配。maps 限制为每进程 1 MiB、256 个不同可执行映射，每轮 32 MiB。environ 流式读取限制为每进程 8 MiB、每轮 32 MiB，每项仅分析前 4,096 字节。超限和拒绝访问均明确显示。仅保留环境信号，不保留变量值；`/proc/environ` 可能不反映 shell 启动后的变量更改。
+
+Docker 检查读取 `config.v2.json` 与 `hostconfig.json`，支持自定义 `data-root`：每文件 2 MiB，总计 32 MiB，最多 4,096 个容器。检查 privileged、Docker socket、敏感主机挂载、额外 capabilities、主机命名空间、显式关闭 seccomp/AppArmor、配置的 root 用户、设备及疑似秘密的环境变量**名称**。支持 bind 字符串和结构化挂载。停止的容器标记为保存的配置。已知 Docker 管理镜像名称将 socket 信号降为 HIGH，但不证明可信。还检查 socket 权限及 docker 组成员；仅允许 root 的严格权限可接受。进程信号包含容器名称及镜像。这些是配置观察，不能验证实时隔离。应用从不调用 Docker API；containerd/Podman 安全元数据留待后续实现。
+
+新增进程规则 ID：`ptrace_attached`, `lib_from_temp`, `lib_deleted`, `anon_exec_memory`, `history_disabled`, `prompt_command_net`, `ld_library_path_temp`, `proc_dangerous_caps`, `proc_ambient_caps`。
+新增系统规则 ID：`systemd_unit_no_package`, `pam_exec`, `pam_module_unusual`, `library_search_path`, `sysv_no_package`, `shell_history_disabled`, `hosts_override`, `dns_configuration`, `persistence_unavailable`, `package_ownership_unavailable`, `ctr_privileged`, `ctr_docker_sock`, `ctr_host_root_mount`, `ctr_dangerous_caps`, `ctr_host_namespaces`, `ctr_no_seccomp`, `ctr_no_apparmor`, `ctr_runs_as_root`, `ctr_devices`, `ctr_secrets_in_env`, `ctr_sock_perms`, `container_unavailable`。系统信号显示在现有“系统”视图及报告中。新增进程规则支持 allowlist；`systemd_unit_no_package` 可用精确单元路径作为 `exe`。其他新增系统和 Docker 提示保持可见。
+
+来源语义：[Linux proc 文档](https://docs.kernel.org/filesystems/proc.html)、[Docker 安全](https://docs.docker.com/engine/security/)及 [Docker seccomp](https://docs.docker.com/engine/security/seccomp/)。
+
 ## 检测局限
 
 这是一个用于初步排查的启发式工具，不是杀毒软件，也不是 EDR。

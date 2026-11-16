@@ -34,6 +34,8 @@ jobs:
           go test -race -c -o /tmp/integrity.test ./internal/integrity
           sudo /tmp/rootkit.test -test.v -test.run '^TestReal'
           sudo /tmp/integrity.test -test.v -test.run '^TestReal'
+      - name: Настоящие метаданные Docker без запуска контейнера
+        run: bash .github/scripts/container-security.sh
       - name: Разовое сканирование настоящей системы
         run: |
           go build -o /tmp/ssg ./cmd/serversecuritygo
@@ -83,4 +85,4 @@ jobs:
       - name: Кросс-сборка
         run: make build-linux
       - name: shellcheck
-        run: shellcheck -x scripts/*.sh
+        run: shellcheck -x scripts/*.sh .github/scripts/*.sh

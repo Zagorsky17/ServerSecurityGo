@@ -3,10 +3,8 @@ package exposure
 import (
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -33,9 +31,12 @@ type containerConfig struct {
 	ID     string `json:"ID"`
 	Name   string `json:"Name"`
 	Config struct {
-		Image string `json:"Image"`
+		Image string   `json:"Image"`
+		User  string   `json:"User"`
+		Env   envNames `json:"Env"`
 	} `json:"Config"`
-	State struct {
+	MountPoints map[string]mountConfig `json:"MountPoints"`
+	State       struct {
 		Running bool `json:"Running"`
 	} `json:"State"`
 	NetworkSettings struct {
@@ -49,23 +50,40 @@ type containerConfig struct {
 // dockerRoot — каталог данных Docker из /etc/docker/daemon.json
 // (data-root, в старых версиях graph) или путь по умолчанию.
 func dockerRoot(hostRoot string) string {
-	root := defaultDockerRoot
-	data, _, err := safefile.ReadRegular(filepath.Join(hostRoot, "etc/docker/daemon.json"), maxConfigFile, true)
-	if err == nil {
-		var cfg struct {
-			DataRoot string `json:"data-root"`
-			Graph    string `json:"graph"`
-		}
-		if json.Unmarshal(data, &cfg) == nil {
-			for _, r := range []string{cfg.DataRoot, cfg.Graph} {
-				if filepath.IsAbs(r) {
-					root = filepath.Clean(r)
-					break
-				}
-			}
-		}
+	root, err := os.OpenRoot(hostRoot)
+	if err != nil {
+		return filepath.Join(hostRoot, defaultDockerRoot)
 	}
-	return filepath.Join(hostRoot, root)
+	defer root.Close()
+	p, _ := dockerRootPath(root)
+	return filepath.Join(hostRoot, p)
+}
+
+func dockerRootPath(root *os.Root) (string, error) {
+	data, _, err := safefile.ReadRooted(root, "etc/docker/daemon.json", maxConfigFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return defaultDockerRoot, nil
+	}
+	if err != nil {
+		return defaultDockerRoot, err
+	}
+	var cfg struct {
+		DataRoot string `json:"data-root"`
+		Graph    string `json:"graph"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return defaultDockerRoot, err
+	}
+	for _, r := range []string{cfg.DataRoot, cfg.Graph} {
+		if r == "" {
+			continue
+		}
+		if !filepath.IsAbs(r) {
+			return defaultDockerRoot, os.ErrInvalid
+		}
+		return filepath.Clean(r), nil
+	}
+	return defaultDockerRoot, nil
 }
 
 // ReadDocker возвращает опубликованные порты работающих контейнеров из
@@ -74,47 +92,8 @@ func dockerRoot(hostRoot string) string {
 // когда процессов docker-proxy нет. Docker API не используется: сокет
 // Docker даёт root, и службе наблюдения он не нужен.
 func ReadDocker(hostRoot string) ([]model.PortBinding, []i18n.Msg) {
-	dir := filepath.Join(dockerRoot(hostRoot), "containers")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, []i18n.Msg{i18n.T("warn.docker_unreadable", err.Error())}
-	}
-	var out []model.PortBinding
-	var warns []i18n.Msg
-	n := 0
-	for _, e := range entries {
-		if !isContainerID(e.Name()) {
-			continue
-		}
-		if n++; n > maxContainers {
-			warns = append(warns, i18n.T("warn.docker_too_many", maxContainers))
-			break
-		}
-		// Каталог контейнера принадлежит root, но по симлинку всё равно
-		// не идём: файл читается безопасно и с лимитом размера.
-		data, _, err := safefile.ReadRegular(filepath.Join(dir, e.Name(), "config.v2.json"), maxContainerConfig, false)
-		if err != nil {
-			continue
-		}
-		out = append(out, ParseContainerConfig(data)...)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		if a.HostPort != b.HostPort {
-			return a.HostPort < b.HostPort
-		}
-		if a.Proto != b.Proto {
-			return a.Proto < b.Proto
-		}
-		if a.HostIP != b.HostIP {
-			return a.HostIP < b.HostIP
-		}
-		return a.ContainerID < b.ContainerID
-	})
-	return out, warns
+	data := readDockerData(hostRoot, false)
+	return data.bindings, data.warnings
 }
 
 // ParseContainerConfig извлекает опубликованные порты из config.v2.json.

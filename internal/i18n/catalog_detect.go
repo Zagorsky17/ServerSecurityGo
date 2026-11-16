@@ -172,7 +172,6 @@ func init() {
 		"rule.autostart_suspicious.rec":   {"Изучите файл {0} и выясните, кто и когда его изменил (stat, журналы auth.log, история команд).", "Examine {0} and find out who changed it and when (stat, auth.log, shell history)."},
 		"rule.autostart_recent.title":     {"Недавно изменён файл автозапуска", "Autostart file modified recently"},
 		"rule.autostart_recent.rec":       {"Обычно это результат установки пакетов или действий администратора. Убедитесь, что изменение ожидаемо.", "Usually this is the result of package installation or administrator actions. Make sure the change is expected."},
-		"ev.line":                         {"строка {0}: {1}", "line {0}: {1}"},
 		"ev.modified":                     {"изменён {0}", "modified {0}"},
 		"rule.ssh_keys_not_regular.title": {"Файл authorized_keys — не обычный файл или слишком большой", "authorized_keys is not a regular file or is too large"},
 		"rule.ssh_keys_not_regular.rec":   {"Файл не прочитан: сканер не открывает ссылки, FIFO и устройства в домашних каталогах. sshd по ссылке идёт — проверьте, куда она указывает и кто её создал (ls -la {0}).", "The file was not read: the scanner does not open links, FIFOs and devices in home directories. sshd does follow links — check where it points and who created it (ls -la {0})."},

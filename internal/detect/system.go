@@ -6,13 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
-	"github.com/Zagorsky17/ServerSecurityGo/internal/redact"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
 
@@ -23,7 +21,7 @@ import (
 
 // persistPattern — явно подозрительное содержимое файлов автозапуска:
 // загрузка с выполнением, декодирование base64, reverse shell, майнеры.
-var persistPattern = regexp.MustCompile(`(?i)(curl|wget)\b[^\n|]*\|\s*(ba|da)?sh\b|base64\s+(-d|--decode)|/dev/shm/|/dev/tcp/|\bnc(at)?\b[^\n]*\s-e\s|stratum\+tcp|xmrig|chmod\s+\+x\s+/(tmp|dev/shm|var/tmp)`)
+var persistPattern = regexp.MustCompile(`(?i)\bLD_PRELOAD\s*=\s*[^\s;]+|(curl|wget)\b[^\n|]*\|\s*(ba|da)?sh\b|base64\s+(-d|--decode)|/dev/shm/|/dev/tcp/|\bnc(at)?\b[^\n]*\s-e\s|stratum\+tcp|xmrig|chmod\s+\+x\s+/(tmp|dev/shm|var/tmp)`)
 
 // tempPattern — запуск чего-либо из /tmp или /var/tmp. Бывает и в
 // штатных скриптах, поэтому даёт только LOW.
@@ -40,6 +38,10 @@ func readRegular(path string, max int64, follow bool) ([]byte, fs.FileInfo, erro
 
 // SystemChecks выполняет проверки относительно корня хоста hostRoot.
 func SystemChecks(hostRoot string, now time.Time, cfg Config) []model.SystemFinding {
+	return SystemChecksWithContext(hostRoot, now, cfg, nil, nil)
+}
+
+func SystemChecksWithContext(hostRoot string, now time.Time, cfg Config, owners map[string]bool, procs []*model.Process) []model.SystemFinding {
 	if cfg.RecentDays <= 0 {
 		cfg.RecentDays = 7
 	}
@@ -62,65 +64,7 @@ func SystemChecks(hostRoot string, now time.Time, cfg Config) []model.SystemFind
 		}
 	}
 
-	// 2. Задания cron и файлы автозапуска.
-	var files []string
-	files = append(files, h("etc/crontab"), h("etc/rc.local"), h("etc/bash.bashrc"), h("etc/profile"), h("root/.bashrc"), h("root/.profile"))
-	for _, pat := range []string{"etc/cron.d/*", "etc/cron.hourly/*", "etc/cron.daily/*", "etc/cron.weekly/*", "etc/cron.monthly/*",
-		"var/spool/cron/crontabs/*", "var/spool/cron/*", "etc/profile.d/*", "etc/systemd/system/*.service", "etc/systemd/system/*.timer",
-		"etc/systemd/system/*/*.service", "etc/init.d/*", "etc/update-motd.d/*"} {
-		m, _ := filepath.Glob(h(pat))
-		files = append(files, m...)
-	}
-	sort.Strings(files)
-	seen := map[string]bool{}
-	for _, f := range files {
-		if seen[f] {
-			continue
-		}
-		seen[f] = true
-		// Симлинки, каталоги и большие файлы пропускаются, как и раньше.
-		data, fi, err := readRegular(f, maxSystemFile, false)
-		if err != nil {
-			continue
-		}
-		rel := "/" + strings.TrimPrefix(strings.TrimPrefix(f, filepath.Clean(hostRoot)), "/")
-		var hits, tempHits []i18n.Msg
-		for i, line := range strings.Split(string(data), "\n") {
-			t := strings.TrimSpace(line)
-			if t == "" || strings.HasPrefix(t, "#") {
-				continue
-			}
-			ref := i18n.T("ev.line", i+1, truncate(redact.String(t), 200))
-			if persistPattern.MatchString(t) && len(hits) < 5 {
-				hits = append(hits, ref)
-			} else if tempPattern.MatchString(t) && len(tempHits) < 5 {
-				tempHits = append(tempHits, ref)
-			}
-		}
-		if len(hits) == 0 && len(tempHits) > 0 {
-			out = append(out, sys(model.Finding{
-				ID: "autostart_temp", Title: i18n.T("rule.autostart_temp.title"), Category: model.CatPersistence, Weight: 8,
-				Evidence:       tempHits,
-				Recommendation: i18n.T("rule.autostart_temp.rec", rel),
-			}, rel, model.RiskLow, fi.ModTime()))
-			continue
-		}
-		if len(hits) > 0 {
-			out = append(out, sys(model.Finding{
-				ID: "autostart_suspicious", Title: i18n.T("rule.autostart_suspicious.title"), Category: model.CatPersistence, Weight: 30,
-				Evidence:       hits,
-				Recommendation: i18n.T("rule.autostart_suspicious.rec", rel),
-			}, rel, model.RiskMedium, fi.ModTime()))
-			continue
-		}
-		if fi.ModTime().After(recent) {
-			out = append(out, sys(model.Finding{
-				ID: "autostart_recent", Title: i18n.T("rule.autostart_recent.title"), Category: model.CatPersistence, Weight: 3,
-				Evidence:       []i18n.Msg{i18n.T("ev.modified", fi.ModTime().Format("2006-01-02 15:04"))},
-				Recommendation: i18n.T("rule.autostart_recent.rec"),
-			}, rel, model.RiskInfo, fi.ModTime()))
-		}
-	}
+	out = append(out, persistenceChecks(hostRoot, now, cfg, owners, procs)...)
 
 	// 3. authorized_keys — недавние изменения и ключи с command=.
 	keys := []string{h("root/.ssh/authorized_keys"), h("root/.ssh/authorized_keys2")}

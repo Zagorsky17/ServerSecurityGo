@@ -160,7 +160,9 @@ func (f *FS) Users() map[int]string {
 // Raw — процесс в «сыром» виде: заполненный model.Process плюс
 // служебные данные для сопоставления сокетов.
 type Raw struct {
-	Proc *model.Process
+	MapsBytes int
+	EnvBytes  int
+	Proc      *model.Process
 	// SocketInodes — inode сокетов из /proc/PID/fd, с номерами fd.
 	SocketInodes map[uint64][]int
 	// RawArgs — аргументы до маскирования секретов. Используются только
@@ -184,6 +186,8 @@ const (
 
 // Limits — лимиты для одного вызова ReadProcessLimits.
 type Limits struct {
+	Env     int
+	Maps    int
 	Cmdline int // байт cmdline; 0 — DefaultMaxCmdline
 	Files   int // записей в Process.Files
 }
@@ -191,7 +195,7 @@ type Limits struct {
 // ReadProcess собирает сведения о процессе pid. bootTime нужен для
 // вычисления абсолютного времени старта.
 func (f *FS) ReadProcess(pid int, bootTime time.Time) (*Raw, error) {
-	return f.ReadProcessLimits(pid, bootTime, Limits{Cmdline: f.MaxCmdline, Files: f.MaxFiles})
+	return f.ReadProcessLimits(pid, bootTime, Limits{Cmdline: f.MaxCmdline, Files: f.MaxFiles, Maps: 1 << 20, Env: 8 << 20})
 }
 
 // ReadProcessLimits — ReadProcess с явными лимитами: сканер уменьшает
@@ -241,6 +245,14 @@ func (f *FS) ReadProcessLimits(pid int, bootTime time.Time, lim Limits) (*Raw, e
 			p.VMSBytes = s.VMSizeKB * 1024
 		}
 		p.NSPID = s.NSPID
+		p.Security = &s.Security
+		if s.Security.TracerPID > 0 {
+			if b, err := os.ReadFile(f.path(strconv.Itoa(s.Security.TracerPID), "stat")); err == nil {
+				if ts, err := ParseStat(string(b)); err == nil {
+					p.Security.TracerKey = fmt.Sprintf("%d-%d", s.Security.TracerPID, ts.StartTicks)
+				}
+			}
+		}
 		if s.Threads > 0 {
 			p.Threads = s.Threads
 		}
@@ -276,12 +288,18 @@ func (f *FS) ReadProcessLimits(pid int, bootTime time.Time, lim Limits) (*Raw, e
 			p.Access = append(p.Access, "cwd")
 		}
 		f.readFDs(pidStr, raw, lim.Files)
-		p.EnvFlags = f.readEnvFlags(pidStr, p)
+		p.EnvFlags, raw.EnvBytes = f.readEnvFlags(pidStr, p, lim.Env)
+		raw.MapsBytes = f.readMaps(pidStr, p, lim.Maps)
 	}
 
 	p.Namespaces = f.readNamespaces(pidStr)
 	if data, err := os.ReadFile(f.path(pidStr, "cgroup")); err == nil {
 		p.ContainerRuntime, p.Container = DetectContainer(string(data))
+	}
+	if end, err := os.ReadFile(f.path(pidStr, "stat")); err != nil {
+		return nil, ErrGone
+	} else if last, err := ParseStat(string(end)); err != nil || last.StartTicks != p.StartTicks {
+		return nil, ErrGone
 	}
 	return raw, nil
 }
@@ -354,23 +372,27 @@ var dangerousEnv = []string{"LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"}
 
 // readEnvFlags возвращает имена опасных переменных, заданных у процесса
 // (с непустым значением). Окружение читается потоком через небольшой
-// буфер: от каждой записи хранится только начало (имя и первый байт
-// значения), поэтому память не зависит от размера окружения, а сами
-// значения не задерживаются в памяти — буферы затираются.
-func (f *FS) readEnvFlags(pidStr string, p *model.Process) []string {
+// буфер: от записи проверяются первые 4096 байт, затем сохраняются
+// только флаги. Обрезка видна в Access; временные буферы затираются.
+func (f *FS) readEnvFlags(pidStr string, p *model.Process, limit int) ([]string, int) {
+	if limit <= 0 {
+		p.Access = append(p.Access, "environ:budget")
+		return nil, 0
+	}
 	file, err := os.Open(f.path(pidStr, "environ"))
 	if err != nil {
 		if isPerm(err) {
 			p.Access = append(p.Access, "environ")
 		}
-		return nil
+		return nil, 0
 	}
 	defer file.Close()
 	buf := make([]byte, 4096)
-	head := make([]byte, 0, 32) // длиннее самого длинного «ИМЯ=» + 1 байт
+	head := make([]byte, 0, 4096)
 	defer clear(buf)
 	defer clear(head[:cap(head)])
 	var flags []string
+	recordBytes := 0
 	check := func() {
 		for _, name := range dangerousEnv {
 			prefix := name + "="
@@ -378,18 +400,41 @@ func (f *FS) readEnvFlags(pidStr string, p *model.Process) []string {
 				flags = append(flags, name)
 			}
 		}
+		if recordBytes > len(head) {
+			for _, name := range []string{"LD_LIBRARY_PATH=", "PROMPT_COMMAND=", "HISTFILE=", "HISTSIZE=", "HISTFILESIZE="} {
+				if bytes.HasPrefix(head, []byte(name)) && !slices.Contains(p.Access, "environ:entry-limit") {
+					p.Access = append(p.Access, "environ:entry-limit")
+				}
+			}
+		}
+		flags = appendEnvSignals(flags, head)
+		recordBytes = 0
+		clear(head)
 		head = head[:0]
 	}
+	// Лимит времени чтения: достаточно для максимального обычного Linux environ.
+	reader := io.LimitReader(file, int64(limit)+1)
+	total := 0
+	complete := false
 	for {
-		n, err := file.Read(buf)
+		n, err := reader.Read(buf)
+		total += n
+		if total > limit {
+			p.Access = append(p.Access, "environ:limit")
+			break
+		}
 		for _, b := range buf[:n] {
 			if b == 0 {
 				check()
-			} else if len(head) < cap(head) {
-				head = append(head, b)
+			} else {
+				recordBytes++
+				if len(head) < cap(head) {
+					head = append(head, b)
+				}
 			}
 		}
 		if err != nil {
+			complete = err == io.EOF
 			// Ядро проверяет права и при чтении, а не только при открытии.
 			if isPerm(err) {
 				p.Access = append(p.Access, "environ")
@@ -397,8 +442,10 @@ func (f *FS) readEnvFlags(pidStr string, p *model.Process) []string {
 			break
 		}
 	}
-	check() // последняя запись без завершающего NUL
-	return flags
+	if complete {
+		check()
+	} // незавершённая запись не считается пустой переменной
+	return flags, min(total, limit)
 }
 
 // readLimited читает не больше max байт и сообщает, был ли файл длиннее.
@@ -483,6 +530,7 @@ func ParseStat(s string) (Stat, error) {
 
 // Status — нужные поля /proc/PID/status.
 type Status struct {
+	Security  model.ProcessSecurity
 	Name      string
 	UID, EUID int
 	GID       int
@@ -503,6 +551,32 @@ func ParseStatus(s string) Status {
 		}
 		val = strings.TrimSpace(val)
 		switch key {
+		case "TracerPid":
+			st.Security.TracerPID, _ = strconv.Atoi(val)
+		case "CapEff", "CapPrm", "CapBnd", "CapAmb":
+			if mask, err := strconv.ParseUint(val, 16, 64); err == nil {
+				names := model.CapabilityNames(mask)
+				switch key {
+				case "CapEff":
+					st.Security.CapEff = names
+				case "CapPrm":
+					st.Security.CapPrm = names
+				case "CapBnd":
+					st.Security.CapBnd = names
+				case "CapAmb":
+					st.Security.CapAmb = names
+				}
+			}
+		case "NoNewPrivs", "Seccomp":
+			if n, err := strconv.Atoi(val); err == nil && n >= 0 && n <= 2 {
+				if key == "NoNewPrivs" {
+					if n <= 1 {
+						st.Security.NoNewPrivs = &n
+					}
+				} else {
+					st.Security.Seccomp = &n
+				}
+			}
 		case "Name":
 			st.Name = val
 		case "Uid":

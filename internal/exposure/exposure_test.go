@@ -243,7 +243,7 @@ func TestReadDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, w := ReadDocker(root)
-	if len(w) != 0 || len(b) != 1 || b[0].ContainerName != "cache" || b[0].HostPort != 6379 {
+	if len(w) != 1 || len(b) != 1 || b[0].ContainerName != "cache" || b[0].HostPort != 6379 {
 		t.Errorf("привязки: %+v %v", b, w)
 	}
 	// Относительный data-root игнорируется — используется путь по умолчанию.
@@ -552,7 +552,7 @@ func TestBuild(t *testing.T) {
 	for _, f := range sys {
 		got[f.ID+"|"+f.Path] = f
 	}
-	if len(sys) != 5 {
+	if len(sys)-len(rep.ContainerFindings) != 5 {
 		t.Errorf("системные находки: %+v", sys)
 	}
 	// 0.0.0.0 и :: одного Redis — одна находка с обоими адресами.

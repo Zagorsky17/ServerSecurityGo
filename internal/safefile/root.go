@@ -79,3 +79,52 @@ func WriteJSON(path string, v any, maxBytes int64) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+
+// ReadRooted читает обычный файл внутри root с ограничением размера.
+func ReadRooted(root *os.Root, name string, limit int64) ([]byte, os.FileInfo, error) {
+	f, fi, err := OpenRooted(root, name)
+	if err != nil {
+		return nil, fi, err
+	}
+	defer f.Close()
+	if limit < 0 || fi.Size() > limit {
+		return nil, fi, ErrTooLarge
+	}
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if int64(len(b)) > limit {
+		clear(b)
+		return nil, fi, ErrTooLarge
+	}
+	return b, fi, err
+}
+
+// ReadDirRooted не следует за последним симлинком и не открывает FIFO с блокировкой.
+func ReadDirRooted(root *os.Root, name string, limit int) ([]os.DirEntry, error) {
+	fi, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.IsDir() {
+		return nil, ErrNotRegular
+	}
+	f, err := root.OpenFile(name, readFlags(), 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	after, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !after.IsDir() || !os.SameFile(fi, after) {
+		return nil, ErrNotRegular
+	}
+	entries, err := f.ReadDir(limit + 1)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if len(entries) > limit {
+		return nil, ErrTooLarge
+	}
+	return entries, nil
+}
