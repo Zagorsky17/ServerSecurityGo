@@ -2,7 +2,6 @@
 
 [English](README.md) | [Русский](README.ru.md) | **简体中文**
 
-[![CI](https://github.com/Zagorsky17/ServerSecurityGo/actions/workflows/ci.yml/badge.svg)](https://github.com/Zagorsky17/ServerSecurityGo/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Zagorsky17/ServerSecurityGo)](https://github.com/Zagorsky17/ServerSecurityGo/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
