@@ -40,7 +40,7 @@ func init() {
 		"rule.login_password_root.title":    {"Успешный вход root по паролю", "Successful root password login"},
 		"rule.login_after_bruteforce.title": {"Успешный вход после не менее 10 ошибок с IP за 10 минут", "Successful login after at least 10 failures from the IP within 10 minutes"},
 		"rule.login_unusual_time.title":     {"Час входа не встречался в накопленной истории пользователя", "Login hour not previously observed in the user history"},
-		"rule.login_service_account.title":  {"Интерактивный вход служебной учётной записи", "Interactive login to a service account"},
+		"rule.login_service_account.title":  {"SSH-аутентификация служебной учётной записи", "SSH authentication to a service account"},
 		"rule.log_wtmp_truncated.title":     {"wtmp уменьшился без подтверждённой ротации", "wtmp shrank without confirmed rotation"},
 		"rule.log_wtmp_gap.title":           {"В wtmp некорректная запись или время", "wtmp contains an invalid record or timestamp"},
 		"rule.log_authlog_truncated.title":  {"auth.log уменьшился без подтверждённой ротации либо имеет время в будущем", "auth.log shrank without confirmed rotation or has a future timestamp"},

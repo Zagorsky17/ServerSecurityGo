@@ -394,10 +394,15 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 		sessions, bad := Utmp(utmp, "/run/utmp", arm)
 		if !bad {
 			for _, p := range procs {
-				if !strings.HasPrefix(p.Cmdline, "sshd: ") || !strings.Contains(p.Cmdline, "@pts/") {
+				title := p.Cmdline
+				if len(p.Args) > 0 {
+					title = p.Args[0]
+				}
+				title = strings.Replace(title, "sshd-session: ", "sshd: ", 1)
+				if p.StartTime.IsZero() || now.Sub(p.StartTime) < 30*time.Second || !strings.HasPrefix(title, "sshd: ") || !strings.Contains(title, "@pts/") {
 					continue
 				}
-				user, tty, ok := strings.Cut(strings.TrimPrefix(p.Cmdline, "sshd: "), "@")
+				user, tty, ok := strings.Cut(strings.TrimPrefix(title, "sshd: "), "@")
 				if !ok {
 					continue
 				}
@@ -409,7 +414,9 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 					}
 				}
 				if !found {
-					r.Findings = append(r.Findings, finding("log_utmp_missing", "/run/utmp", model.RiskHigh))
+					f := finding("log_utmp_missing", "/run/utmp", model.RiskHigh)
+					f.Evidence = []i18n.Msg{i18n.L(p.Key + " " + user + " " + tty)}
+					r.Findings = append(r.Findings, f)
 				}
 			}
 		}
@@ -571,7 +578,11 @@ func (c *Collector) assess(r *model.AuthReport, accounts map[string][]string) {
 			add("login_password_root", model.RiskHigh)
 		}
 		if a, ok := accounts[e.User]; ok && (strings.HasSuffix(a[6], "/nologin") || strings.HasSuffix(a[6], "/false") || e.User == "www-data" || e.User == "postgres" || e.User == "nobody") {
-			add("login_service_account", model.RiskHigh)
+			risk := model.RiskLow
+			if e.TTY != "" {
+				risk = model.RiskHigh
+			}
+			add("login_service_account", risk)
 		}
 		n := 0
 		for _, t := range failures[e.IP] {

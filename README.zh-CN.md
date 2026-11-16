@@ -702,6 +702,6 @@ serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
 
 认证读取受字节和记录数量限制：最多 5,000 个事件和密钥，固定 auth.log 轮换文件（`.1`、`.2.gz`）。不可用或超限的数据源会明确报告不完整。支持 glibc 小端 amd64 与 arm64 记账格式；不会猜测未知镜像架构。二进制 journald 解析留待后续，因此没有 auth.log 的主机认证可见性有限。无法可靠推断密钥选项、自定义 `AuthorizedKeysFile`、journal 清理意图和所有轮换方案。journal 大幅缩小或 shell 历史被禁用需要人工核查；空日志本身不证明删除。最近文件遍历限制为 100,000 个路径、10,000 个结果或十秒，不遍历符号链接。服务每小时刷新元数据；时间线只包含可用且仍被保留的观察记录。
 
-新增发现 ID：`login_new_ip`、`login_password_root`、`login_after_bruteforce`、`login_unusual_time`、`login_service_account`、`log_wtmp_truncated`、`log_wtmp_gap`、`log_authlog_truncated`、`log_history_null`、`log_journal_vacuum`、`log_utmp_missing`。同一 IP 十分钟内至少十次失败后成功登录会被标记；共享 NAT 和管理员活动也可能解释该现象。内核遭入侵后，本地检查不能恢复信任，应保留磁盘镜像并在独立环境分析。
+新增发现 ID：`login_new_ip`、`login_password_root`、`login_after_bruteforce`、`login_unusual_time`、`login_service_account`、`log_wtmp_truncated`、`log_wtmp_gap`、`log_authlog_truncated`、`log_history_null`、`log_journal_vacuum`、`log_utmp_missing`。服务账户认证在未确认终端时为 LOW，匹配到会话 TTY 时为 HIGH。同一 IP 十分钟内至少十次失败后成功登录会被标记；共享 NAT 和管理员活动也可能解释该现象。内核遭入侵后，本地检查不能恢复信任，应保留磁盘镜像并在独立环境分析。
 
 记账格式于 2026-11-16 对照 [glibc utmp 定义](https://github.com/bminor/glibc/blob/master/bits/utmp.h)及 [aarch64 ABI 定义](https://github.com/bminor/glibc/blob/master/sysdeps/aarch64/bits/wordsize.h)核对。Linux CI 将 C 生成的记账记录与 Go 解析器进行比较，并从独立测试进程采集已删除的可执行文件。

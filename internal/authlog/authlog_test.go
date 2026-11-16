@@ -382,3 +382,50 @@ func TestAbsoluteIntermediateLinkInHome(t *testing.T) {
 		t.Fatal("final symlink followed")
 	}
 }
+func TestServiceAccountRequiresTTYForHighRisk(t *testing.T) {
+	for _, tty := range []string{"", "pts/0"} {
+		r := &model.AuthReport{Since: time.Now().Add(-time.Hour), Events: []model.LoginEvent{{Time: time.Now(), Kind: "login", User: "svc", IP: "192.0.2.1", TTY: tty}}}
+		New(Options{}).assess(r, map[string][]string{"svc": {"svc", "x", "1", "1", "", "/svc", "/sbin/nologin"}})
+		want := model.RiskLow
+		if tty != "" {
+			want = model.RiskHigh
+		}
+		if r.Events[0].Risk != want {
+			t.Fatal(tty, r.Events[0])
+		}
+	}
+}
+func TestUtmpUsesProcessArgvAndAllowsStartup(t *testing.T) {
+	root := fixture(t)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	put(t, root, "var/log/auth.log", nil)
+	p := &model.Process{Key: "42-123", PID: 42, Args: []string{"sshd: root@pts/0"}, Cmdline: "'sshd: root@pts/0'", StartTime: now.Add(-time.Hour)}
+	rep := New(Options{Root: root}).Build(now, []*model.Process{p})
+	found := false
+	for _, f := range rep.Findings {
+		if f.ID == "log_utmp_missing" {
+			found = true
+			if len(f.Evidence) == 0 {
+				t.Fatal("missing process evidence")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("quoted title hid missing utmp")
+	}
+	p.StartTime = now
+	rep = New(Options{Root: root}).Build(now, []*model.Process{p})
+	for _, f := range rep.Findings {
+		if f.ID == "log_utmp_missing" {
+			t.Fatal("startup grace ignored")
+		}
+	}
+	p.StartTime = now.Add(-time.Hour)
+	put(t, root, "run/utmp", utRecord(false, 7, p.StartTime.Unix()))
+	rep = New(Options{Root: root}).Build(now, []*model.Process{p})
+	for _, f := range rep.Findings {
+		if f.ID == "log_utmp_missing" {
+			t.Fatal("existing session hidden")
+		}
+	}
+}
