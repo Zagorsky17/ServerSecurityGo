@@ -199,3 +199,24 @@ func TestDockerMetadataLimitsAndDaemonErrors(t *testing.T) {
 		t.Fatal("invalid daemon config hidden")
 	}
 }
+
+func TestDockerStorageAndDaemonAbsoluteSymlinks(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{"srv/docker/containers/" + cid1 + "/config.v2.json": fmt.Sprintf(`{"ID":%q,"Name":"/linked","Config":{"Image":"app","User":"1000"},"State":{"Running":true},"NetworkSettings":{"Ports":{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"8080"}]}}}`, cid1), "srv/docker/containers/" + cid1 + "/hostconfig.json": "{}"})
+	os.MkdirAll(filepath.Join(root, "var/lib"), 0755)
+	if err := os.Symlink("/srv/docker", filepath.Join(root, "var/lib/docker")); err != nil {
+		t.Fatal(err)
+	}
+	data := readDockerData(root, true)
+	if len(data.bindings) != 1 || len(data.warnings) != 0 {
+		t.Fatalf("storage link: %+v", data)
+	}
+	writeFiles(t, root, map[string]string{"etc/docker/settings.json": `{"data-root":"/srv/docker"}`})
+	if err := os.Symlink("/etc/docker/settings.json", filepath.Join(root, "etc/docker/daemon.json")); err != nil {
+		t.Fatal(err)
+	}
+	data = readDockerData(root, true)
+	if len(data.bindings) != 1 || len(data.warnings) != 0 {
+		t.Fatalf("daemon link: %+v", data)
+	}
+}

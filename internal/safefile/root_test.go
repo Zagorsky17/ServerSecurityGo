@@ -114,3 +114,39 @@ func TestRootedBoundedReaders(t *testing.T) {
 		t.Fatal("symlink followed")
 	}
 }
+
+func TestResolveRootedSystemLinks(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "target/sub"), 0755)
+	os.WriteFile(filepath.Join(dir, "target/file"), []byte("inside"), 0600)
+	os.Symlink("/target", filepath.Join(dir, "absolute"))
+	os.Symlink("absolute", filepath.Join(dir, "chain"))
+	os.Symlink("loop", filepath.Join(dir, "loop"))
+	os.Symlink("../../../outside", filepath.Join(dir, "escape"))
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	for _, name := range []string{"absolute/file", "chain/file", "chain/sub/../file"} {
+		resolved, err := ResolveRooted(root, name)
+		if err != nil || resolved != "target/file" {
+			t.Fatalf("%s: %s %v", name, resolved, err)
+		}
+		b, _, err := ReadRooted(root, resolved, 10)
+		if err != nil || string(b) != "inside" {
+			t.Fatalf("%q %v", b, err)
+		}
+	}
+	for _, name := range []string{"/absolute/file", "../outside", "loop", "escape", "missing", "target/file/../file"} {
+		if p, err := ResolveRooted(root, name); err == nil {
+			t.Fatalf("accepted %s as %s", name, p)
+		}
+	}
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "secret"), []byte("outside"), 0600)
+	os.Symlink(outside, filepath.Join(dir, "outside"))
+	if _, err := ResolveRooted(root, "outside/secret"); err == nil {
+		t.Fatal("physical root escaped")
+	}
+}

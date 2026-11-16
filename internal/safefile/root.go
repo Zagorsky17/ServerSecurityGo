@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 )
 
 // OpenRooted ограничивает путь root и сверяет обычный файл до и после открытия.
@@ -127,4 +129,58 @@ func ReadDirRooted(root *os.Root, name string, limit int) ([]os.DirEntry, error)
 		return nil, ErrTooLarge
 	}
 	return entries, nil
+}
+
+// ResolveRooted разрешает доверенный системный путь; абсолютные цели ссылок
+// отсчитываются от проверяемого root. Открывать результат нужно снова через root.
+func ResolveRooted(root *os.Root, name string) (string, error) {
+	if filepath.IsAbs(name) {
+		return "", os.ErrPermission
+	}
+	pending := strings.Split(name, string(os.PathSeparator))
+	var parts []string
+	links := 0
+	for len(pending) > 0 {
+		part := pending[0]
+		pending = pending[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			if len(parts) == 0 {
+				return "", os.ErrPermission
+			}
+			parts = parts[:len(parts)-1]
+			continue
+		}
+		current := filepath.Join(append(slices.Clone(parts), part)...)
+		fi, err := root.Lstat(current)
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			if len(pending) > 0 && !fi.IsDir() {
+				return "", os.ErrInvalid
+			}
+			parts = append(parts, part)
+			continue
+		}
+		links++
+		if links > 40 {
+			return "", os.ErrInvalid
+		}
+		target, err := os.Readlink(filepath.Join(root.Name(), current))
+		if err != nil {
+			return "", err
+		}
+		if filepath.IsAbs(target) {
+			parts = nil
+			target = strings.TrimLeft(target, string(os.PathSeparator))
+		}
+		pending = append(strings.Split(target, string(os.PathSeparator)), pending...)
+	}
+	if len(parts) == 0 {
+		return ".", nil
+	}
+	return filepath.Join(parts...), nil
 }

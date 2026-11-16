@@ -152,6 +152,7 @@ func TestPersistenceSystemSymlinksStayInsideHostRoot(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	persistenceWrite(t, root, "usr/share/profile", "curl x | sh\n")
+	persistenceWrite(t, root, "dev/null", "")
 	persistenceWrite(t, outside, "outside", "curl outside | sh\n")
 	os.MkdirAll(filepath.Join(root, "etc/profile.d"), 0755)
 	for name, target := range map[string]string{"absolute": "/usr/share/profile", "chain": "absolute", "masked": "/dev/null", "cycle": "cycle", "outside": filepath.Join(outside, "outside")} {

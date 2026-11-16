@@ -64,7 +64,14 @@ func dockerRootPath(root *os.Root) (string, error) {
 		return defaultDockerRoot, nil
 	}
 	if err != nil {
-		return defaultDockerRoot, err
+		resolved, e := safefile.ResolveRooted(root, "etc/docker/daemon.json")
+		if e != nil {
+			return defaultDockerRoot, e
+		}
+		data, _, err = safefile.ReadRooted(root, resolved, maxConfigFile)
+		if err != nil {
+			return defaultDockerRoot, err
+		}
 	}
 	var cfg struct {
 		DataRoot string `json:"data-root"`

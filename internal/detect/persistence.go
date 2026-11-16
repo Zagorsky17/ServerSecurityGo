@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
@@ -153,38 +152,20 @@ func persistenceChecks(hostRoot string, now time.Time, cfg Config, owners map[st
 	for _, p := range names {
 		data, fi, err := read(p)
 
-		symbolic := errors.Is(err, safefile.ErrNotRegular) && fi != nil && fi.Mode()&os.ModeSymlink != 0
-		masked := false
-		if symbolic && (strings.HasPrefix(p, "etc/") || strings.HasPrefix(p, "lib/") || strings.HasPrefix(p, "usr/lib/")) {
-			current := p
-			// os.Root отвергает абсолютные ссылки даже внутри корня: переводим цель в путь относительно hostRoot.
-			for depth := 0; errors.Is(err, safefile.ErrNotRegular) && fi != nil && fi.Mode()&os.ModeSymlink != 0; depth++ {
-				if depth == 16 {
-					err = syscall.ELOOP
-					break
-				}
-				target, e := os.Readlink(filepath.Join(hostRoot, current))
-				if e != nil {
-					err = e
-					break
-				}
-				if filepath.IsAbs(target) {
-					current = strings.TrimPrefix(filepath.Clean(target), "/")
-				} else {
-					current = filepath.Join(filepath.Dir(current), target)
-				}
-				if current == "dev/null" {
-					masked = true
-					break
-				}
-				data, fi, err = read(current)
+		attemptedLink := err != nil && !errors.Is(err, os.ErrNotExist)
+		if attemptedLink && (strings.HasPrefix(p, "etc/") || strings.HasPrefix(p, "lib/") || strings.HasPrefix(p, "usr/lib/")) {
+			resolved, e := safefile.ResolveRooted(root, p)
+			if e == nil && resolved == "dev/null" {
+				continue
+			}
+			if e != nil {
+				err = e
+			} else {
+				data, fi, err = read(resolved)
 			}
 		}
-		if masked {
-			continue
-		}
 		if err != nil {
-			if symbolic || !errors.Is(err, os.ErrNotExist) {
+			if attemptedLink || !errors.Is(err, os.ErrNotExist) {
 				issue(p)
 			}
 			continue

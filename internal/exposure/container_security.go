@@ -228,6 +228,15 @@ func readDockerData(hostRoot string, security bool) dockerData {
 		return out
 	}
 	entries, err := safefile.ReadDirRooted(root, dir, maxContainers)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		resolved, e := safefile.ResolveRooted(root, dir)
+		if e != nil {
+			err = e
+		} else {
+			dir = resolved
+			entries, err = safefile.ReadDirRooted(root, dir, maxContainers)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, safefile.ErrTooLarge) {
 			out.warnings = append(out.warnings, i18n.T("warn.docker_too_many", maxContainers))
