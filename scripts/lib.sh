@@ -187,7 +187,7 @@ write_self_baseline() (
     for file in "$base/$APP_NAME.service" "$base/service.d/"*.conf "$base/$APP_NAME.service.d/"*.conf; do
       if [ ! -e "$file" ] && [ ! -L "$file" ]; then continue; fi
       [ -f "$file" ] || [ "$(readlink "$file" 2>/dev/null || true)" = /dev/null ] || die "необычный файл юнита: $file"
-      case "$file" in *$'\n'*|*'\'*) die "неподдерживаемое имя файла юнита" ;; esac
+      case "$file" in *$'\n'*|*\\*) die "неподдерживаемое имя файла юнита" ;; esac
       count=$((count + 1))
       [ "$count" -le 1024 ] || die "слишком много файлов юнита"
       # Ограничение совпадает с ограничением чтения в Go.

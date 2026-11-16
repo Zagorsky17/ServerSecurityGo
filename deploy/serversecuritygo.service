@@ -13,6 +13,9 @@ After=network.target
 
 [Service]
 Type=simple
+# Подтверждения идут только пока сканирование завершается успешно.
+NotifyAccess=main
+WatchdogSec=30s
 WorkingDirectory=/opt/serversecuritygo
 EnvironmentFile=/opt/serversecuritygo/.env
 ExecStart=/opt/serversecuritygo/bin/serversecuritygo serve

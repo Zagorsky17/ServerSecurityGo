@@ -6,7 +6,7 @@ repo="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=../../scripts/lib.sh
 . "$repo/scripts/lib.sh"
 for path in "$APP_DIR" "$DATA_DIR" "$UNIT_PATH" "$UNIT_PATH.d"; do
-  [ ! -e "$path" ] && [ ! -L "$path" ] || die "путь уже существует: $path"
+  if [ -e "$path" ] || [ -L "$path" ]; then die "путь уже существует: $path"; fi
 done
 cleanup() {
   systemctl stop "$APP_NAME" || true
@@ -21,6 +21,8 @@ trap cleanup EXIT
 install -d "$APP_DIR/bin" "$UNIT_PATH.d"
 install -m 0755 "$1" "$APP_DIR/bin/$APP_NAME"
 install -m 0644 "$repo/deploy/$APP_NAME.service" "$UNIT_PATH"
+grep -qx "WatchdogSec=30s" "$UNIT_PATH"
+grep -qx "NotifyAccess=main" "$UNIT_PATH"
 install -m 0600 "$repo/.env.example" "$APP_DIR/.env"
 cat >> "$APP_DIR/.env" <<'ENV'
 SSG_LISTEN_ADDR=off
