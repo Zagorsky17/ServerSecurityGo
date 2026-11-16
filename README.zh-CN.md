@@ -26,6 +26,7 @@
   - [fail2ban](#fail2ban)
   - [服务器指标](#服务器指标)
   - [网络负载与 DDoS 迹象](#网络负载与-ddos-迹象)
+- [扫描器自检](#扫描器自检)
 - [风险评分方式](#风险评分方式)
 - [可检测的异常示例](#可检测的异常示例)
 - [检测局限](#检测局限)
@@ -326,6 +327,36 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 **误报。** 对于 CDN 后面的站点，所有访客都来自 CDN 的地址——把这些网段写入 `SSG_NET_TRUSTED_NETS`，它们就不再被视为洪流来源（表格中标为受信）。私有网络和子网的阈值会自动提高到四倍。服务器的出站连接不会计入来源，与自身的连接同样不计。在指标不足六小时之前，相对阈值（“常态的 N 倍”）不生效。任何发现都可以用其 ID 通过白名单规则抑制。
 
 **保护扫描器自身。** 攻击期间 `/proc/net/tcp` 会增长到数十万行，因此每个网络命名空间的套接字数量受 `SSG_NET_MAX_SOCKETS` 限制（100 000，每个套接字约 200 字节）；超出部分会被跳过，并出现 `net_table_truncated`。按地址聚合的数据同样有大小上限。
+
+## 扫描器自检
+
+服务独立于扫描循环检查安装文件的完整性和扫描数据的新鲜度。结果显示在系统页面、概览警告、历史记录及 `scan` 报告中。自检不会修改服务器配置，也不会自动应用例外规则的变更。
+
+| 检测项 | 含义 |
+|---|---|
+| `self_binary_changed` — CRITICAL | 启动时正在运行的二进制文件 SHA256 与安装基线不一致。Linux 读取 `/proc/self/exe`，即使文件路径已被替换，仍检查正在运行的文件。 |
+| `self_unit_changed` — HIGH | `/etc`、`/run`、`/usr/local/lib`、`/usr/lib` 或 `/lib/systemd/system` 下的 `serversecuritygo.service`、`serversecuritygo.service.d/*.conf` 或通用 `service.d/*.conf` 发生修改、新增或删除。证据列出受影响路径。 |
+| `self_baseline_changed` — HIGH | 启动后基线被修改；服务继续使用原始基线进行比较。 |
+| `self_allowlist_changed` — MEDIUM | 例外文件被修改、新增或删除。仅保存路径和 SHA256，不将内容写入历史记录。已加载的规则持续生效至重启。 |
+| `self_scan_stalled` — HIGH | 超过三个扫描间隔没有成功完成扫描，包括第一次扫描。失败的扫描不会更新成功时间。 |
+| `self_clock_back` — MEDIUM | 两次检查之间，系统时间相对单调时钟后退超过一秒。警告保留至重启；扫描超时不受系统时间调整影响。 |
+| `self_check_unavailable` — MEDIUM | 基线缺失或损坏、文件无法读取、类型不受支持或超出大小限制。这表示检查不完整，并不代表完整性已确认。 |
+
+安装和更新在启动服务前原子写入 `/var/lib/serversecuritygo/self.sha256`，权限为 `600`。此固定路径不受 `SSG_DATA_DIR` 影响。回滚同时恢复原二进制文件和旧基线。服务本身不会创建或更新此基线。手动安装时，确认二进制文件及单元文件可信后，在项目目录中以 root 执行：
+
+```bash
+source scripts/lib.sh
+write_self_baseline
+systemctl restart serversecuritygo
+```
+
+此命令将当前文件接受为基线；应先查明变更原因，不能仅为消除警告而运行。校验和不能替代可信的发行签名，具有 root 权限的攻击者能够同时替换程序与基线。单元检查覆盖磁盘文件，包括被其他文件覆盖的配置，并不能证明 systemd 已加载这些配置。管理员的合法变更也需要核实。
+
+观察器正常运行时，至少每五秒检查一次文件。例外文件必须是普通文件，不得使用符号链接，且不超过 1 MiB；规则加载也执行相同限制。观察状态保存在 `SSG_DATA_DIR/self-allowlist.json`，权限为 `600`，以检测重启之间的变更。单次 `scan` 和本地 TUI 仅使用内存，不修改服务状态；演示模式不检查实际安装。
+
+`GET /api/status` 包含 `stale` 字段；首次扫描成功之前及数据过期时，`/healthz` 返回 `503`。完整性警告本身不会导致存活检查失败，应查看报告。自检不可用时，`scan` 返回不完整状态（退出码 `3`，除非风险结果优先触发退出码 `1`）；`--fail-on none` 也不会隐藏不完整状态。
+
+单元启用 `WatchdogSec=30s` 和 `NotifyAccess=main`。扫描仍有效时发送本地 `WATCHDOG=1` 通知；通知停止后，systemd 只重启 ServerSecurityGo，不更改其他进程或网络。默认扫描间隔为 30 秒，超过 90 秒无成功结果后数据过期，再等待 watchdog 超时。协议参考：[systemd.service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html) 和 [sd_notify](https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html)。
 
 ## 风险评分方式
 

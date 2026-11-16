@@ -1055,7 +1055,7 @@ async function refresh() {
     state.status = await api('/api/status');
     state.csrf = state.status.csrf;
     if (!state.status.ready) {
-      $('hostline').textContent = tr('web.first_scan');
+      $('hostline').textContent = (state.status.warnings || []).map(tx).join(' · ') || tr('web.first_scan');
       setTimeout(refresh, 1500);
       return;
     }

@@ -22,6 +22,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/selfcheck"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/web"
 )
 
@@ -1152,5 +1153,39 @@ func TestNetLoadPanel(t *testing.T) {
 	}
 	if len(ids) == 0 {
 		t.Error("признаков net_* в системных находках нет")
+	}
+}
+
+func TestSelfCheckInLocalOverview(t *testing.T) {
+	sc := demoScanner(t)
+	m := selfcheck.New(selfcheck.Options{HostRoot: t.TempDir(), Executable: "/missing", Progress: sc.LastSuccess, Interval: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	sc.SetSelfCheck(m)
+	src, err := NewLocalSource(sc, nil, nil, false, "test", false, i18n.L("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	d, err := src.Fetch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Status.Warnings) == 0 {
+		t.Fatal("self-check warning lost")
+	}
+	found := false
+	for _, f := range d.System {
+		if f.ID == "self_check_unavailable" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("self-check finding lost")
+	}
+	a := New(Options{Source: src, Lang: i18n.RU})
+	a.data = d
+	b := &lb{w: 200, lang: i18n.RU}
+	a.overview(b)
+	if !strings.Contains(fmt.Sprint(b.lines), "Самоконтроль") {
+		t.Fatal("overview hides warning")
 	}
 }

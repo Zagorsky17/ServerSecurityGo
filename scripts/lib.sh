@@ -146,8 +146,8 @@ backup_state() {
 # install_unit копирует systemd-юнит, если он изменился.
 install_unit() {
   if ! cmp -s "${APP_DIR}/deploy/${APP_NAME}.service" "$UNIT_PATH" 2>/dev/null; then
-    install -m 0644 "${APP_DIR}/deploy/${APP_NAME}.service" "$UNIT_PATH"
-    systemctl daemon-reload
+    install -m 0644 "${APP_DIR}/deploy/${APP_NAME}.service" "$UNIT_PATH" || return 1
+    systemctl daemon-reload || return 1
     log "systemd-юнит обновлён"
   fi
 }
@@ -167,5 +167,57 @@ install_link() {
 remove_link() {
   if [ -L "$LINK_PATH" ] && [ "$(readlink "$LINK_PATH")" = "${APP_DIR}/bin/${APP_NAME}" ]; then
     rm -f "$LINK_PATH"
+  fi
+}
+
+# Эталон записывает только установка/обновление; сама служба его не принимает.
+# Каталоги совпадают с internal/selfcheck/files.go. Содержимое файлов не сохраняется.
+write_self_baseline() (
+  set -euo pipefail
+  local base file sum size total=0 count=0 root="${1:-}"
+  shopt -s nullglob dotglob
+  [ ! -L "$DATA_DIR" ] || die "каталог данных не должен быть симлинком"
+  install -d -m 0700 "$DATA_DIR" || return 1
+  tmp="$(mktemp "$DATA_DIR/.self.sha256.XXXXXX")" || return 1
+  trap 'rm -f -- "$tmp"' EXIT
+  sum="$(sha256sum "$APP_DIR/bin/$APP_NAME")" || return 1
+  printf '%s  binary\n' "${sum%% *}" > "$tmp" || return 1
+  for base in /etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+    base="$root$base"
+    for file in "$base/$APP_NAME.service" "$base/service.d/"*.conf "$base/$APP_NAME.service.d/"*.conf; do
+      if [ ! -e "$file" ] && [ ! -L "$file" ]; then continue; fi
+      [ -f "$file" ] || [ "$(readlink "$file" 2>/dev/null || true)" = /dev/null ] || die "необычный файл юнита: $file"
+      case "$file" in *$'\n'*|*'\'*) die "неподдерживаемое имя файла юнита" ;; esac
+      count=$((count + 1))
+      [ "$count" -le 1024 ] || die "слишком много файлов юнита"
+      # Ограничение совпадает с ограничением чтения в Go.
+      size="$(wc -c < "$file")" || return 1
+      [ "$size" -le 1048576 ] || die "слишком большой файл юнита: $file"
+      total=$((total + size))
+      [ "$total" -le 8388608 ] || die "файлы юнита превышают общий лимит 8 МиБ"
+      sum="$(sha256sum "$file")" || return 1
+      printf '%s  %s\n' "${sum%% *}" "${file#"$root"}" >> "$tmp" || return 1
+    done
+  done
+  [ -f "${root}/etc/systemd/system/$APP_NAME.service" ] || die "нет установленного юнита"
+  chmod 600 "$tmp" || return 1
+  mv -f -- "$tmp" "$DATA_DIR/self.sha256"
+)
+
+# Для отката возвращаем прежний эталон, не принимая текущее содержимое файлов.
+save_self_baseline() {
+  if [ -f "$DATA_DIR/self.sha256" ] && [ ! -L "$DATA_DIR/self.sha256" ]; then
+    cp -p -- "$DATA_DIR/self.sha256" "$APP_DIR/bin/.prev-self.sha256"
+  else
+    rm -f -- "$APP_DIR/bin/.prev-self.sha256"
+  fi
+}
+
+restore_self_baseline() {
+  if [ -f "$APP_DIR/bin/.prev-self.sha256" ]; then
+    install -m 0600 "$APP_DIR/bin/.prev-self.sha256" "$DATA_DIR/.self.sha256.restore" || return 1
+    mv -f -- "$DATA_DIR/.self.sha256.restore" "$DATA_DIR/self.sha256"
+  else
+    rm -f -- "$DATA_DIR/self.sha256"
   fi
 }

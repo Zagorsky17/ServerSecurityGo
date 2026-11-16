@@ -196,8 +196,8 @@ func (s *Server) routes() {
 	static, _ := fs.Sub(staticFS, "static")
 	files := http.FileServerFS(static)
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		if s.opt.Scanner.Snapshot() == nil {
-			http.Error(w, "starting", http.StatusServiceUnavailable)
+		if !s.opt.Scanner.Healthy(time.Now()) {
+			http.Error(w, "starting or stale", http.StatusServiceUnavailable)
 			return
 		}
 		w.Write([]byte("ok\n"))
@@ -489,6 +489,12 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) *model.Snapsho
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, sess session) {
 	st := view.Status{Version: s.opt.Version, Auth: s.authEnabled(), CSRF: sess.csrf, Demo: s.opt.Demo, Interval: s.opt.Scanner.Interval().Seconds()}
 	st = view.BuildStatus(st, s.opt.Scanner.Snapshot())
+	st.Stale = !s.opt.Scanner.Healthy(time.Now())
+	if !st.Ready {
+		for _, f := range s.opt.Scanner.SelfFindings() {
+			st.Warnings = append(st.Warnings, f.Title)
+		}
+	}
 	if a := s.opt.Audit; a != nil {
 		st.Audit = view.BuildAuditBrief(true, a.Running(), a.Report())
 	}

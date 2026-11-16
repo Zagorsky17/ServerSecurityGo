@@ -33,9 +33,16 @@ jobs:
           go build -o /tmp/ssg ./cmd/serversecuritygo
           # --fail-on none: находки на раннере CI (сборки из /tmp) не должны
           # ронять шаг; коды выхода проверяет отдельный тест.
-          sudo /tmp/ssg scan --min-risk INFO --fail-on none | head -40
+          # На раннере нет эталона установки: самоконтроль честно возвращает 3.
+          set +e
+          sudo /tmp/ssg scan --min-risk INFO --fail-on none > /tmp/scan.txt
+          text_code=$?
           sudo /tmp/ssg scan --format json --min-risk INFO --fail-on none > /tmp/scan.json
-          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
+          json_code=$?
+          set -e
+          test "$text_code" = 3 && test "$json_code" = 3
+          head -40 /tmp/scan.txt
+          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['stats']['total']>10 and d['incomplete'], d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
       - name: Аудит настроек настоящей системы
         run: |
           sudo /tmp/ssg audit --all --fail-on none | head -80
@@ -46,7 +53,9 @@ jobs:
           # Код выхода: ошибка неверного флага — 2.
           set +e; /tmp/ssg audit --fail-on bogus; code=$?; set -e
           test "$code" = 2
+      - name: Настоящий systemd-юнит и watchdog
+        run: sudo --preserve-env=GITHUB_ACTIONS bash .github/scripts/selfcheck-systemd.sh /tmp/ssg
       - name: Кросс-сборка
         run: make build-linux
       - name: shellcheck
-        run: shellcheck -x scripts/*.sh
+        run: shellcheck -x scripts/*.sh .github/scripts/*.sh

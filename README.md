@@ -26,6 +26,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
   - [fail2ban](#fail2ban)
   - [Server metrics](#server-metrics)
   - [Network load and signs of a DDoS](#network-load-and-signs-of-a-ddos)
+- [Scanner self-checks](#scanner-self-checks)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
 - [Detection limitations](#detection-limitations)
@@ -326,6 +327,36 @@ The data comes from `/proc` only: `net/netstat`, `net/snmp`, `net/sockstat`, `ne
 **False positives.** For a site behind a CDN every visitor arrives from the CDN's addresses — put its ranges into `SSG_NET_TRUSTED_NETS` and they will no longer count as flood sources (the table marks them as trusted). For private networks and for subnets the threshold is automatically four times higher. Outgoing connections of the server never become sources, nor do connections to itself. Relative thresholds ("N times the usual") do not apply until there are six hours of metrics. Any finding can be suppressed by an allowlist rule with its ID.
 
 **Protecting the scanner itself.** During an attack `/proc/net/tcp` grows to hundreds of thousands of lines, so the number of sockets per network namespace is capped by `SSG_NET_MAX_SOCKETS` (100,000, about 200 bytes per socket); beyond the cap sockets are skipped and `net_table_truncated` appears. The per-address aggregates are size-capped too.
+
+## Scanner self-checks
+
+The service checks its installation and scan freshness independently of the scan loop. Findings appear in System, overview warnings, history and `scan` reports. Self-checks do not change server settings or automatically apply allowlist changes.
+
+| Finding | Meaning |
+|---|---|
+| `self_binary_changed` — CRITICAL | The running binary's startup SHA256 differs from the installation baseline. Linux reads `/proc/self/exe`, checking the running inode even after its pathname is replaced. |
+| `self_unit_changed` — HIGH | A `serversecuritygo.service`, `serversecuritygo.service.d/*.conf` or shared `service.d/*.conf` file changed, appeared or disappeared under `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` or `/lib/systemd/system`. Evidence lists affected paths. |
+| `self_baseline_changed` — HIGH | The baseline changed after startup; comparisons continue against the original baseline. |
+| `self_allowlist_changed` — MEDIUM | The allowlist changed, appeared or disappeared. Only its path and SHA256 are persisted; contents are never included in history. Loaded rules remain active until restart. |
+| `self_scan_stalled` — HIGH | No successful scan completed for more than three scan intervals, including the first scan. Failed scans do not refresh the last-success timestamp. |
+| `self_clock_back` — MEDIUM | Wall time moved backwards by more than one second relative to monotonic time between checks. The warning remains until restart; clock adjustments do not affect scan timeouts. |
+| `self_check_unavailable` — MEDIUM | A missing/corrupt baseline, unreadable file, unsupported file type or size limit prevents verification. This means an incomplete check, not verified integrity. |
+
+Installation and updates atomically write `/var/lib/serversecuritygo/self.sha256` with mode `600` before starting the service. This fixed path does not depend on `SSG_DATA_DIR`. Rollback restores the previous baseline together with the binary. The service never creates or refreshes this baseline itself. For manual installation, after verifying the binary and unit files, run from the project directory as root:
+
+```bash
+source scripts/lib.sh
+write_self_baseline
+systemctl restart serversecuritygo
+```
+
+This accepts the current files as the baseline: investigate changes before using it to clear a warning. Checksums do not replace trusted release signatures; an attacker with root can replace both the program and its baseline. Unit checks cover files on disk, including overridden files; they do not prove which configuration systemd has already loaded. Legitimate administrator changes also require review.
+
+The running observer checks files at least every five seconds under normal operation. Allowlists must be regular files up to 1 MiB, without symlinks; rule loading enforces the same limits. `SSG_DATA_DIR/self-allowlist.json` stores observation state with mode `600` to detect changes across restarts. One-shot `scan` and local TUI use memory and do not modify service state. Demo mode does not check the real installation.
+
+`GET /api/status` includes `stale`; `/healthz` returns `503` before the first successful scan and when scan data is stale. Integrity findings alone do not fail the liveness endpoint: inspect the report. Unavailable self-checks make `scan` incomplete (exit `3`, unless a finding takes precedence with exit `1`); even `--fail-on none` preserves incomplete status.
+
+The unit enables `WatchdogSec=30s` and `NotifyAccess=main`. Local `WATCHDOG=1` notifications continue while scans are fresh. When heartbeats stop, systemd restarts only ServerSecurityGo; other processes and networking are untouched. With the default 30-second scan interval, data becomes stale after 90 seconds without a result, followed by the watchdog timeout. Protocol references: [systemd.service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html) and [sd_notify](https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html).
 
 ## How risk is scored
 

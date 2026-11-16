@@ -70,6 +70,11 @@ func (s *Scan) Verdict() (model.Risk, bool) {
 
 // Incomplete — часть данных не прочитана (нет прав на процессы).
 func (s *Scan) Incomplete() bool {
+	for _, f := range s.Snap.System {
+		if f.ID == "self_check_unavailable" {
+			return true
+		}
+	}
 	return s.Snap.Stats.Restricted > 0 || !s.Snap.Host.IsRoot
 }
 
