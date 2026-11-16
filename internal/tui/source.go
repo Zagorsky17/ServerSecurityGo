@@ -132,6 +132,7 @@ func (l *LocalSource) Fetch() (*Data, error) {
 		return nil, i18n.Errorf("err.first_scan_running")
 	}
 	st := view.BuildStatus(view.Status{Version: l.version, Demo: l.demo, Interval: l.sc.Interval().Seconds()}, snap)
+	st.Stale = !l.sc.Healthy(time.Now())
 	ev := l.sc.History().Events(2000)
 	slices.Reverse(ev)
 	av := view.BuildAudit(false, false, 0, nil)

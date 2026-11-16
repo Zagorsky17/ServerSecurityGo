@@ -188,6 +188,7 @@ type Status struct {
 	CSRF           string         `json:"csrf"`
 	Demo           bool           `json:"demo"`
 	Interval       float64        `json:"interval"`
+	Stale          bool           `json:"stale"`
 	Ready          bool           `json:"ready"`
 	Time           time.Time      `json:"time"`
 	Seq            uint64         `json:"seq"`

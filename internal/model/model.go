@@ -632,7 +632,7 @@ type Event struct {
 // Incomplete показывает, что отсутствие находок нельзя считать результатом полной проверки.
 func (f SystemFinding) Incomplete() bool {
 	switch f.ID {
-	case "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
+	case "self_check_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
 		return true
 	}
 	return false

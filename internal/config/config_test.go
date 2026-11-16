@@ -204,3 +204,20 @@ func TestVerificationIntervals(t *testing.T) {
 		t.Fatal("wrong defaults")
 	}
 }
+
+func TestAllowlistRejectsOversizeAndSymlink(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.json")
+	if err := os.WriteFile(path, []byte(strings.Repeat(" ", (1<<20)+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAllowlist(path); err == nil {
+		t.Fatal("oversized allowlist accepted")
+	}
+	link := path + ".link"
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAllowlist(link); err == nil {
+		t.Fatal("symlink accepted")
+	}
+}

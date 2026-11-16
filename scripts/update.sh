@@ -69,13 +69,12 @@ if [ -f bin/serversecuritygo ]; then
   cp -f bin/serversecuritygo bin/serversecuritygo.prev
   echo "$PREV_REF" > bin/.prev-ref
 fi
-mv -f bin/serversecuritygo.new bin/serversecuritygo
-[ -f .env ] && chmod 600 .env
-
-install_unit
-install_link
-systemctl restart "$APP_NAME"
-if health_check; then
+save_self_baseline
+systemctl stop "$APP_NAME"
+if mv -f bin/serversecuritygo.new bin/serversecuritygo &&
+   { [ ! -f .env ] || chmod 600 .env; } &&
+   install_unit && install_link && write_self_baseline &&
+   systemctl restart "$APP_NAME" && health_check; then
   log "Обновлено: $(bin/serversecuritygo version)"
   exit 0
 fi
@@ -83,9 +82,10 @@ fi
 warn "Новая версия не запустилась — возвращаю предыдущую"
 journalctl -u "$APP_NAME" -n 30 --no-pager || true
 if [ -f bin/serversecuritygo.prev ]; then
+  systemctl stop "$APP_NAME"
   cp -f bin/serversecuritygo.prev bin/serversecuritygo
   git -c advice.detachedHead=false checkout -q "$PREV_REF" || true
-  install_unit
+  restore_self_baseline
   systemctl restart "$APP_NAME"
   if health_check; then
     warn "Предыдущая версия восстановлена"

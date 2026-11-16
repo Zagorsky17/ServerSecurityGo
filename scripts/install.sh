@@ -76,6 +76,7 @@ chmod 600 "$APP_DIR/.env"
 
 install_unit
 install_link
+write_self_baseline
 systemctl enable --now "$APP_NAME" >/dev/null 2>&1 || systemctl enable --now "$APP_NAME"
 
 log "Проверка запуска…"

@@ -6,7 +6,7 @@ func init() {
 	add(map[string]entry{
 		"warn.not_root":     {"Сканер запущен не от root: у процессов других пользователей недоступны exe, cwd, открытые файлы и окружение. Часть правил не сможет сработать.", "The scanner is not running as root: exe, cwd, open files and environment of other users' processes are unavailable. Some rules will not be able to work."},
 		"warn.in_container": {"Сканер работает внутри контейнера: видны только процессы его PID-пространства. Для анализа хоста запускайте на хосте.", "The scanner runs inside a container: only processes of its PID namespace are visible. Run it on the host to analyze the host."},
-		"warn.restricted":   {"Неполные данные у {0} процессов из-за прав доступа (hidepid, ptrace_scope, LSM).", "Incomplete data for {0} processes due to access restrictions (hidepid, ptrace_scope, LSM)."},
+		"warn.restricted":   {"Неполные данные у {0} процессов из-за прав доступа (hidepid, ptrace_scope, LSM, ограничения systemd). Проверьте CapabilityBoundingSet в юните службы.", "Incomplete data for {0} processes due to access restrictions (hidepid, ptrace_scope, LSM, systemd restrictions). Check CapabilityBoundingSet in the service unit."},
 		"warn.read_errors":  {"Не удалось прочитать {0} процессов.", "Failed to read {0} processes."},
 
 		"log.scan_error": {"ошибка сканирования", "scan error"},

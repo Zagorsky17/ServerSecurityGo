@@ -51,6 +51,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/report"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/rootkit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/selfcheck"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/tui"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/web"
@@ -203,6 +204,8 @@ func cmdServe(args []string) error {
 		sc.SetMetrics(mc) // признаки метрик попадают в системные находки
 	}
 
+	attachSelfCheck(sc, cfg, cfg.DataDir, log, true)
+
 	// Без пароля панель только для LocalUIDs: владельца подключения служба
 	// определяет по /proc/net/tcp (см. web.Options.CheckPeer).
 	noAuth := cfg.AuthPasswordHash == ""
@@ -238,6 +241,13 @@ func cmdServe(args []string) error {
 		bg = append(bg, mc.Run)
 	}
 	return run(sc, srv, srv.LocalHandler(), connCtx, cfg, log, func() { _ = hist.Flush(time.Now()) }, bg...)
+}
+
+// Каталог состояния пуст для разовых проверок: файлы службы не изменяются.
+func attachSelfCheck(sc *scanner.Scanner, cfg config.Config, stateDir string, log *slog.Logger, watchdog bool) {
+	m := selfcheck.New(selfcheck.Options{HostRoot: cfg.HostRoot, DataDir: stateDir, Allowlist: cfg.AllowlistFile,
+		Interval: sc.Interval(), Progress: sc.LastSuccess, Record: sc.History().RecordSelfCheck, Logger: log, Watchdog: watchdog})
+	sc.SetSelfCheck(m)
 }
 
 // auditRunner создаёт фоновый аудит настроек службы (nil, если он
@@ -507,6 +517,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	if mc != nil {
 		sc.SetMetrics(mc)
 	}
+	attachSelfCheck(sc, cfg, "", quiet, false)
 	// Аудит без каталога данных: базовая линия только на время сеанса,
 	// файлы службы не трогаются.
 	var ar *audit.Runner
@@ -571,6 +582,7 @@ func runScan(args []string) (int, error) {
 		_ = ir.Check(ctx)
 	}
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays, Rootkit: rk, Integrity: ir})
+	attachSelfCheck(sc, cfg, "", newLogger("error"), false)
 	// Метрики разового запуска: один замер без истории. Признаки с
 	// удержанием (steal_high, load_high) так не сработают — для них нужна
 	// работающая служба; disk_almost_full виден сразу.

@@ -80,7 +80,9 @@ jobs:
           # Код выхода: ошибка неверного флага — 2.
           set +e; /tmp/ssg audit --fail-on bogus; code=$?; set -e
           test "$code" = 2
+      - name: Настоящий systemd-юнит и watchdog
+        run: sudo --preserve-env=GITHUB_ACTIONS bash .github/scripts/selfcheck-systemd.sh /tmp/ssg
       - name: Кросс-сборка
         run: make build-linux
       - name: shellcheck
-        run: shellcheck -x scripts/*.sh
+        run: shellcheck -x scripts/*.sh .github/scripts/*.sh

@@ -247,3 +247,28 @@ func TestVerificationCompletenessIgnoresDisplayFilter(t *testing.T) {
 		}
 	}
 }
+
+func TestSelfCheckInAllScanFormatsAndExitCode(t *testing.T) {
+	snap := &model.Snapshot{Time: time.Now(), Host: model.HostInfo{IsRoot: true}, System: []model.SystemFinding{{Finding: model.Finding{ID: "self_check_unavailable", Title: i18n.T("rule.self_check_unavailable.title", "self.sha256"), Recommendation: i18n.T("rule.self_check_unavailable.rec")}, Risk: model.RiskMedium}}}
+	r := NewScan(snap, model.RiskInfo, "test")
+	fail, err := ParseFailOn("none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Incomplete() || r.ExitCode(fail) != 3 {
+		t.Fatal("incomplete self-check reported as success")
+	}
+	for _, format := range []Format{Text, JSON, HTML, Markdown} {
+		out := render(t, r, format)
+		if !strings.Contains(strings.ReplaceAll(out, `\`, ""), "self.sha256") {
+			t.Fatalf("format %v hides self-check: %s", format, out)
+		}
+	}
+	snap.System[0].ID = "self_binary_changed"
+	snap.System[0].Risk = model.RiskCritical
+	fail, _ = ParseFailOn("HIGH")
+	r = NewScan(snap, model.RiskInfo, "test")
+	if r.ExitCode(fail) != 1 {
+		t.Fatal("critical integrity mismatch ignored")
+	}
+}

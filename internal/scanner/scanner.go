@@ -29,6 +29,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/redact"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/rootkit"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/selfcheck"
 )
 
 // Options — параметры сканера.
@@ -69,13 +70,15 @@ type MetricsSource interface {
 
 // Scanner — периодический сканер процессов.
 type Scanner struct {
-	opt    Options
-	mu     sync.RWMutex
-	snap   *model.Snapshot
-	seq    atomic.Uint64
-	rescan chan struct{}
-	scanMu sync.Mutex // сканирования не должны пересекаться
-	f2b    *fail2ban.Collector
+	opt         Options
+	mu          sync.RWMutex
+	snap        *model.Snapshot
+	lastSuccess time.Time
+	self        *selfcheck.Monitor
+	seq         atomic.Uint64
+	rescan      chan struct{}
+	scanMu      sync.Mutex // сканирования не должны пересекаться
+	f2b         *fail2ban.Collector
 	// sockDropped — сколько сокетов не вошло в предел на этом
 	// сканировании (под scanMu: сканирования не пересекаются).
 	sockDropped int
@@ -97,11 +100,43 @@ func New(opt Options) *Scanner {
 // создаётся отдельно, со своим интервалом и каталогом данных).
 func (s *Scanner) SetMetrics(m MetricsSource) { s.opt.Metrics = m }
 
+// SetSelfCheck вызывается до запуска фоновых задач.
+func (s *Scanner) SetSelfCheck(m *selfcheck.Monitor) { s.self = m }
+
+func (s *Scanner) LastSuccess() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastSuccess
+}
+
+func (s *Scanner) Healthy(now time.Time) bool {
+	return selfcheck.Fresh(now, s.LastSuccess(), s.opt.Interval)
+}
+
+func (s *Scanner) SelfFindings() []model.SystemFinding {
+	if s.self == nil {
+		return nil
+	}
+	return s.self.Findings()
+}
+
 // Snapshot возвращает последний снимок (nil до первого сканирования).
 func (s *Scanner) Snapshot() *model.Snapshot {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.snap
+	snap := s.snap
+	s.mu.RUnlock()
+	if snap == nil || s.self == nil {
+		return snap
+	}
+	// Снимки неизменяемы; самоконтроль обновляется даже при зависшем сканировании.
+	copy := *snap
+	findings := s.SelfFindings()
+	copy.System = append(append([]model.SystemFinding(nil), snap.System...), findings...)
+	copy.Warnings = append([]i18n.Msg(nil), snap.Warnings...)
+	for _, f := range findings {
+		copy.Warnings = append(copy.Warnings, f.Title)
+	}
+	return &copy
 }
 
 // History возвращает хранилище истории.
@@ -130,6 +165,10 @@ func (s *Scanner) Run(ctx context.Context) {
 	if s.opt.Integrity != nil {
 		workers.Add(1)
 		go func() { defer workers.Done(); s.opt.Integrity.Run(ctx) }()
+	}
+	if s.self != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.self.Run(ctx) }()
 	}
 	t := time.NewTicker(s.opt.Interval)
 	defer t.Stop()
@@ -214,8 +253,9 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 
 	s.mu.Lock()
 	s.snap = snap
+	s.lastSuccess = time.Now()
 	s.mu.Unlock()
-	return snap, nil
+	return s.Snapshot(), nil
 }
 
 // exposedByInode — опасные публичные порты по inode сокета (для правила

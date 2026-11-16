@@ -21,6 +21,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
 
 // Config — все настройки приложения.
@@ -381,7 +382,7 @@ func (c Config) DetectConfig() (detect.Config, error) {
 
 // LoadAllowlist читает JSON-файл со списком правил подавления.
 func LoadAllowlist(path string) ([]detect.AllowRule, error) {
-	data, err := os.ReadFile(path)
+	data, _, err := safefile.ReadRegular(path, 1<<20, false)
 	if err != nil {
 		return nil, err
 	}
