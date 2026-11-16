@@ -1183,7 +1183,12 @@ func TestUFWPanelAndPIDTiming(t *testing.T) {
 		t.Fatal("selected rule content missing")
 	}
 	out.Reset()
-	a.copyJSON()
+	press(a, r('y'))
+	if copied := osc52Text(t, out.String()); copied != "/etc/ufw/user.rules" {
+		t.Fatal(copied)
+	}
+	out.Reset()
+	press(a, r('Y'))
 	if copied := osc52Text(t, out.String()); !strings.Contains(copied, "/etc/ufw/user.rules") {
 		t.Fatal(copied)
 	}

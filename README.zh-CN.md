@@ -329,7 +329,7 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 ### UFW 与 PID 扫描耗时
 
-**UFW** 位于 fail2ban 后面（未安装 fail2ban 时位于审计后面）。显示已保存的入站、出站和转发策略、IPv6、日志、应用程序配置、conntrack 模块及 sysctl 文件。可以查看 `ufw.conf`、`/etc/default/ufw`、`before/user/after.rules` 及其 IPv6 版本、`before/after.init`、`sysctl.conf`、`IPT_SYSCTL` 指定的文件和 `applications.d` 配置的完整内容。TUI 中选择文件后按 Enter 滚动详情；`/` 按路径和内容过滤，`c` 复制 JSON。网页中展开文件即可。API 为 `GET /api/ufw`，采用与其他接口相同的授权机制。
+**UFW** 位于 fail2ban 后面（未安装 fail2ban 时位于审计后面）。显示已保存的入站、出站和转发策略、IPv6、日志、应用程序配置、conntrack 模块及 sysctl 文件。可以查看 `ufw.conf`、`/etc/default/ufw`、`before/user/after.rules` 及其 IPv6 版本、`before/after.init`、`sysctl.conf`、`IPT_SYSCTL` 指定的文件和 `applications.d` 配置的完整内容。TUI 中选择文件后按 Enter 滚动详情；`/` 按路径和内容过滤，`y` 复制路径，`Y` 复制 JSON。网页中展开文件即可。API 为 `GET /api/ufw`，采用与其他接口相同的授权机制。
 
 这里展示磁盘上的配置，文件修改可能尚未生效；不验证内核当前规则或 Docker 的第三方规则。读取时不执行命令，每个文件限制 1 MiB，总计 4 MiB，应用配置最多 1000 个；读取错误、超限和必需文件缺失会明确显示。缺失设置不会被假定的默认值代替。[UFW 处理顺序](https://manpages.ubuntu.com/manpages/noble/man8/ufw-framework.8.html) 为 before → user → after，IPv4 和 IPv6 分别处理。
 
