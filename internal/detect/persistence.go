@@ -259,16 +259,29 @@ func persistenceContent(path string, data []byte, fi os.FileInfo, now time.Time,
 						add("pam_module_unusual", model.RiskHigh, ref, i18n.L(clean))
 					}
 				}
-				if !strings.Contains(module, "/") && owners != nil {
-					found := false
+				if !filepath.IsAbs(module) && owners != nil {
+					dirs := map[string]bool{"/lib/security": true, "/usr/lib/security": true, "/lib64/security": true, "/usr/lib64/security": true}
 					for file := range owners {
-						if filepath.Base(file) == module && strings.Contains(file, "/security/") {
-							found = true
-							break
+						if strings.Contains(file, "/security/") {
+							dirs[filepath.Dir(file)] = true
 						}
 					}
-					if !found {
+					exists, unowned := false, false
+					for dir := range dirs {
+						candidate := filepath.Join(dir, module)
+						info, err := root.Stat(strings.TrimPrefix(candidate, "/"))
+						if err == nil && info.Mode().IsRegular() {
+							exists = true
+							unowned = unowned || !owners[candidate]
+						}
+						if err != nil && !errors.Is(err, os.ErrNotExist) {
+							add("persistence_unavailable", model.RiskInfo, i18n.L(candidate))
+						}
+					}
+					if unowned {
 						add("pam_module_unusual", model.RiskHigh, ref, i18n.L(module))
+					} else if !exists {
+						add("pam_module_unusual", model.RiskInfo, ref, i18n.L(module), i18n.T("ev.pam_unresolved"))
 					}
 				}
 				break

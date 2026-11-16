@@ -117,3 +117,33 @@ func TestSysVDirectScriptsAndPackagedLinks(t *testing.T) {
 		t.Fatal("direct rc script missed")
 	}
 }
+
+func TestPAMMissingOptionalVersusUnownedLibrary(t *testing.T) {
+	root := t.TempDir()
+	persistenceWrite(t, root, "etc/pam.d/test", "-session optional pam_optional.so\n")
+	check := func(want model.Risk, owners map[string]bool) {
+		t.Helper()
+		got := SystemChecksWithContext(root, time.Now(), DefaultConfig(), owners, nil)
+		found := false
+		for _, f := range got {
+			if f.ID == "pam_module_unusual" {
+				found = true
+				if f.Risk != want {
+					t.Fatalf("%+v", f)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("missing PAM finding")
+		}
+	}
+	check(model.RiskInfo, map[string]bool{})
+	persistenceWrite(t, root, "usr/lib/security/pam_optional.so", "library fixture")
+	check(model.RiskHigh, map[string]bool{})
+	got := SystemChecksWithContext(root, time.Now(), DefaultConfig(), map[string]bool{"/usr/lib/security/pam_optional.so": true}, nil)
+	for _, f := range got {
+		if f.ID == "pam_module_unusual" {
+			t.Fatal("package-owned library flagged")
+		}
+	}
+}
