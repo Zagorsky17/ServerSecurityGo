@@ -2,6 +2,7 @@ package i18n
 
 func init() {
 	add(map[string]entry{
+		"err.integrity_metadata":             {"Метаданные {0}: {1}", "Metadata {0}: {1}"},
 		"err.rootkit_identity_changed":       {"Идентичность процесса изменилась во время чтения", "Process identity changed during reading"},
 		"err.rootkit_field":                  {"Некорректное или повторяющееся поле: {0}", "Invalid or duplicate field: {0}"},
 		"err.integrity_database":             {"База dpkg некорректна, занята или изменяется", "The dpkg database is invalid, busy or changing"},

@@ -140,13 +140,13 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 		}
 		raw, e := hex.DecodeString(sum)
 		if !ok || len(raw) != 16 || e != nil || !strings.HasPrefix(p, "/") || !validPath(p[1:]) {
-			return nil, errDatabase
+			return nil, i18n.Errorf("err.integrity_metadata", "status: Conffiles", errDatabase)
 		}
 		db.excluded[db.canonical(p[1:])] = true
 	}
 	packages, err := installedPackages(string(status))
 	if err != nil {
-		return nil, err
+		return nil, i18n.Errorf("err.integrity_metadata", "var/lib/dpkg/status", err)
 	}
 	names := make([]string, 0, len(packages))
 	for name := range packages {
@@ -176,7 +176,7 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 			}
 			p := strings.TrimPrefix(line, "/")
 			if !validPath(p) {
-				return nil, errDatabase
+				return nil, i18n.Errorf("err.integrity_metadata", prefix+" (.list/.conffiles)", errDatabase)
 			}
 			p = db.canonical(p)
 			if selected(p) {
@@ -193,7 +193,7 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 			}
 			p := strings.TrimPrefix(strings.TrimPrefix(line, "remove-on-upgrade "), "/")
 			if !validPath(p) {
-				return nil, errDatabase
+				return nil, i18n.Errorf("err.integrity_metadata", prefix+" (.list/.conffiles)", errDatabase)
 			}
 			db.excluded[db.canonical(p)] = true
 		}
@@ -202,7 +202,7 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 			return nil, err
 		}
 		if err := db.parseSums(string(sums), name+"="+packages[name]); err != nil {
-			return nil, err
+			return nil, i18n.Errorf("err.integrity_metadata", prefix+".md5sums", err)
 		}
 		if len(db.owned) > 200_000 || len(db.files) > 200_000 {
 			return nil, safefile.ErrTooLarge
@@ -233,7 +233,7 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 	}
 	for p := range db.files {
 		if !db.owned[p] {
-			return nil, errDatabase
+			return nil, i18n.Errorf("err.integrity_metadata", "checksum without ownership: "+p, errDatabase)
 		}
 		if db.excluded[p] {
 			delete(db.files, p)
@@ -272,10 +272,10 @@ func installedPackages(data string) (map[string]string, error) {
 			continue
 		}
 		if state[2] != "installed" || state[1] != "ok" || version == "" || strings.ContainsAny(version, "\x00\r\n") {
-			return nil, errDatabase
+			return nil, i18n.Errorf("err.integrity_metadata", name+": Status/Version", errDatabase)
 		}
 		if !packageName.MatchString(arch) || strings.Contains(arch, ":") {
-			return nil, errDatabase
+			return nil, i18n.Errorf("err.integrity_metadata", name+": Architecture", errDatabase)
 		}
 		key := name + ":" + arch
 		if _, ok := out[key]; ok {
