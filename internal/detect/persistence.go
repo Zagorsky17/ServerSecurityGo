@@ -211,9 +211,30 @@ func persistenceContent(path string, data []byte, fi os.FileInfo, now time.Time,
 	add := func(id string, risk model.Risk, facts ...i18n.Msg) {
 		out = append(out, persistenceFinding(id, path, risk, facts...))
 	}
-	lines := strings.Split(string(data), "\n")
+	pamDirs := []string{}
+	if strings.HasPrefix(path, "/etc/pam.d/") && owners != nil {
+		dirs := map[string]bool{"/lib/security": true, "/usr/lib/security": true, "/lib64/security": true, "/usr/lib64/security": true}
+		for file := range owners {
+			if strings.Contains(file, "/security/") {
+				dirs[filepath.Dir(file)] = true
+			}
+		}
+		for dir := range dirs {
+			pamDirs = append(pamDirs, dir)
+		}
+		slices.Sort(pamDirs)
+		if len(pamDirs) > 64 {
+			add("persistence_unavailable", model.RiskInfo, i18n.T("ev.pam_directory_limit", 64))
+			pamDirs = pamDirs[:64]
+		}
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 	hits, tempHits := []i18n.Msg{}, []i18n.Msg{}
 	for i, line := range lines {
+		if i >= 4096 {
+			add("persistence_unavailable", model.RiskInfo, i18n.T("ev.persistence_line_limit", 4096))
+			break
+		}
 		t := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
 		if t == "" || strings.HasPrefix(t, ";") {
 			continue
@@ -249,14 +270,8 @@ func persistenceContent(path string, data []byte, fi os.FileInfo, now time.Time,
 					}
 				}
 				if !filepath.IsAbs(module) && owners != nil {
-					dirs := map[string]bool{"/lib/security": true, "/usr/lib/security": true, "/lib64/security": true, "/usr/lib64/security": true}
-					for file := range owners {
-						if strings.Contains(file, "/security/") {
-							dirs[filepath.Dir(file)] = true
-						}
-					}
 					exists, unowned := false, false
-					for dir := range dirs {
+					for _, dir := range pamDirs {
 						candidate := filepath.Join(dir, module)
 						info, err := root.Stat(strings.TrimPrefix(candidate, "/"))
 						if err == nil && info.Mode().IsRegular() {

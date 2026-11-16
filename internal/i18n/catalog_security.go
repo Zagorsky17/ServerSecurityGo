@@ -2,6 +2,8 @@ package i18n
 
 func init() {
 	add(map[string]entry{
+		"ev.pam_directory_limit":                   {"Достигнут лимит {0} каталогов модулей PAM; остальные не проверены", "PAM module directory limit ({0}) reached; remaining directories were not checked"},
+		"ev.persistence_line_limit":                {"Достигнут лимит {0} строк файла; оставшаяся часть не проверена", "File line limit ({0}) reached; remaining content was not checked"},
 		"ev.pam_unresolved":                        {"Модуль не найден в стандартных каталогах. Конфигурация может ссылаться на необязательный неустановленный модуль; это не обнаруженная посторонняя библиотека.", "Module not found in standard directories. Configuration may reference an optional uninstalled module; this is not a detected foreign library."},
 		"warn.container_metadata":                  {"Метаданные Docker прочитаны не полностью: {0}", "Docker metadata could not be read completely: {0}"},
 		"ev.tracer_unavailable":                    {"Трассировщик недоступен или PID изменился", "Tracer unavailable or PID changed"},

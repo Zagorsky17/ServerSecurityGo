@@ -2,6 +2,7 @@ package detect
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,5 +187,76 @@ func TestPersistenceSystemSymlinksStayInsideHostRoot(t *testing.T) {
 	}
 	if !strings.Contains(issues, "/cycle") || !strings.Contains(issues, "/outside") {
 		t.Fatalf("missing incomplete paths: %s", issues)
+	}
+}
+
+func TestPersistenceLineLimitIsIncomplete(t *testing.T) {
+	root := t.TempDir()
+	persistenceWrite(t, root, "etc/pam.d/many", strings.Repeat("# comment\n", 4097)+"auth required pam_exec.so /tmp/hidden\n")
+	findings := SystemChecksWithContext(root, time.Now(), DefaultConfig(), map[string]bool{}, nil)
+	found := false
+	for _, f := range findings {
+		if f.Path == "/etc/pam.d/many" && f.Incomplete() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("line limit silently reported as complete")
+	}
+}
+func FuzzPersistenceContent(f *testing.F) {
+	dir := f.TempDir()
+	path := filepath.Join(dir, "fixture")
+	os.WriteFile(path, []byte(""), 0600)
+	fi, _ := os.Stat(path)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		f.Fatal(err)
+	}
+	defer root.Close()
+	f.Add([]byte("auth required pam_exec.so /tmp/check\n"))
+	f.Add([]byte("session [success=ok default=ignore] pam_optional.so\n"))
+	f.Add([]byte("curl x | sh\n"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > 16<<10 {
+			return
+		}
+		got := persistenceContent("/etc/pam.d/fixture", data, fi, time.Now(), DefaultConfig(), map[string]bool{}, root)
+		if len(got) > len(persistenceMessages)+3 {
+			t.Fatal("unbounded findings")
+		}
+		for _, finding := range got {
+			if len(finding.Evidence) > 12 {
+				t.Fatal("unbounded evidence")
+			}
+		}
+	})
+}
+
+func TestPersistenceExactLineBoundary(t *testing.T) {
+	root := t.TempDir()
+	persistenceWrite(t, root, "etc/profile", strings.Repeat("# comment\n", 4096))
+	for _, f := range SystemChecks(root, time.Now(), DefaultConfig()) {
+		if f.Incomplete() {
+			t.Fatalf("exact line boundary: %+v", f)
+		}
+	}
+}
+
+func TestPAMDirectoryLimitIsIncomplete(t *testing.T) {
+	root := t.TempDir()
+	persistenceWrite(t, root, "etc/pam.d/test", "auth required pam_unknown.so\n")
+	owners := map[string]bool{}
+	for i := 0; i < 65; i++ {
+		owners[fmt.Sprintf("/usr/lib/arch%d/security/pam_known.so", i)] = true
+	}
+	found := false
+	for _, f := range SystemChecksWithContext(root, time.Now(), DefaultConfig(), owners, nil) {
+		if f.Path == "/etc/pam.d/test" && f.Incomplete() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("directory limit not reported")
 	}
 }

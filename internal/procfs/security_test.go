@@ -96,3 +96,31 @@ func TestReadSecurityBudgets(t *testing.T) {
 		t.Fatal("budget invisible")
 	}
 }
+
+func FuzzSecurityEnvironmentStatus(f *testing.F) {
+	f.Add([]byte("PROMPT_COMMAND=curl secret"), "TracerPid: 12\nCapEff: 00200000\nNoNewPrivs: 1\nSeccomp: 2\n")
+	f.Add([]byte("HISTFILE=/dev/null"), "CapEff: invalid\n")
+	f.Fuzz(func(t *testing.T, env []byte, status string) {
+		if len(env) > 16<<10 || len(status) > 16<<10 {
+			return
+		}
+		flags := appendEnvSignals(nil, env)
+		for _, flag := range flags {
+			if !slices.Contains([]string{"PYTHON_JIT", "history_disabled", "prompt_command_net", "ld_library_path_temp"}, flag) {
+				t.Fatal("raw environment retained")
+			}
+		}
+		s := ParseStatus(status).Security
+		for _, caps := range [][]string{s.CapEff, s.CapPrm, s.CapAmb, s.CapBnd} {
+			if len(caps) > 64 {
+				t.Fatal("capability limit")
+			}
+		}
+		if s.NoNewPrivs != nil && (*s.NoNewPrivs < 0 || *s.NoNewPrivs > 1) {
+			t.Fatal("invalid NoNewPrivs")
+		}
+		if s.Seccomp != nil && (*s.Seccomp < 0 || *s.Seccomp > 2) {
+			t.Fatal("invalid Seccomp")
+		}
+	})
+}
