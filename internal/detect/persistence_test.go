@@ -260,3 +260,16 @@ func TestPAMDirectoryLimitIsIncomplete(t *testing.T) {
 		t.Fatal("directory limit not reported")
 	}
 }
+
+func TestClearedPreloadIsNotSuspicious(t *testing.T) {
+	for _, line := range []string{`Environment="LD_PRELOAD=" OTHER=1`, `Environment=LD_PRELOAD=""`, `LD_PRELOAD=''`, `LD_PRELOAD=""`} {
+		if persistPattern.MatchString(line) {
+			t.Errorf("cleared preload matched: %s", line)
+		}
+	}
+	for _, line := range []string{`LD_PRELOAD=/tmp/x.so`, `Environment="LD_PRELOAD=/usr/lib/x.so"`, `Environment=LD_PRELOAD="/usr/lib/x.so"`} {
+		if !persistPattern.MatchString(line) {
+			t.Errorf("preload missed: %s", line)
+		}
+	}
+}

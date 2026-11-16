@@ -21,7 +21,7 @@ import (
 
 // persistPattern — явно подозрительное содержимое файлов автозапуска:
 // загрузка с выполнением, декодирование base64, reverse shell, майнеры.
-var persistPattern = regexp.MustCompile(`(?i)\bLD_PRELOAD\s*=\s*[^\s;]+|(curl|wget)\b[^\n|]*\|\s*(ba|da)?sh\b|base64\s+(-d|--decode)|/dev/shm/|/dev/tcp/|\bnc(at)?\b[^\n]*\s-e\s|stratum\+tcp|xmrig|chmod\s+\+x\s+/(tmp|dev/shm|var/tmp)`)
+var persistPattern = regexp.MustCompile(`(?i)\bLD_PRELOAD\s*=\s*["']?[^\s;"']+|(curl|wget)\b[^\n|]*\|\s*(ba|da)?sh\b|base64\s+(-d|--decode)|/dev/shm/|/dev/tcp/|\bnc(at)?\b[^\n]*\s-e\s|stratum\+tcp|xmrig|chmod\s+\+x\s+/(tmp|dev/shm|var/tmp)`)
 
 // tempPattern — запуск чего-либо из /tmp или /var/tmp. Бывает и в
 // штатных скриптах, поэтому даёт только LOW.
