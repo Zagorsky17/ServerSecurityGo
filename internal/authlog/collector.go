@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/investigate"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
@@ -511,7 +512,7 @@ func (c *Collector) changed(root *os.Root, path string, fi os.FileInfo, r *model
 }
 
 func finding(id, path string, risk model.Risk) model.SystemFinding {
-	return model.SystemFinding{Finding: model.Finding{ID: id, Title: i18n.T(authTitles[id]), Category: model.CatBehavior, Recommendation: i18n.T("rec.auth_review")}, Path: path, Risk: risk}
+	return model.SystemFinding{Finding: model.Finding{VerifyCommands: investigate.Commands(id, 0, path), ID: id, Title: i18n.T(authTitles[id]), Category: model.CatBehavior, Recommendation: i18n.T("rec.auth_review")}, Path: path, Risk: risk}
 }
 func architecture(root *os.Root, host string) (bool, bool) {
 	if host == "/" && runtime.GOOS == "linux" {
