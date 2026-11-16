@@ -303,6 +303,12 @@ func (f *FS) ReadProcessLimits(pid int, bootTime time.Time, lim Limits) (*Raw, e
 	} else if last, err := ParseStat(string(end)); err != nil || last.StartTicks != p.StartTicks {
 		return nil, ErrGone
 	}
+	if p.Security != nil && p.Security.TracerKey != "" {
+		b, err := os.ReadFile(f.path(pidStr, "status"))
+		if err != nil || ParseStatus(string(b)).Security.TracerPID != p.Security.TracerPID {
+			p.Security.TracerKey = ""
+		}
+	}
 	return raw, nil
 }
 

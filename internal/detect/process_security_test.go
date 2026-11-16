@@ -39,11 +39,17 @@ func TestProcessSecurityRules(t *testing.T) {
 }
 func TestSecurityBenignCases(t *testing.T) {
 	p := &model.Process{Name: "java", Exe: "/usr/bin/java", UID: 1000, EUID: 1000, Maps: []model.MemoryMap{{Perms: "rwxp"}, {Path: "/usr/lib/libc.so.6", Perms: "r-xp", Deleted: true, Replacement: true}}}
-	c := &Context{Owners: map[string]bool{"/usr/lib/libc.so.6": true}}
+	p.Namespaces = map[string]string{"mnt": "mnt:[1]"}
+	c := &Context{Owners: map[string]bool{"/usr/lib/libc.so.6": true}, ByPID: map[int]*model.Process{1: {Namespaces: map[string]string{"mnt": "mnt:[1]"}}}}
 	got := securityByID(p, c)
 	if got["anon_exec_memory"].Weight != 3 || got["lib_deleted"].Weight != 3 {
 		t.Fatalf("%+v", got)
 	}
+	delete(p.Namespaces, "mnt")
+	if securityByID(p, c)["lib_deleted"].Weight != 20 {
+		t.Fatal("unknown namespace inherited host ownership")
+	}
+	p.Namespaces["mnt"] = "mnt:[1]"
 	p.Container = "abcdef"
 	if securityByID(p, c)["lib_deleted"].Weight != 20 {
 		t.Fatal("host ownership applied to container")

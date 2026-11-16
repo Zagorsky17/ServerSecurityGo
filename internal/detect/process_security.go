@@ -87,6 +87,11 @@ func ruleProcessSecurity(p *model.Process, c *Context) []model.Finding {
 	}
 	temp, deleted := []string{}, []string{}
 	anon, upgrade := false, true
+	hostMountNS := ""
+	if init := c.ByPID[1]; init != nil {
+		hostMountNS = init.Namespaces["mnt"]
+	}
+	sameMount := hostMountNS != "" && p.Namespaces["mnt"] == hostMountNS
 	for _, m := range p.Maps {
 		if m.Path == "" {
 			anon = true
@@ -104,7 +109,7 @@ func ruleProcessSecurity(p *model.Process, c *Context) []model.Finding {
 				deleted = append(deleted, m.Path)
 			}
 			// База хоста не доказывает принадлежность библиотеки контейнера.
-			if !m.Replacement || !c.Owners[m.Path] || p.Container != "" || slices.Contains(p.ForeignNS, "mnt") {
+			if !sameMount || !m.Replacement || !c.Owners[m.Path] || p.Container != "" || slices.Contains(p.ForeignNS, "mnt") {
 				upgrade = false
 			}
 		}
