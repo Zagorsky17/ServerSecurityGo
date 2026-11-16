@@ -132,14 +132,16 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 		if !inConffiles {
 			continue
 		}
-		line = strings.TrimSuffix(strings.TrimSpace(line), " obsolete")
+		// dpkg допускает маркеры вместо хеша и два суффикса у удаляемых conffiles.
+		line = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(line), " remove-on-upgrade"), " obsolete")
 		p, sum, ok := strings.Cut(line, " ")
 		// Пути с пробелами отделяются по последнему пробелу перед MD5.
 		if n := strings.LastIndexByte(line, ' '); n >= 0 {
 			p, sum, ok = line[:n], line[n+1:], true
 		}
 		raw, e := hex.DecodeString(sum)
-		if !ok || len(raw) != 16 || e != nil || !strings.HasPrefix(p, "/") || !validPath(p[1:]) {
+		validHash := (e == nil && len(raw) == 16) || sum == "newconffile" || sum == "nonexistent" || sum == "-"
+		if !ok || !validHash || !strings.HasPrefix(p, "/") || !validPath(p[1:]) {
 			return nil, i18n.Errorf("err.integrity_metadata", "status: Conffiles", errDatabase)
 		}
 		db.excluded[db.canonical(p[1:])] = true

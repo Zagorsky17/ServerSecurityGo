@@ -367,3 +367,20 @@ func TestRemovedOwnershipCannotHideModifiedTrustedFile(t *testing.T) {
 		t.Fatalf("%+v", r.Findings())
 	}
 }
+
+func TestDpkgConffileMarkersAndFlags(t *testing.T) {
+	for _, value := range []string{md("old") + " remove-on-upgrade", md("old") + " obsolete remove-on-upgrade", "newconffile remove-on-upgrade", "nonexistent", "-"} {
+		t.Run(value, func(t *testing.T) {
+			h, state := fixture(t)
+			write(t, h, "var/lib/dpkg/status", "Package: tools\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1.0\nConffiles:\n /usr/bin/ssh "+value+"\n\n")
+			write(t, h, "usr/bin/ssh", "local config change")
+			r := runner(h, state)
+			if err := r.Check(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(find(r, "bin_modified")) != 0 {
+				t.Fatal("configuration file was checked as a binary")
+			}
+		})
+	}
+}
