@@ -9,6 +9,9 @@ import (
 )
 
 func TestRealUFWConfiguration(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to read UFW rule files")
+	}
 	data, err := os.ReadFile("/etc/ufw/ufw.conf")
 	if os.IsNotExist(err) {
 		t.Skip("UFW configuration not installed")
