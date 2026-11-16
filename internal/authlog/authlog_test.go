@@ -362,3 +362,23 @@ func TestSudoSessionIsNotCommandOrUsername(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+func TestAbsoluteIntermediateLinkInHome(t *testing.T) {
+	root := fixture(t)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	put(t, root, "var/log/auth.log", nil)
+	put(t, root, "etc/passwd", []byte("service:x:100:100::/var/run/service:/sbin/nologin\n"))
+	os.MkdirAll(filepath.Join(root, "run"), 0700)
+	os.Symlink("/run", filepath.Join(root, "var/run"))
+	rep := New(Options{Root: root}).Build(now, nil)
+	for _, w := range rep.Warnings {
+		if strings.Contains(w.In("en"), "authorized_keys") {
+			t.Fatal("missing file behind normal alias reported as restricted", w)
+		}
+	}
+	os.MkdirAll(filepath.Join(root, "run/service/.ssh"), 0700)
+	os.Symlink("/etc/passwd", filepath.Join(root, "run/service/.ssh/authorized_keys"))
+	rep = New(Options{Root: root}).Build(now, nil)
+	if !rep.Incomplete || len(rep.Keys) != 0 {
+		t.Fatal("final symlink followed")
+	}
+}

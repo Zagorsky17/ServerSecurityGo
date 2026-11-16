@@ -109,7 +109,7 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 			return nil, safefile.ErrTooLarge
 		}
 		limit = min(limit, readBudget)
-		f, fi, e := safefile.OpenRooted(root, path)
+		f, fi, e := openSource(root, path)
 		if e != nil {
 			return nil, e
 		}
@@ -191,7 +191,7 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 	authFound := false
 	budget := int64(32 << 20)
 	for _, path := range []string{"var/log/auth.log.2.gz", "var/log/auth.log.1", "var/log/auth.log"} {
-		f, fi, e := safefile.OpenRooted(root, path)
+		f, fi, e := openSource(root, path)
 		if e != nil {
 			if !errors.Is(e, os.ErrNotExist) || path == "var/log/auth.log" {
 				warn("/" + path)
@@ -280,7 +280,8 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 				}
 				continue
 			}
-			if fi, e := root.Lstat(path); e == nil {
+			resolved, re := sourceName(root, path)
+			if fi, e := root.Lstat(resolved); re == nil && e == nil {
 				c.changed(root, path, fi, r)
 			}
 			events, bad := Utmp(b, "/"+path, arm)
@@ -296,7 +297,7 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 				}
 			}
 		}
-		f, _, e := safefile.OpenRooted(root, "var/log/lastlog")
+		f, _, e := openSource(root, "var/log/lastlog")
 		if e == nil {
 			size, ts := 292, 4
 			if arm {
@@ -473,7 +474,7 @@ func boundEvents(e []model.LoginEvent) []model.LoginEvent {
 }
 func (c *Collector) changed(root *os.Root, path string, fi os.FileInfo, r *model.AuthReport) {
 	head := func(p string, size int64) ([32]byte, bool) {
-		f, _, e := safefile.OpenRooted(root, p)
+		f, _, e := openSource(root, p)
 		if e != nil {
 			return [32]byte{}, false
 		}
@@ -483,7 +484,8 @@ func (c *Collector) changed(root *os.Root, path string, fi os.FileInfo, r *model
 	}
 	if old := c.files[path]; old != nil && os.SameFile(old, fi) && fi.Size() < old.Size() {
 		rotated := false
-		if rot, e := root.Lstat(path + ".1"); e == nil {
+		resolved, re := sourceName(root, path+".1")
+		if rot, e := root.Lstat(resolved); re == nil && e == nil {
 			rotated = os.SameFile(old, rot)
 			if !rotated && rot.Size() >= old.Size() && !rot.ModTime().Before(old.ModTime()) {
 				if oldHead, ok := c.fileHeads[path]; ok {
@@ -516,7 +518,7 @@ func architecture(root *os.Root, host string) (bool, bool) {
 		return runtime.GOARCH == "arm64", runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64"
 	}
 	for _, p := range []string{"usr/bin/bash", "bin/bash", "usr/bin/dash", "bin/dash"} {
-		f, _, e := safefile.OpenRooted(root, p)
+		f, _, e := openSource(root, p)
 		if e != nil {
 			continue
 		}
@@ -647,4 +649,21 @@ var authTitles = map[string]string{
 
 func eventKey(e model.LoginEvent) string {
 	return e.Time.Format(time.RFC3339Nano) + "|" + e.Kind + "|" + e.User + "|" + e.IP + "|" + strconv.Itoa(e.PID) + "|" + e.Method + "|" + e.TTY
+}
+
+// Абсолютные промежуточные ссылки (например /var/run → /run) отсчитываются от образа.
+// Последний компонент остаётся обычным файлом: симлинк authorized_keys не читается.
+func sourceName(root *os.Root, name string) (string, error) {
+	parent, e := safefile.ResolveRooted(root, filepath.Dir(name))
+	if e != nil {
+		return "", e
+	}
+	return filepath.Join(parent, filepath.Base(name)), nil
+}
+func openSource(root *os.Root, name string) (*os.File, os.FileInfo, error) {
+	resolved, e := sourceName(root, name)
+	if e != nil {
+		return nil, nil, e
+	}
+	return safefile.OpenRooted(root, resolved)
 }
