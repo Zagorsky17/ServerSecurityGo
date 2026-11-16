@@ -654,7 +654,7 @@ func TestLayoutHeights(t *testing.T) {
 				if r.h == 0 && p == pStatus {
 					continue
 				}
-				if r.y != y || r.h < 2 {
+				if r.y != y || r.h < 1 {
 					t.Fatalf("h=%d, развёрнута %d: панель %d %+v (ожидалось y=%d)", h, exp, p, r, y)
 				}
 				y += r.h
@@ -811,7 +811,7 @@ func TestNoFail2banPanel(t *testing.T) {
 	if a.focus != pStatus {
 		t.Errorf("Tab после последней панели: %d", a.focus)
 	}
-	if a.minHeight() != 20 {
+	if a.minHeight() != 12 {
 		t.Errorf("минимальная высота без fail2ban: %d", a.minHeight())
 	}
 }

@@ -80,7 +80,12 @@ jobs:
           # Код выхода: ошибка неверного флага — 2.
           set +e; /tmp/ssg audit --fail-on bogus; code=$?; set -e
           test "$code" = 2
+      - name: Расследование и сбор улик
+        run: |
+          go test -race -c -o /tmp/collect.test ./internal/collect
+          sudo /tmp/collect.test -test.v -test.run '^TestRealDeletedExecutable$'
+          bash .github/scripts/investigation.sh /tmp/ssg
       - name: Кросс-сборка
         run: make build-linux
       - name: shellcheck
-        run: shellcheck -x scripts/*.sh
+        run: shellcheck -x scripts/*.sh .github/scripts/*.sh

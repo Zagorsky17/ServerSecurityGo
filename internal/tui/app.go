@@ -64,6 +64,8 @@ const (
 	pPorts
 	pAudit
 	pF2B // только при установленном fail2ban
+	pAuth
+	pTimeline
 	pHist
 	pSys
 	pMetrics // только при включённом сборе метрик
@@ -73,7 +75,7 @@ const (
 
 // panelKeys — ключи каталога для названий панелей.
 var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports",
-	"tui.panel.audit", "tui.panel.f2b", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics", "tui.panel.netload"}
+	"tui.panel.audit", "tui.panel.f2b", "web.tab.logins", "web.tab.timeline", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics", "tui.panel.netload"}
 
 // sortKeys — режимы сортировки списка процессов (ключи каталога).
 var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
@@ -98,12 +100,14 @@ type Options struct {
 
 // App — состояние интерфейса.
 type App struct {
-	src     Source
-	out     io.Writer
-	scr     *Screen
-	w, h    int
-	refresh time.Duration
-	lang    i18n.Lang // язык интерфейса, переключается клавишей L
+	logins   []model.LoginEvent
+	timeline []model.TimelineEvent
+	src      Source
+	out      io.Writer
+	scr      *Screen
+	w, h     int
+	refresh  time.Duration
+	lang     i18n.Lang // язык интерфейса, переключается клавишей L
 
 	data    *Data
 	err     error
@@ -306,6 +310,12 @@ func procMatches(l i18n.Lang, f string, p view.Summary) bool {
 func (a *App) visible() []panelID {
 	out := make([]panelID, 0, nPanels)
 	for p := pStatus; p < nPanels; p++ {
+		if p == pAuth && (a.data == nil || a.data.Auth == nil) {
+			continue
+		}
+		if p == pTimeline && (a.data == nil || a.data.Timeline == nil) {
+			continue
+		}
 		if p == pF2B && !a.hasF2B() {
 			continue
 		}
@@ -371,6 +381,21 @@ func (a *App) cyclePanel(d int) {
 func (a *App) rebuild() {
 	if a.data == nil {
 		return
+	}
+	a.logins = nil
+	a.timeline = nil
+	if a.data.Auth != nil {
+		for _, e := range a.data.Auth.Events {
+			if matches(a.lists[pAuth].filter, e.User, e.IP, e.Method, e.Kind, e.Fingerprint) {
+				a.logins = append(a.logins, e)
+			}
+		}
+		sort.SliceStable(a.logins, func(i, j int) bool { return a.logins[i].Time.After(a.logins[j].Time) })
+	}
+	for _, e := range a.data.Timeline {
+		if matches(a.lists[pTimeline].filter, e.Kind, e.Source, e.Detail.In(a.lang)) {
+			a.timeline = append(a.timeline, e)
+		}
 	}
 	a.byKey = make(map[string]view.Summary, len(a.data.Procs))
 	for _, p := range a.data.Procs {
@@ -606,6 +631,10 @@ func (a *App) buildNet() {
 
 func (a *App) count(p panelID) int {
 	switch p {
+	case pAuth:
+		return len(a.logins)
+	case pTimeline:
+		return len(a.timeline)
 	case pSusp:
 		return len(a.susp)
 	case pProcs:
@@ -936,6 +965,14 @@ func (a *App) mouse(k Key) {
 func (a *App) copyJSON() {
 	var v any
 	switch a.focus {
+	case pAuth:
+		if i := a.lists[pAuth].cursor; i >= 0 && i < len(a.logins) {
+			v = a.logins[i]
+		}
+	case pTimeline:
+		if i := a.lists[pTimeline].cursor; i >= 0 && i < len(a.timeline) {
+			v = a.timeline[i]
+		}
 	case pNet:
 		if s, ok := a.selSocket(); ok {
 			v = s

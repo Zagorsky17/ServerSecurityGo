@@ -88,6 +88,7 @@ const (
 // Finding — один сработавший признак. Evidence содержит проверяемые
 // факты (что именно прочитано и откуда), а не выводы.
 type Finding struct {
+	VerifyCommands []string   `json:"verifyCommands,omitempty"`
 	ID             string     `json:"id"`
 	Title          i18n.Msg   `json:"title"`
 	Category       string     `json:"category"`
@@ -242,6 +243,8 @@ type Stats struct {
 
 // Snapshot — результат одного сканирования.
 type Snapshot struct {
+	Auth      *AuthReport         `json:"auth,omitempty"`
+	Recent    *RecentReport       `json:"recent,omitempty"`
 	Time      time.Time           `json:"time"`
 	Duration  time.Duration       `json:"duration"`
 	Seq       uint64              `json:"seq"`

@@ -27,6 +27,7 @@ func Demo(now time.Time) *Tree {
 		MemTotalKB: 4 * 1024 * 1024,
 		Kernel:     "6.8.0-demo",
 		HostFiles: map[string]string{
+			"var/log/auth.log": now.Add(-15*time.Minute).UTC().Format(time.RFC3339) + " demo sshd[100]: Accepted password for root from 198.51.100.7 port 4567 ssh2\n" + now.Add(-10*time.Minute).UTC().Format(time.RFC3339) + " demo sudo: deploy : TTY=pts/0 ; COMMAND=/usr/bin/id\n",
 			"etc/passwd": "root:x:0:0:root:/root:/bin/bash\n" +
 				"daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n" +
 				"www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n" +
