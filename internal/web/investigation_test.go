@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/authlog"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
@@ -60,8 +61,20 @@ func TestAuthenticationPipelineToAPI(t *testing.T) {
 	}
 	hist, _ := history.Open(history.Options{})
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(proc, host), Detect: detect.DefaultConfig(), History: hist, Auth: authlog.New(authlog.Options{Root: host, ReadOnly: true}), Recent: true})
-	if _, e = sc.ScanOnce(); e != nil {
-		t.Fatal(e)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); sc.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snap := sc.Snapshot()
+		if snap != nil && snap.Recent != nil && len(snap.Recent.Files) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background metadata not published")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	s := New(Options{Scanner: sc, ListenAddr: "127.0.0.1:8090"})
 	w := do(s, "GET", "/api/logins", "127.0.0.1", "", nil)

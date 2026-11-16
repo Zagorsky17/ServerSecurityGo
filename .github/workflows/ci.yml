@@ -56,6 +56,8 @@ jobs:
           set -e
           test "$code" = 3
           python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['incomplete'] and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets']); [print('security diagnostic:', json.dumps(f, ensure_ascii=False)) for f in d['system'] if f['id'] in ('pam_module_unusual', 'persistence_unavailable', 'package_ownership_unavailable')]"
+      - name: Настоящий systemd-юнит и watchdog
+        run: sudo --preserve-env=GITHUB_ACTIONS bash .github/scripts/selfcheck-systemd.sh /tmp/ssg
       - name: Полный обход PID и файлов настоящего Linux
         timeout-minutes: 15
         run: |
@@ -86,8 +88,6 @@ jobs:
           # Код выхода: ошибка неверного флага — 2.
           set +e; /tmp/ssg audit --fail-on bogus; code=$?; set -e
           test "$code" = 2
-      - name: Настоящий systemd-юнит и watchdog
-        run: sudo --preserve-env=GITHUB_ACTIONS bash .github/scripts/selfcheck-systemd.sh /tmp/ssg
       - name: Расследование и сбор улик
         run: |
           go test -race -c -o /tmp/collect.test ./internal/collect

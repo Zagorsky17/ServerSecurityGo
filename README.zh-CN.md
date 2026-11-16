@@ -738,6 +738,8 @@ MIT，见 [LICENSE](LICENSE)。
 
 **时间线**面板和 `/api/timeline?since=48h` 合并进程历史、登录事件和最近文件元数据。`/api/logins` 使用与其他 API 相同的身份验证。ctime 是 inode 变更时间，不是创建时间；chmod/chown 和软件包维护也会改变它。旧 mtime 与新 ctime 的差异仅供调查，不证明时间被伪造。软件包更新窗口是近似关联，不会抑制发现。
 
+文件元数据由独立的每小时工作任务收集，不会阻塞进程扫描或 watchdog 心跳。首次扫描完成前，时间线会明确显示等待状态。
+
 ```sh
 serversecuritygo triage --format html --output /root/triage.html
 serversecuritygo triage --full --format json --output /root/triage.json

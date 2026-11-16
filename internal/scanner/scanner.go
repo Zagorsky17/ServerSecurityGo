@@ -99,7 +99,11 @@ func New(opt Options) *Scanner {
 		opt.Logger = slog.Default()
 	}
 	opt.Detect.ScanInterval = opt.Interval
-	return &Scanner{opt: opt, rescan: make(chan struct{}, 1), f2b: fail2ban.NewCollector()}
+	s := &Scanner{opt: opt, rescan: make(chan struct{}, 1), f2b: fail2ban.NewCollector()}
+	if opt.Recent {
+		s.recent = &model.RecentReport{Time: time.Now(), Incomplete: true, Warnings: []i18n.Msg{i18n.T("warn.recent_pending")}}
+	}
+	return s
 }
 
 // SetMetrics подключает метрики после создания сканера (их сборщик
@@ -130,12 +134,14 @@ func (s *Scanner) SelfFindings() []model.SystemFinding {
 func (s *Scanner) Snapshot() *model.Snapshot {
 	s.mu.RLock()
 	snap := s.snap
+	recent := s.recent
 	s.mu.RUnlock()
-	if snap == nil || s.self == nil {
+	if snap == nil || (s.self == nil && recent == nil) {
 		return snap
 	}
 	// Снимки неизменяемы; самоконтроль обновляется даже при зависшем сканировании.
 	copy := *snap
+	copy.Recent = recent
 	findings := s.SelfFindings()
 	copy.System = append(append([]model.SystemFinding(nil), snap.System...), findings...)
 	copy.Warnings = append([]i18n.Msg(nil), snap.Warnings...)
@@ -172,6 +178,10 @@ func (s *Scanner) Run(ctx context.Context) {
 		workers.Add(1)
 		go func() { defer workers.Done(); s.opt.Integrity.Run(ctx) }()
 	}
+	if s.opt.Recent {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.runRecent(ctx) }()
+	}
 	if s.self != nil {
 		workers.Add(1)
 		go func() { defer workers.Done(); s.self.Run(ctx) }()
@@ -187,6 +197,27 @@ func (s *Scanner) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		case <-s.rescan:
+		}
+	}
+}
+
+// Обход файлов не должен задерживать сканирование процессов и heartbeat.
+func (s *Scanner) runRecent(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		now := time.Now()
+		recent := investigate.Recent(ctx, s.opt.FS.HostRoot, now.Add(-7*24*time.Hour), now)
+		if ctx.Err() != nil {
+			return
+		}
+		s.mu.Lock()
+		s.recent = recent
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }
@@ -252,12 +283,6 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 		snap.Auth = s.opt.Auth.Build(start, snap.Processes)
 		snap.System = append(snap.System, snap.Auth.Findings...)
 		snap.Warnings = append(snap.Warnings, snap.Auth.Warnings...)
-	}
-	if s.opt.Recent {
-		if s.recent == nil || start.Sub(s.recent.Time) >= time.Hour {
-			s.recent = investigate.Recent(context.Background(), s.opt.FS.HostRoot, start.Add(-7*24*time.Hour), start)
-		}
-		snap.Recent = s.recent
 	}
 	investigate.Attach(snap)
 	events := hist.Record(start, snap.Processes, snap.System)

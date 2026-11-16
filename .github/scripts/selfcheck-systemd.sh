@@ -10,7 +10,7 @@ for path in "$APP_DIR" "$DATA_DIR" "$UNIT_PATH" "$UNIT_PATH.d"; do
 done
 cleanup() {
   systemctl stop "$APP_NAME" || true
-  journalctl -u "$APP_NAME" -n 60 --no-pager || true
+  journalctl -u "$APP_NAME" -n 200 --no-pager || true
   rm -f -- "$UNIT_PATH" "$UNIT_PATH.d/test.conf"
   rmdir "$UNIT_PATH.d"
   rm -rf -- "$APP_DIR" "$DATA_DIR"

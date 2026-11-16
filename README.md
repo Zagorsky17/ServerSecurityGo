@@ -738,6 +738,8 @@ The **Logins** panel reads local SSH authentication, sudo/su and account-managem
 
 The **Timeline** panel and `/api/timeline?since=48h` combine process history, login events and recent file metadata. `/api/logins` uses the same authentication as other APIs. File ctime is an inode change time, not a creation time: chmod/chown and package maintenance also change it. A recent ctime with an old mtime is context for investigation, not proof of timestomping. Package-update windows are approximate and do not suppress findings.
 
+File metadata is collected by a separate hourly worker so traversal does not delay process scans or watchdog heartbeats. Timeline reports the initial scan as pending until its result is available.
+
 ```sh
 serversecuritygo triage --format html --output /root/triage.html
 serversecuritygo triage --full --format json --output /root/triage.json
