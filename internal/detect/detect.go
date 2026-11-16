@@ -238,7 +238,7 @@ func Score(findings []model.Finding) (int, model.Risk, i18n.Msg) {
 var categories = map[string]bool{
 	model.CatLocation: true, model.CatIntegrity: true, model.CatMasquerade: true, model.CatChain: true,
 	model.CatNetwork: true, model.CatContent: true, model.CatBehavior: true, model.CatEnvironment: true,
-	model.CatPrivilege: true, model.CatPersistence: true, model.CatExposure: true, model.CatInfo: true,
+	model.CatPrivilege: true, model.CatPersistence: true, model.CatExposure: true, model.CatRootkit: true, model.CatInfo: true,
 }
 
 // CategoryTitle — переводимое название категории; неизвестная

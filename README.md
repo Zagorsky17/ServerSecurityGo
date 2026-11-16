@@ -327,6 +327,24 @@ The data comes from `/proc` only: `net/netstat`, `net/snmp`, `net/sockstat`, `ne
 
 **Protecting the scanner itself.** During an attack `/proc/net/tcp` grows to hundreds of thousands of lines, so the number of sockets per network namespace is capped by `SSG_NET_MAX_SOCKETS` (100,000, about 200 bytes per socket); beyond the cap sockets are skipped and `net_table_truncated` appears. The per-address aggregates are size-capped too.
 
+### Hidden processes, kernel modules and package integrity
+
+Results appear in **System**, history and `scan` reports. The service compares `/proc` listings with task TGIDs and parent PIDs, then confirms a missing process leader by PID and start time twice, 50 ms apart. Ordinary thread IDs, exited processes and reused PIDs are excluded. A separate worker probes all PID numbers in batches of 1,024 with 100 ms pauses, repeating after `SSG_ROOTKIT_INTERVAL` (default `10m`). A large PID range takes several minutes; short-lived processes can be missed. `loadavg` task counts are not used as proof of hiding because namespaces and concurrent task creation make that inference unreliable.
+
+Module checks compare `/proc/modules` with live loadable modules in `/sys/module` twice. Built-in modules and loading/unloading transitions are excluded. `rootkit-modules.json` stores the initial module set for the current boot. `kmod_hidden` and `hidden_process` are CRITICAL; `kmod_new` and `kmod_unsigned` are MEDIUM. Known external driver names reduce `kmod_unsigned` to LOW, without establishing trust. `kernel_tainted` is informational: [kernel taint flags](https://docs.kernel.org/admin-guide/tainted-kernels.html) also describe warnings, hardware faults and external drivers. `kmod_unindexed` and `kmod_origin_unavailable` report missing `modules.dep` entries or an unavailable index. Neither proves the actual module load path.
+
+The service verifies selected package files at startup and every `SSG_INTEGRITY_INTERVAL` (default `24h`), reading at up to 16 MiB/s. Scope: `/usr/bin`, `/usr/sbin`, `/bin`, `/sbin`, systemd binaries, PAM modules, OpenSSH helpers, libc, libpam, libkeyutils and libaudit, including usrmerge and architecture-specific library directories. It reads dpkg status, `.list`, `.md5sums`, conffiles and diversions directly; alternative symlinks are not treated as unpackaged regular executables. Busy or changing dpkg metadata produces an incomplete result. Files without a package checksum are explicitly reported as unverified.
+
+`bin_modified` is CRITICAL for SSH, privilege/login tools, common inspection tools, PAM and libc; other mismatches are HIGH. `integrity.json` records SHA-256 after the first successful service verification following installation. A verified package version change refreshes the reference; a hash or metadata change within the same version retains the old reference and raises a finding. `bin_unpackaged` is INFO. After independently checking a manually installed executable, an exact rule such as `{"exe":"/usr/bin/my-tool","rules":["bin_unpackaged"]}` accepts its SHA-256 on the next successful service pass. Wildcards and rules without an explicit `bin_unpackaged` ID do not accept a file. A later hash change still raises `bin_modified`.
+
+```bash
+serversecuritygo scan --full --min-risk INFO --format json --output /root/full-scan.json
+```
+
+`--full` waits for the PID sweep and file verification and supports cancellation. One-shot scans and local TUI sessions read service baselines without rewriting them. A quick `scan` leaves these checks pending and returns code **3**, including with `--fail-on none`, unless a finding triggers code 1. `rootkit_unavailable`, `rootkit_sweep_pending`, `integrity_pending`, `integrity_unavailable` and `integrity_unverified` also make the report incomplete and appear as warnings regardless of the risk filter. Completed passes include their timestamp (`rootkit_sweep_complete`, `integrity_complete`). Demo mode does not probe the host with these checks.
+
+The baseline is local trust established on first observation, not an independent authenticity check. MD5 and the [local dpkg database](https://manpages.debian.org/trixie/dpkg/dpkg.1.en.html) can be modified by root; the local SHA-256 baseline can also be replaced. A compromised kernel can deceive both procfs and sysfs. Verification against independently trusted `.deb` archives is a later stage. Read limits are explicit: 100,000 `/proc` entries, 16,384 module entries, 64 MiB of dpkg metadata per pass, and 1 GiB per hashed file; exceeding a limit produces an incomplete result rather than a clean verdict.
+
 ## How risk is scored
 
 Each rule produces an **indicator**: a set of facts saying what was read and where, for example `/proc/3101/exe → /dev/shm/.x/kworkerds`. An indicator by itself makes no claim about maliciousness. It has a weight, a category, and a "strong" flag if it is rarely legitimate on its own.
@@ -403,6 +421,8 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 | `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | web dashboard address (`off` disables the dashboard; the service keeps scanning) |
 | `SSG_SOCKET_PATH` | `/run/serversecuritygo/api.sock` | terminal UI socket (`off` disables it) |
 | `SSG_SCAN_INTERVAL` | `30s` | scan period (minimum `2s`) |
+| `SSG_ROOTKIT_INTERVAL` | `10m` | pause after a complete PID sweep (minimum `1m`) |
+| `SSG_INTEGRITY_INTERVAL` | `24h` | pause after package integrity verification (minimum `1m`) |
 | `SSG_AUTH_PASSWORD_HASH` | — | password hash (`serversecuritygo hash-password`) |
 | `SSG_ALLOWED_HOSTS` | — | allowed host names for network access |
 | `SSG_TLS_CERT` / `SSG_TLS_KEY` | — | built-in HTTPS |

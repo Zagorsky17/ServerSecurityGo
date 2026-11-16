@@ -1,9 +1,14 @@
 package scanner
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/rootkit"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -371,5 +376,61 @@ func TestDemoFail2ban(t *testing.T) {
 	}
 	if !found {
 		t.Error("нет находки fail2ban_not_running")
+	}
+}
+
+func TestVerificationFindingsReachSnapshotHistoryAndWarnings(t *testing.T) {
+	sc, _, procRoot := newDemoScanner(t)
+	for p, data := range map[string]string{
+		filepath.Join(procRoot, "modules"):                                   "",
+		filepath.Join(procRoot, "sys/kernel/tainted"):                        "0",
+		filepath.Join(sc.opt.FS.HostRoot, "sys/module/testhidden/initstate"): "live",
+		filepath.Join(sc.opt.FS.HostRoot, "sys/module/testhidden/taint"):     "",
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sc.opt.Rootkit = rootkit.New(rootkit.Options{ProcRoot: procRoot, HostRoot: sc.opt.FS.HostRoot})
+	sc.opt.Integrity = integrity.New(integrity.Options{HostRoot: sc.opt.FS.HostRoot})
+	snap, err := sc.ScanOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, f := range snap.System {
+		found[f.ID] = true
+	}
+	if !found["integrity_pending"] || !found["rootkit_unavailable"] || !found["rootkit_sweep_pending"] {
+		t.Fatalf("%v", found)
+	}
+	eventFound := false
+	for _, e := range sc.History().Events(1000) {
+		if e.Type == model.EvSystem && e.Exe == "/sys/module/testhidden" && e.Risk == model.RiskCritical {
+			eventFound = true
+		}
+	}
+	if !found["kmod_hidden"] || !eventFound {
+		t.Fatal("critical module finding did not reach snapshot/history")
+	}
+	warnings := ""
+	for _, w := range snap.Warnings {
+		warnings += w.In(i18n.EN)
+	}
+	if !strings.Contains(warnings, "PID sweep") || !strings.Contains(warnings, "dpkg") {
+		t.Fatal(warnings)
+	}
+	// Отмена должна останавливать и оба фоновых обхода, и цикл сканера.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sc.Run(ctx); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("background workers did not stop")
 	}
 }

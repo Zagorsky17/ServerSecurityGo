@@ -23,10 +23,12 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fail2ban"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/redact"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/rootkit"
 )
 
 // Options — параметры сканера.
@@ -53,7 +55,9 @@ type Options struct {
 	// Metrics — метрики сервера: их признаки (steal_high,
 	// disk_almost_full) попадают в системные находки, а оттуда в
 	// историю, «Систему» и scan. nil — сбор метрик выключен.
-	Metrics MetricsSource
+	Metrics   MetricsSource
+	Rootkit   *rootkit.Checker
+	Integrity *integrity.Runner
 }
 
 // MetricsSource — то, что сканеру нужно от метрик: сборщик работает
@@ -116,6 +120,17 @@ func (s *Scanner) Rescan() {
 
 // Run выполняет сканирование сразу и затем по таймеру до отмены ctx.
 func (s *Scanner) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() { cancel(); workers.Wait() }()
+	if s.opt.Rootkit != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.opt.Rootkit.Run(ctx) }()
+	}
+	if s.opt.Integrity != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.opt.Integrity.Run(ctx) }()
+	}
 	t := time.NewTicker(s.opt.Interval)
 	defer t.Stop()
 	for {
@@ -171,6 +186,17 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	if nl := s.opt.NetLoad; nl != nil {
 		snap.NetLoad = nl.Build(netload.Input{Now: start, Sockets: snap.Sockets, Dropped: s.sockDropped, Addrs: addrs})
 		snap.System = append(snap.System, nl.Findings()...)
+	}
+	if s.opt.Rootkit != nil {
+		snap.System = append(snap.System, s.opt.Rootkit.Check(context.Background())...)
+	}
+	if s.opt.Integrity != nil {
+		snap.System = append(snap.System, s.opt.Integrity.Findings()...)
+	}
+	for _, f := range snap.System {
+		if f.Incomplete() {
+			snap.Warnings = append(snap.Warnings, f.Title)
+		}
 	}
 	events := hist.Record(start, snap.Processes, snap.System)
 

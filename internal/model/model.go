@@ -81,6 +81,7 @@ const (
 	CatPrivilege   = "privilege"   // привилегии (root из записываемого каталога)
 	CatPersistence = "persistence" // признаки закрепления в системе
 	CatExposure    = "exposure"    // поверхность атаки: сервис доступен из сети
+	CatRootkit     = "rootkit"     // несогласованность представлений процессов и модулей
 	CatInfo        = "info"        // справочные сведения, не влияют на оценку
 )
 
@@ -626,4 +627,13 @@ type Event struct {
 	Exe     string    `json:"exe,omitempty"`
 	Details i18n.Msg  `json:"details"`
 	Risk    Risk      `json:"risk"`
+}
+
+// Incomplete показывает, что отсутствие находок нельзя считать результатом полной проверки.
+func (f SystemFinding) Incomplete() bool {
+	switch f.ID {
+	case "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
+		return true
+	}
+	return false
 }

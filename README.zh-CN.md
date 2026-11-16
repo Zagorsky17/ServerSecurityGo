@@ -327,6 +327,24 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 **保护扫描器自身。** 攻击期间 `/proc/net/tcp` 会增长到数十万行，因此每个网络命名空间的套接字数量受 `SSG_NET_MAX_SOCKETS` 限制（100 000，每个套接字约 200 字节）；超出部分会被跳过，并出现 `net_table_truncated`。按地址聚合的数据同样有大小上限。
 
+### 隐藏进程、内核模块与软件包完整性
+
+结果显示在**系统**、历史记录和 `scan` 报告中。服务将 `/proc` 列表与线程 TGID、父进程 PID 对照，并根据 PID 和启动时间，两次确认缺失的进程组组长，两次间隔 50 毫秒。普通线程、已退出进程和复用的 PID 被排除。独立工作线程每批探测 1024 个 PID，批次之间暂停 100 毫秒，完成后按 `SSG_ROOTKIT_INTERVAL`（默认 `10m`）重新运行。较大的 PID 范围需要数分钟，短命进程可能被漏掉。`loadavg` 的任务总数不作为隐藏进程的证据，因为命名空间和并发创建任务会使这种推断不可靠。
+
+模块检查两次对照 `/proc/modules` 与 `/sys/module` 中处于 live 状态的可加载模块，排除内置模块及加载、卸载过程中的状态。`rootkit-modules.json` 保存本次系统启动的初始模块集合。`kmod_hidden` 和 `hidden_process` 为 CRITICAL；`kmod_new` 和 `kmod_unsigned` 为 MEDIUM。已知外部驱动名称将 `kmod_unsigned` 降为 LOW，但名称并不证明可信。`kernel_tainted` 仅提供信息：[内核 taint 标志](https://docs.kernel.org/admin-guide/tainted-kernels.html)也包括警告、硬件故障和外部驱动。`kmod_unindexed` 和 `kmod_origin_unavailable` 表示 `modules.dep` 缺少条目或索引不可用，都不能证明模块实际从哪个路径加载。
+
+服务在启动时以及每隔 `SSG_INTEGRITY_INTERVAL`（默认 `24h`）验证所选软件包文件，读取速率最高为 16 MiB/s。范围包括 `/usr/bin`、`/usr/sbin`、`/bin`、`/sbin`、systemd 二进制文件、PAM 模块、OpenSSH 辅助程序、libc、libpam、libkeyutils 和 libaudit，同时支持 usrmerge 与不同架构的库目录。服务直接读取 dpkg status、`.list`、`.md5sums`、conffiles 和 diversions；alternatives 符号链接不会被当作无软件包归属的普通可执行文件。dpkg 忙碌或元数据正在变化时，结果标为不完整。没有软件包校验和的文件会明确标为未验证。
+
+`bin_modified` 对 SSH、提权与登录工具、常见诊断工具、PAM 和 libc 使用 CRITICAL，其他不一致使用 HIGH。安装后服务首次成功验证时，`integrity.json` 保存 SHA-256。软件包版本与校验和一致更新时会刷新基线；同一版本内哈希或元数据发生变化时，会保留旧基线并报告发现。`bin_unpackaged` 为 INFO。独立确认手动安装的文件后，可用精确规则 `{"exe":"/usr/bin/my-tool","rules":["bin_unpackaged"]}` 在下次成功的服务检查中接受其 SHA-256。通配符以及未明确指定 `bin_unpackaged` 的规则不会接受文件。后续哈希变化仍会触发 `bin_modified`。
+
+```bash
+serversecuritygo scan --full --min-risk INFO --format json --output /root/full-scan.json
+```
+
+`--full` 等待 PID 扫描及文件验证，支持取消。单次扫描和本地 TUI 读取服务基线，但不覆盖它们。快速 `scan` 会将这些检查保留为待执行状态，并返回代码 **3**，使用 `--fail-on none` 时也是如此；达到阈值的发现仍优先返回代码 1。`rootkit_unavailable`、`rootkit_sweep_pending`、`integrity_pending`、`integrity_unavailable` 和 `integrity_unverified` 也会使报告不完整，并在警告中显示，不受风险过滤器影响。完成的检查含时间戳（`rootkit_sweep_complete`、`integrity_complete`）。演示模式不会通过这些检查探测真实主机。
+
+基线是首次观察时建立的本地信任，并非独立真实性验证。root 可以修改 MD5、[本地 dpkg 数据库](https://manpages.debian.org/trixie/dpkg/dpkg.1.en.html)和 SHA-256 基线。被入侵的内核也可以欺骗 procfs 与 sysfs。与独立可信 `.deb` 归档对照属于后续阶段。读取限制为：100,000 个 `/proc` 条目、16,384 个模块条目、每次 64 MiB 的 dpkg 元数据、每个待哈希文件 1 GiB。超限会报告检查不完整，而不会给出无异常结论。
+
 ## 风险评分方式
 
 每条规则产生一个**指标**：一组说明读取了什么、从哪里读取的事实，例如 `/proc/3101/exe → /dev/shm/.x/kworkerds`。单个指标本身并不断定是否恶意。它有权重、类别，如果它单独出现时很少是合法的，还会带有“强”标记。
@@ -403,6 +421,8 @@ Web 面板和终端界面会以所选语言显示这段文字。
 | `SSG_LISTEN_ADDR` | `127.0.0.1:8090` | Web 面板地址（`off` 表示关闭面板，扫描继续运行）|
 | `SSG_SOCKET_PATH` | `/run/serversecuritygo/api.sock` | 终端界面套接字（`off` 表示关闭） |
 | `SSG_SCAN_INTERVAL` | `30s` | 扫描周期（最小 `2s`） |
+| `SSG_ROOTKIT_INTERVAL` | `10m` | 完整 PID 扫描后的暂停时间（最少 `1m`） |
+| `SSG_INTEGRITY_INTERVAL` | `24h` | 软件包完整性验证后的暂停时间（最少 `1m`） |
 | `SSG_AUTH_PASSWORD_HASH` | — | 密码哈希（`serversecuritygo hash-password`） |
 | `SSG_ALLOWED_HOSTS` | — | 网络访问时允许的主机名 |
 | `SSG_TLS_CERT` / `SSG_TLS_KEY` | — | 内置 HTTPS |
