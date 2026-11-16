@@ -235,7 +235,7 @@ func TestAuditReport(t *testing.T) {
 }
 
 func TestVerificationCompletenessIgnoresDisplayFilter(t *testing.T) {
-	for _, id := range []string{"rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified"} {
+	for _, id := range []string{"self_check_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified"} {
 		snap := &model.Snapshot{Host: model.HostInfo{IsRoot: true}, System: []model.SystemFinding{{Finding: model.Finding{ID: id}, Risk: model.RiskInfo}}}
 		r := NewScan(snap, model.RiskCritical, "test")
 		if !r.Incomplete() || r.ExitCode(FailOn{Off: true}) != ExitIncomplete {

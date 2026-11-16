@@ -63,7 +63,8 @@ jobs:
           sudo /tmp/ssg scan --full --format json --output /tmp/full-scan.json --min-risk INFO --fail-on none
           code=$?
           set -e
-          test "$code" = 0 || test "$code" = 3
+          # В разовом запуске нет эталона установки самоконтроля.
+          test "$code" = 3
           sudo python3 - <<'PYCODE'
           import json
           d = json.load(open('/tmp/full-scan.json'))
@@ -71,6 +72,7 @@ jobs:
           ids = {f['id'] for f in findings}
           assert 'rootkit_sweep_complete' in ids, findings
           assert 'integrity_complete' in ids, findings
+          assert 'self_check_unavailable' in ids and d['incomplete'], findings
           assert not ids.intersection({'hidden_process', 'kmod_hidden', 'rootkit_sweep_pending', 'integrity_pending'}), findings
           print('System finding IDs:', sorted(ids), 'incomplete:', d['incomplete'])
           PYCODE

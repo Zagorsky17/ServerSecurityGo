@@ -97,6 +97,7 @@ func runInvestigation(kind string, args []string) (int, error) {
 				}
 			}
 			sc := scanner.New(scanner.Options{FS: pfs, Detect: det, History: h, Interval: cfg.ScanInterval, Logger: newLogger("error"), Auth: authCollector(cfg, true), LogDays: cfg.LogDays, Rootkit: rk, Integrity: ir})
+			attachSelfCheck(sc, cfg, "", newLogger("error"), false)
 			rep.Snapshot, e = sc.ScanOnce()
 			if e != nil {
 				return 0, e

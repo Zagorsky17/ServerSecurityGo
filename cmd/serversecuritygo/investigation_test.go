@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/report"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestInvestigationOfflineAndValidation(t *testing.T) {
@@ -38,5 +40,44 @@ func TestInvestigationOfflineAndValidation(t *testing.T) {
 		if _, e = runInvestigation("recent", args); e == nil {
 			t.Fatal(args)
 		}
+	}
+}
+
+func TestInvestigationIncludesSelfCheckAndUFW(t *testing.T) {
+	proc, host, err := fakeproc.Demo(time.Now()).Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := t.TempDir()
+	t.Setenv("SSG_HOST_ROOT", host)
+	t.Setenv("SSG_PROC_ROOT", proc)
+	t.Setenv("SSG_DATA_DIR", data)
+	t.Setenv("SSG_ALLOWLIST_FILE", filepath.Join(host, "missing"))
+	out := filepath.Join(t.TempDir(), "triage.json")
+	code, err := runInvestigation("triage", []string{"--format", "json", "--output", out, "--fail-on", "none"})
+	if err != nil || code != report.ExitIncomplete {
+		t.Fatalf("%d %v", code, err)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r report.Investigation
+	if err = json.Unmarshal(b, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Snapshot == nil || r.Snapshot.UFW == nil || r.Snapshot.Auth == nil {
+		t.Fatal("combined investigation sources missing")
+	}
+	found := false
+	for _, f := range r.Snapshot.System {
+		found = found || f.ID == "self_check_unavailable"
+	}
+	if !found || !r.Incomplete {
+		t.Fatal("missing baseline reported as verified")
+	}
+	files, err := os.ReadDir(data)
+	if err != nil || len(files) != 0 {
+		t.Fatal("one-shot command changed service state", err)
 	}
 }
