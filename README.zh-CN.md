@@ -335,7 +335,7 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 服务在启动时以及每隔 `SSG_INTEGRITY_INTERVAL`（默认 `24h`）验证所选软件包文件，读取速率最高为 16 MiB/s。范围包括 `/usr/bin`、`/usr/sbin`、`/bin`、`/sbin`、systemd 二进制文件、PAM 模块、OpenSSH 辅助程序、libc、libpam、libkeyutils 和 libaudit，同时支持 usrmerge 与不同架构的库目录。服务直接读取 dpkg status、`.list`、`.md5sums`、conffiles 和 diversions；alternatives 符号链接不会被当作无软件包归属的普通可执行文件。dpkg 忙碌或元数据正在变化时，结果标为不完整。没有软件包校验和的文件会明确标为未验证。
 
-`bin_modified` 对 SSH、提权与登录工具、常见诊断工具、PAM 和 libc 使用 CRITICAL，其他不一致使用 HIGH。安装后服务首次成功验证时，`integrity.json` 保存 SHA-256。软件包版本与校验和一致更新时会刷新基线；同一版本内哈希或元数据发生变化时，会保留旧基线并报告发现。`bin_unpackaged` 为 INFO。独立确认手动安装的文件后，可用精确规则 `{"exe":"/usr/bin/my-tool","rules":["bin_unpackaged"]}` 在下次成功的服务检查中接受其 SHA-256。通配符以及未明确指定 `bin_unpackaged` 的规则不会接受文件。后续哈希变化仍会触发 `bin_modified`。
+`bin_modified` 对 SSH、提权与登录工具、常见诊断工具、PAM 和 libc 使用 CRITICAL，其他不一致使用 HIGH。安装后服务首次成功验证时，`integrity.json` 保存 SHA-256。软件包版本与校验和一致更新时会刷新基线；同一版本内哈希或元数据发生变化时，会保留旧基线并报告发现。`bin_unpackaged` 为 INFO。独立确认手动安装的文件后，可用精确规则 `{"exe":"/usr/bin/my-tool","rules":["bin_unpackaged"]}` 在重启服务后的下次成功检查中接受其 SHA-256。通配符以及未明确指定 `bin_unpackaged` 的规则不会接受文件。后续哈希变化仍会触发 `bin_modified`。
 
 ```bash
 serversecuritygo scan --full --min-risk INFO --format json --output /root/full-scan.json

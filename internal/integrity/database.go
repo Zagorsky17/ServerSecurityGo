@@ -119,8 +119,9 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 	if err != nil {
 		return nil, err
 	}
+	statusText := strings.ReplaceAll(string(status), "\r\n", "\n")
 	inConffiles := false
-	for _, line := range strings.Split(string(status), "\n") {
+	for _, line := range strings.Split(statusText, "\n") {
 		if line == "Conffiles:" {
 			inConffiles = true
 			continue
@@ -146,7 +147,7 @@ func loadDatabase(ctx context.Context, root *os.Root) (*database, error) {
 		}
 		db.excluded[db.canonical(p[1:])] = true
 	}
-	packages, err := installedPackages(string(status))
+	packages, err := installedPackages(statusText)
 	if err != nil {
 		return nil, i18n.Errorf("err.integrity_metadata", "var/lib/dpkg/status", err)
 	}
@@ -298,7 +299,7 @@ func (db *database) parseSums(data, pkg string) error {
 		if len(line) < 35 || line[32:34] != "  " {
 			return errDatabase
 		}
-		sum, p := line[:32], line[34:]
+		sum, p := line[:32], strings.TrimPrefix(line[34:], "./")
 		raw, err := hex.DecodeString(sum)
 		if err != nil || len(raw) != 16 || !validPath(p) {
 			return errDatabase

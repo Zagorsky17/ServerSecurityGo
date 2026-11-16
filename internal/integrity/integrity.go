@@ -258,12 +258,12 @@ func (r *Runner) Check(ctx context.Context) error {
 			continue
 		}
 		// Пропавший или заменённый ссылкой принятый файл не должен молча исчезнуть из эталона.
-		if _, err := root.Lstat(p); err != nil {
+		fi, err := root.Lstat(p)
+		if err != nil {
 			problems = append(problems, err)
 			continue
 		}
-		fi, err := root.Lstat(p)
-		if err == nil && !fi.Mode().IsRegular() {
+		if !fi.Mode().IsRegular() {
 			problems = append(problems, errChanged)
 		}
 	}
@@ -289,7 +289,7 @@ func (r *Runner) Check(ctx context.Context) error {
 	// При частичном чтении сохраняем прежний эталон целиком; проверенные расхождения всё равно показываем.
 	if len(problems) == 0 {
 		if r.opt.StateDir != "" && !r.opt.ReadOnly {
-			if err := safefile.WriteJSON(filepath.Join(r.opt.StateDir, "integrity.json"), next); err != nil {
+			if err := safefile.WriteJSON(filepath.Join(r.opt.StateDir, "integrity.json"), next, 32<<20); err != nil {
 				problems = append(problems, err)
 			}
 		}

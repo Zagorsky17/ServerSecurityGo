@@ -50,13 +50,23 @@ func ReadDir(path string, limit int) ([]os.DirEntry, error) {
 }
 
 // WriteJSON сохраняет состояние в существующем доверенном каталоге, атомарно и с правами 600.
-func WriteJSON(path string, v any) error {
+func WriteJSON(path string, v any, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return os.ErrInvalid
+	}
 	f, err := os.CreateTemp(filepath.Dir(path), ".ssg-state-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
 	err = json.NewEncoder(f).Encode(v)
+	if err == nil {
+		var fi os.FileInfo
+		fi, err = f.Stat()
+		if err == nil && fi.Size() > maxBytes {
+			err = ErrTooLarge
+		}
+	}
 	if err == nil {
 		err = f.Sync()
 	}

@@ -384,3 +384,31 @@ func TestDpkgConffileMarkersAndFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestExplicitRelativeChecksumPaths(t *testing.T) {
+	db := &database{files: map[string]expected{}}
+	if err := db.parseSums(md("gh")+"  ./usr/bin/gh\n", "gh=1"); err != nil {
+		t.Fatal(err)
+	}
+	if db.files["usr/bin/gh"].MD5 != md("gh") {
+		t.Fatal("explicit relative path not normalized")
+	}
+	for _, p := range []string{"./../etc/passwd", ".//etc/passwd", "./usr/../../etc/passwd", "/usr/bin/gh"} {
+		if db.parseSums(md("bad")+"  "+p, "bad") == nil {
+			t.Fatal("unsafe path accepted", p)
+		}
+	}
+}
+
+func TestStatusCRLFDoesNotLoseConffiles(t *testing.T) {
+	h, state := fixture(t)
+	write(t, h, "var/lib/dpkg/status", "Package: tools\r\nStatus: install ok installed\r\nArchitecture: amd64\r\nVersion: 1.0\r\nConffiles:\r\n /usr/bin/ssh "+md("old")+"\r\n\r\n")
+	write(t, h, "usr/bin/ssh", "local config change")
+	r := runner(h, state)
+	if err := r.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(find(r, "bin_modified")) != 0 {
+		t.Fatal("CRLF lost conffile exclusion")
+	}
+}

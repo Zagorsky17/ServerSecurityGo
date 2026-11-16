@@ -107,7 +107,7 @@ func (c *Checker) Check(ctx context.Context) []model.SystemFinding {
 		next := moduleBaseline{Boot: boot, Modules: live}
 		var err error
 		if c.opt.StateDir != "" && !c.opt.ReadOnly {
-			err = safefile.WriteJSON(filepath.Join(c.opt.StateDir, "rootkit-modules.json"), next)
+			err = safefile.WriteJSON(filepath.Join(c.opt.StateDir, "rootkit-modules.json"), next, 1<<20)
 		}
 		if err != nil {
 			out = append(out, unavailable("rootkit-modules.json", err))

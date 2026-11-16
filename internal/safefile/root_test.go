@@ -40,11 +40,17 @@ func TestRootedReadAndAtomicState(t *testing.T) {
 		t.Fatal("final symlink followed")
 	}
 	state := filepath.Join(dir, "state.json")
-	if err := WriteJSON(state, map[string]int{"v": 1}); err != nil {
+	if err := WriteJSON(state, map[string]int{"v": 1}, 1<<20); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteJSON(state, make(chan int)); err == nil {
+	if err := WriteJSON(state, make(chan int), 1<<20); err == nil {
 		t.Fatal("encoded unsupported value")
+	}
+	if err := WriteJSON(state, "too large", 2); !errors.Is(err, ErrTooLarge) {
+		t.Fatal(err)
+	}
+	if err := WriteJSON(state, "invalid limit", 0); err == nil {
+		t.Fatal("invalid limit accepted")
 	}
 	data, _ := os.ReadFile(state)
 	var v map[string]int
@@ -55,10 +61,10 @@ func TestRootedReadAndAtomicState(t *testing.T) {
 	if err != nil || fi.Mode().Perm() != 0600 {
 		t.Fatalf("%v %v", fi, err)
 	}
-	if err := WriteJSON(filepath.Join(dir, "missing/state"), v); err == nil {
+	if err := WriteJSON(filepath.Join(dir, "missing/state"), v, 1<<20); err == nil {
 		t.Fatal("missing directory ignored")
 	}
-	if err := WriteJSON(dir, v); err == nil {
+	if err := WriteJSON(dir, v, 1<<20); err == nil {
 		t.Fatal("directory replaced")
 	}
 	files, err := ReadDir(dir, 100)
