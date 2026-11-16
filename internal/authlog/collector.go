@@ -461,7 +461,9 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 		}
 	}
 	if c.journalKnown && c.journalBytes > 1<<20 && journalBytes < c.journalBytes/2 && journalFiles == c.journalFiles && journalFiles > 0 {
-		r.Findings = append(r.Findings, finding("log_journal_vacuum", "/var/log/journal", model.RiskMedium))
+		f := finding("log_journal_vacuum", "/var/log/journal", model.RiskMedium)
+		f.Evidence = []i18n.Msg{i18n.T("ev.auth_size", c.journalBytes, journalBytes)}
+		r.Findings = append(r.Findings, f)
 	}
 	c.journalBytes, c.journalFiles, c.journalKnown = journalBytes, journalFiles, je == nil
 	c.state.Last = now
@@ -507,7 +509,9 @@ func (c *Collector) changed(root *os.Root, path string, fi os.FileInfo, r *model
 			if strings.Contains(path, "auth.log") {
 				id = "log_authlog_truncated"
 			}
-			r.Findings = append(r.Findings, finding(id, "/"+path, model.RiskHigh))
+			f := finding(id, "/"+path, model.RiskHigh)
+			f.Evidence = []i18n.Msg{i18n.T("ev.auth_size", old.Size(), fi.Size())}
+			r.Findings = append(r.Findings, f)
 		}
 	}
 	c.files[path] = fi

@@ -99,3 +99,15 @@ func TestPackageWindowsAndOfflineTimezone(t *testing.T) {
 		}
 	}
 }
+func TestVerificationCommandsMatchEvidence(t *testing.T) {
+	cases := []struct{ id, path, want string }{{"bin_modified", "/usr/bin/example", "sha256sum -- '/usr/bin/example'"}, {"hidden_process", "/proc/42", "ps -p 42"}, {"login_password_root", "/var/log/auth.log", "grep -nE"}, {"login_after_bruteforce", "/var/log/auth.log.2.gz", "gzip -cd -- '/var/log/auth.log.2.gz'"}, {"log_utmp_missing", "/run/utmp", "who -a"}, {"log_journal_vacuum", "/var/log/journal", "journalctl --disk-usage"}}
+	for _, c := range cases {
+		cmd := strings.Join(Commands(c.id, 0, c.path), "\n")
+		if !strings.Contains(cmd, c.want) {
+			t.Fatal(c.id, cmd)
+		}
+		if strings.Contains(cmd, "rm ") || strings.Contains(cmd, "cp ") || strings.Contains(cmd, "apt-get") {
+			t.Fatal("mutating verification", cmd)
+		}
+	}
+}
