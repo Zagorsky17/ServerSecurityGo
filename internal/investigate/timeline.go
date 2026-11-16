@@ -14,7 +14,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
 
-// ReadEvents only reads service history; one-shot commands never open a writable Store.
+// ReadEvents только читает историю: разовые команды не открывают хранилище для записи.
 func ReadEvents(dir string, since time.Time) ([]model.Event, bool) {
 	if dir == "" {
 		return nil, false

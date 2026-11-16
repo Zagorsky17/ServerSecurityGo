@@ -72,3 +72,30 @@ func TestReadHistoryReadOnly(t *testing.T) {
 		t.Fatal("history modified")
 	}
 }
+func TestPackageWindowsAndOfflineTimezone(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "var/log/apt"), 0700)
+	os.MkdirAll(filepath.Join(root, "etc"), 0700)
+	now := time.Now().UTC()
+	os.WriteFile(filepath.Join(root, "etc/timezone"), []byte("UTC\n"), 0600)
+	os.WriteFile(filepath.Join(root, "etc/changed"), []byte("x"), 0600)
+	log := "Start-Date: " + now.Add(-time.Minute).Format("2006-01-02  15:04:05") + "\nEnd-Date: " + now.Add(time.Minute).Format("2006-01-02  15:04:05") + "\n"
+	os.WriteFile(filepath.Join(root, "var/log/apt/history.log"), []byte(log), 0600)
+	rep := Recent(context.Background(), root, now.Add(-time.Hour), now)
+	found := false
+	for _, f := range rep.Files {
+		if f.Path == "/etc/changed" {
+			found = f.PackageWindow
+		}
+	}
+	if !found {
+		t.Fatal("update window not matched")
+	}
+	os.Remove(filepath.Join(root, "etc/timezone"))
+	rep = Recent(context.Background(), root, now.Add(-time.Hour), now)
+	for _, f := range rep.Files {
+		if f.PackageWindow {
+			t.Fatal("unknown image timezone guessed")
+		}
+	}
+}

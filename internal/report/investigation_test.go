@@ -25,3 +25,18 @@ func TestInvestigationEscapingAndPriority(t *testing.T) {
 		}
 	}
 }
+func TestInvestigationAuditAndObservationVerdict(t *testing.T) {
+	r := &Investigation{Kind: "triage", Audit: &model.AuditReport{Checks: []model.AuditCheck{{Status: model.AuditUnknown}, {Status: model.AuditFail, Severity: model.RiskCritical, Group: "ssh", Title: i18n.L("weak SSH")}}}}
+	r.Summarize()
+	if !r.Incomplete || len(r.Priority) != 1 || r.Priority[0].Commands[0] != "sshd -T" {
+		t.Fatal(r)
+	}
+	if strings.Contains(r.Verdict.In(i18n.EN), "High likelihood") {
+		t.Fatal("weak configuration called compromise")
+	}
+	recent := &Investigation{Kind: "recent"}
+	recent.Summarize()
+	if strings.Contains(recent.Verdict.In(i18n.EN), "No compromise") {
+		t.Fatal("metadata inventory claimed clean system")
+	}
+}

@@ -1,4 +1,4 @@
-// Package investigate combines existing observations for local incident triage.
+// Пакет investigate объединяет наблюдения для локального расследования.
 package investigate
 
 import (
@@ -18,7 +18,7 @@ import (
 
 var RecentRoots = []string{"etc", "usr/bin", "usr/sbin", "usr/lib", "lib", "root", "home", "tmp", "var/tmp", "dev/shm", "opt", "var/www", "boot"}
 
-// Walk bounds directory reads and never follows directory symlinks.
+// Walk ограничивает чтение каталогов и не обходит симлинки на каталоги.
 func Walk(ctx context.Context, root *os.Root, roots []string, max int, fn func(string, os.FileInfo)) bool {
 	count := 0
 	complete := true
@@ -89,7 +89,18 @@ func Recent(ctx context.Context, host string, since, now time.Time) *model.Recen
 	defer root.Close()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	windows := packageWindows(root)
+	loc := time.Local
+	if host != "/" {
+		loc = nil
+		if f, _, e := safefile.OpenRooted(root, "etc/timezone"); e == nil {
+			b, e := io.ReadAll(io.LimitReader(f, 1024))
+			f.Close()
+			if e == nil {
+				loc, _ = time.LoadLocation(strings.TrimSpace(string(b)))
+			}
+		}
+	}
+	windows := packageWindows(root, loc)
 	complete := Walk(ctx, root, RecentRoots, 100000, func(p string, fi os.FileInfo) {
 		ct := changeTime(fi)
 		if ct.Before(since) && fi.ModTime().Before(since) {
@@ -120,7 +131,10 @@ func Recent(ctx context.Context, host string, since, now time.Time) *model.Recen
 	})
 	return r
 }
-func packageWindows(root *os.Root) [][2]time.Time {
+func packageWindows(root *os.Root, loc *time.Location) [][2]time.Time {
+	if loc == nil {
+		return nil
+	}
 	var out [][2]time.Time
 	for _, p := range []string{"var/log/dpkg.log", "var/log/dpkg.log.1", "var/log/apt/history.log", "var/log/apt/history.log.1"} {
 		f, _, e := safefile.OpenRooted(root, p)
@@ -132,15 +146,15 @@ func packageWindows(root *os.Root) [][2]time.Time {
 		for sc.Scan() {
 			s := sc.Text()
 			if strings.HasPrefix(s, "Start-Date:") {
-				start, _ = time.ParseInLocation("2006-01-02  15:04:05", strings.TrimSpace(strings.TrimPrefix(s, "Start-Date:")), time.Local)
+				start, _ = time.ParseInLocation("2006-01-02  15:04:05", strings.TrimSpace(strings.TrimPrefix(s, "Start-Date:")), loc)
 			} else if strings.HasPrefix(s, "End-Date:") {
-				end, e := time.ParseInLocation("2006-01-02  15:04:05", strings.TrimSpace(strings.TrimPrefix(s, "End-Date:")), time.Local)
+				end, e := time.ParseInLocation("2006-01-02  15:04:05", strings.TrimSpace(strings.TrimPrefix(s, "End-Date:")), loc)
 				if e == nil && !start.IsZero() && !end.Before(start) {
 					out = append(out, [2]time.Time{start, end})
 				}
 				start = time.Time{}
 			} else if len(s) >= 20 {
-				t, e := time.ParseInLocation("2006-01-02 15:04:05", s[:19], time.Local)
+				t, e := time.ParseInLocation("2006-01-02 15:04:05", s[:19], loc)
 				if e == nil && (strings.Contains(s, " install ") || strings.Contains(s, " upgrade ") || strings.Contains(s, " status installed ")) {
 					out = append(out, [2]time.Time{t.Add(-time.Minute), t.Add(time.Minute)})
 				}

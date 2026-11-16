@@ -3,6 +3,7 @@ package authlog
 import (
 	"bufio"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,7 @@ type state struct {
 	Last   time.Time            `json:"last"`
 }
 type Collector struct {
+	fileHeads    map[string][32]byte
 	journalBytes int64
 	journalFiles int
 	journalKnown bool
@@ -55,7 +57,7 @@ func New(opt Options) *Collector {
 	if opt.Retention <= 0 {
 		opt.Retention = 7 * 24 * time.Hour
 	}
-	c := &Collector{opt: opt, state: state{Seen: map[string]time.Time{}}, files: map[string]os.FileInfo{}}
+	c := &Collector{opt: opt, state: state{Seen: map[string]time.Time{}}, files: map[string]os.FileInfo{}, fileHeads: map[string][32]byte{}}
 	if opt.StateDir != "" {
 		b, _, err := safefile.ReadRegular(filepath.Join(opt.StateDir, "auth-state.json"), 2<<20, false)
 		if err == nil {
@@ -185,13 +187,13 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 		r.Keys = r.Keys[:maxEvents]
 		warn("authorized_keys: limit")
 	}
-	// Current and fixed rotations bound filesystem work and decompression.
+	// Фиксированный набор ротаций ограничивает чтение и распаковку.
 	authFound := false
 	budget := int64(32 << 20)
 	for _, path := range []string{"var/log/auth.log.2.gz", "var/log/auth.log.1", "var/log/auth.log"} {
 		f, fi, e := safefile.OpenRooted(root, path)
 		if e != nil {
-			if !errors.Is(e, os.ErrNotExist) {
+			if !errors.Is(e, os.ErrNotExist) || path == "var/log/auth.log" {
 				warn("/" + path)
 			}
 			continue
@@ -329,7 +331,7 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 		}
 	}
 	sort.SliceStable(r.Events, func(i, j int) bool { return r.Events[i].Time.Before(r.Events[j].Time) })
-	// auth.log rotations may overlap; count each record once across sources.
+	// Перекрывающиеся ротации не должны удваивать события из разных источников.
 	origins := map[string]string{}
 	unique := r.Events[:0]
 	for _, e := range r.Events {
@@ -341,7 +343,7 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 		unique = append(unique, e)
 	}
 	r.Events = unique
-	// Session end is only paired within the same tty, PID and boot epoch.
+	// Выход связывается только с теми же TTY, PID и периодом между перезагрузками.
 	active := map[string]int{}
 	for i := range r.Events {
 		e := &r.Events[i]
@@ -384,7 +386,7 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 		}
 	}
 	c.assess(r, accounts)
-	// Missing utmp alone is not evidence: compare only a successfully read current file.
+	// Отсутствие utmp не доказывает подмену: сравниваем только успешно прочитанный файл.
 	utmp, ue := read("run/utmp", maxRead)
 	if known && ue == nil {
 		sessions, bad := Utmp(utmp, "/run/utmp", arm)
@@ -410,7 +412,7 @@ func (c *Collector) Build(now time.Time, procs []*model.Process) *model.AuthRepo
 			}
 		}
 	}
-	// A storage decrease is an observation, not proof of log erasure.
+	// Уменьшение объёма — наблюдение, а не доказательство удаления следов.
 	var journalBytes int64
 	journalFiles := 0
 	journalRoot, je := root.Open("var/log/journal")
@@ -470,20 +472,42 @@ func boundEvents(e []model.LoginEvent) []model.LoginEvent {
 	return append([]model.LoginEvent(nil), e[len(e)-maxEvents:]...)
 }
 func (c *Collector) changed(root *os.Root, path string, fi os.FileInfo, r *model.AuthReport) {
+	head := func(p string, size int64) ([32]byte, bool) {
+		f, _, e := safefile.OpenRooted(root, p)
+		if e != nil {
+			return [32]byte{}, false
+		}
+		defer f.Close()
+		b, e := io.ReadAll(io.LimitReader(f, min(size, 4096)))
+		return sha256.Sum256(b), e == nil && int64(len(b)) == min(size, 4096)
+	}
 	if old := c.files[path]; old != nil && os.SameFile(old, fi) && fi.Size() < old.Size() {
-		rot, e := root.Lstat(path + ".1")
-		if e != nil || !os.SameFile(old, rot) {
+		rotated := false
+		if rot, e := root.Lstat(path + ".1"); e == nil {
+			rotated = os.SameFile(old, rot)
+			if !rotated && rot.Size() >= old.Size() && !rot.ModTime().Before(old.ModTime()) {
+				if oldHead, ok := c.fileHeads[path]; ok {
+					h, read := head(path+".1", old.Size())
+					rotated = read && h == oldHead
+				}
+			}
+		}
+		if !rotated && (path == "var/log/wtmp" || path == "var/log/auth.log") {
 			id := "log_wtmp_truncated"
 			if strings.Contains(path, "auth.log") {
 				id = "log_authlog_truncated"
 			}
-			if path == "var/log/wtmp" || path == "var/log/auth.log" {
-				r.Findings = append(r.Findings, finding(id, "/"+path, model.RiskHigh))
-			}
+			r.Findings = append(r.Findings, finding(id, "/"+path, model.RiskHigh))
 		}
 	}
 	c.files[path] = fi
+	if h, ok := head(path, fi.Size()); ok {
+		c.fileHeads[path] = h
+	} else {
+		delete(c.fileHeads, path)
+	}
 }
+
 func finding(id, path string, risk model.Risk) model.SystemFinding {
 	return model.SystemFinding{Finding: model.Finding{ID: id, Title: i18n.T(authTitles[id]), Category: model.CatBehavior, Recommendation: i18n.T("rec.auth_review")}, Path: path, Risk: risk}
 }

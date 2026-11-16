@@ -2,6 +2,7 @@ package i18n
 
 func init() {
 	add(map[string]entry{
+		"report.observations":               {"Доступные наблюдения для расследования", "Available observations for investigation"},
 		"warn.collect_item":                 {"Сбор неполный: {0}", "Collection incomplete: {0}"},
 		"web.auth.count":                    {"Попыток", "Attempts"},
 		"web.auth.used":                     {"Использован в доступном окне", "Used in available window"},

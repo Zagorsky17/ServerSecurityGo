@@ -58,12 +58,39 @@ func (r *Investigation) Summarize() {
 			highest = max(highest, f.Risk)
 		}
 	}
+	auditFailed := false
+	if r.Audit != nil {
+		unknown := 0
+		for _, c := range r.Audit.Checks {
+			if c.Status == model.AuditUnknown {
+				unknown++
+			}
+			if c.Status != model.AuditFail {
+				continue
+			}
+			auditFailed = true
+			commands := []string{"serversecuritygo audit --all --format json"}
+			switch c.Group {
+			case "ssh":
+				commands = []string{"sshd -T"}
+			case "accounts":
+				commands = []string{"getent passwd", "getent group"}
+			case "sudo":
+				commands = []string{"visudo -c"}
+			}
+			r.Priority = append(r.Priority, Priority{c.Severity, c.Title, commands})
+		}
+		if unknown > 0 {
+			r.Incomplete = true
+			r.Warnings = append(r.Warnings, i18n.T("report.audit_incomplete", unknown))
+		}
+	}
 	sort.SliceStable(r.Priority, func(i, j int) bool { return r.Priority[i].Risk > r.Priority[j].Risk })
 	if len(r.Priority) > 10 {
 		r.Priority = r.Priority[:10]
 	}
 	r.Verdict = i18n.T("report.triage_none")
-	if highest >= model.RiskLow {
+	if highest >= model.RiskLow || auditFailed {
 		r.Verdict = i18n.T("report.triage_review")
 	}
 	if highest >= model.RiskCritical {
@@ -72,6 +99,9 @@ func (r *Investigation) Summarize() {
 	if r.Recent != nil {
 		r.Incomplete = r.Incomplete || r.Recent.Incomplete
 		r.Warnings = append(r.Warnings, r.Recent.Warnings...)
+	}
+	if r.Kind != "triage" {
+		r.Verdict = i18n.T("report.observations")
 	}
 	r.Warnings = append(r.Warnings, i18n.T("warn.triage_trust"))
 }

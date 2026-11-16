@@ -1,4 +1,4 @@
-// Package authlog reads bounded local authentication records without running commands.
+// Пакет authlog читает локальные журналы с лимитами, без запуска команд.
 package authlog
 
 import (
@@ -20,7 +20,7 @@ import (
 var sshLine = regexp.MustCompile(`^(Accepted|Failed) ([a-zA-Z/-]+) for (?:invalid user )?(\S+) from (\S+) port [0-9]+(?: ssh2)?(?:: (.*))?$`)
 var daemonLine = regexp.MustCompile(`(?:^|\s)(sshd|sshd-session|sudo|su|useradd|usermod|userdel|groupadd|groupmod|groupdel|passwd|chpasswd)(?:\[([0-9]+)\])?:\s*(.*)$`)
 
-// ParseLine never retains the original log line or an unredacted sudo command.
+// ParseLine сохраняет поля события и маскирует команду sudo, а не исходную строку.
 func ParseLine(line, source string, reference time.Time, loc *time.Location) (model.LoginEvent, bool) {
 	e := model.LoginEvent{Source: source}
 	if len(line) > 64<<10 {
@@ -43,7 +43,7 @@ func ParseLine(line, source string, reference time.Time, loc *time.Location) (mo
 		if err != nil {
 			return e, false
 		}
-		// Syslog has no year. Infer the most recent occurrence, not a future year.
+		// В syslog нет года: выбираем последнее наступившее время, не будущий год.
 		if e.Time.After(reference.Add(24 * time.Hour)) {
 			e.Time = e.Time.AddDate(-1, 0, 0)
 		}
@@ -82,6 +82,9 @@ func ParseLine(line, source string, reference time.Time, loc *time.Location) (mo
 		e.Kind = m[1]
 		if m[1] == "sudo" {
 			e.User = strings.TrimSpace(strings.SplitN(msg, ":", 2)[0])
+			if strings.ContainsAny(e.User, " ()=") {
+				e.User = ""
+			}
 			if i := strings.Index(msg, "COMMAND="); i >= 0 {
 				e.Detail = redact.Text(msg[i+8:])
 			}
@@ -92,9 +95,18 @@ func ParseLine(line, source string, reference time.Time, loc *time.Location) (mo
 			}
 			if strings.Contains(msg, "incorrect password") || strings.Contains(msg, "NOT in sudoers") || strings.Contains(msg, "authentication failure") {
 				e.Kind = "sudo_failed"
+				for _, f := range strings.Fields(msg) {
+					for _, prefix := range []string{"user=", "ruser=", "logname="} {
+						if strings.HasPrefix(f, prefix) && len(f) > len(prefix) {
+							e.User = strings.TrimSuffix(strings.TrimPrefix(f, prefix), ";")
+						}
+					}
+				}
+			} else if !strings.Contains(msg, "COMMAND=") {
+				return e, false
 			}
 		} else {
-			// Keep structured account/session facts; arbitrary PAM text can contain secrets.
+			// Произвольные сообщения PAM могут содержать секреты: сохраняем только известные поля.
 			for _, f := range strings.Fields(msg) {
 				if strings.HasPrefix(f, "name=") {
 					e.User = strings.TrimRight(strings.TrimPrefix(f, "name="), ",")
@@ -103,12 +115,18 @@ func ParseLine(line, source string, reference time.Time, loc *time.Location) (mo
 			if m[1] == "su" {
 				e.Detail = redact.Text(msg)
 			}
+			if m[1] == "passwd" || m[1] == "chpasswd" {
+				if _, user, ok := strings.Cut(msg, "password changed for "); ok {
+					e.User = strings.TrimSpace(strings.TrimPrefix(user, "user "))
+				}
+			}
+
 		}
 	}
 	return e, true
 }
 
-// Keys handles quoted authorized_keys options before the key type and blob.
+// Keys учитывает кавычки в опциях authorized_keys перед типом и телом ключа.
 func Keys(data []byte, user, path string) []model.SSHKey {
 	var out []model.SSHKey
 	for _, line := range strings.Split(string(data), "\n") {
@@ -170,8 +188,8 @@ func keyFields(s string) []string {
 	return out
 }
 
-// Utmp decodes glibc little-endian amd64 (384) and arm64 (400) records.
-// Layout comes from the inspected architecture; never guess from a divisible file size.
+// Utmp разбирает little-endian записи glibc amd64 (384 байта) и arm64 (400).
+// Формат определяется архитектурой источника, а не делимостью размера файла.
 func Utmp(data []byte, source string, arm64 bool) ([]model.LoginEvent, bool) {
 	size, off := 384, 340
 	if arm64 {

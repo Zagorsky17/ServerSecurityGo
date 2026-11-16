@@ -103,3 +103,42 @@ func TestRedactText(t *testing.T) {
 		}
 	}
 }
+func TestCustomHomePersistence(t *testing.T) {
+	root := t.TempDir()
+	out := t.TempDir()
+	os.Chmod(out, 0700)
+	for p, s := range map[string]string{"etc/passwd": "custom:x:1001:1001::/srv/custom:/bin/bash\n", "srv/custom/.bashrc": "echo profile-marker", "srv/custom/.ssh/authorized_keys": "public-key-marker", "srv/custom/.ssh/id_rsa": "PRIVATE-SECRET", "usr/lib/systemd/system/test.service": "ExecStart=/bin/true"} {
+		f := filepath.Join(root, p)
+		os.MkdirAll(filepath.Dir(f), 0700)
+		os.WriteFile(f, []byte(s), 0600)
+	}
+	archive := filepath.Join(out, "a.tar.gz")
+	_, e := Create(context.Background(), Options{HostRoot: root, ProcRoot: filepath.Join(root, "proc"), Output: archive, MaxBytes: 2 << 20, MaxBinaryBytes: 1 << 20}, &model.Snapshot{}, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	f, _ := os.Open(archive)
+	defer f.Close()
+	z, _ := gzip.NewReader(f)
+	defer z.Close()
+	tr := tar.NewReader(z)
+	names := map[string]bool{}
+	for {
+		h, e := tr.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		names[h.Name] = true
+	}
+	for _, p := range []string{"srv/custom/.bashrc", "srv/custom/.ssh/authorized_keys", "usr/lib/systemd/system/test.service"} {
+		if !names["persistence/"+p] {
+			t.Fatal("missing", p)
+		}
+	}
+	if names["persistence/srv/custom/.ssh/id_rsa"] {
+		t.Fatal("private key collected")
+	}
+}

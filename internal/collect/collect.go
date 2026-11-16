@@ -1,4 +1,4 @@
-// Package collect writes a bounded evidence archive; it never executes collected files.
+// Пакет collect создаёт ограниченный архив улик и никогда не запускает собранные файлы.
 package collect
 
 import (
@@ -200,13 +200,30 @@ func Create(ctx context.Context, opt Options, snap *model.Snapshot, audit *model
 		}
 		return b, e
 	}
-	paths := []string{"etc/crontab", "etc/ld.so.preload", "etc/sudoers", "var/log/wtmp", "var/log/wtmp.1", "var/log/btmp", "var/log/btmp.1", "var/log/lastlog", "var/log/auth.log", "var/log/auth.log.1", "var/log/auth.log.2.gz", "var/log/dpkg.log", "var/log/dpkg.log.1", "var/log/apt/history.log", "etc/os-release"}
-	complete := investigate.Walk(ctx, root, []string{"etc/cron.d", "etc/cron.daily", "etc/cron.hourly", "etc/cron.weekly", "etc/cron.monthly", "var/spool/cron", "etc/systemd/system", "etc/systemd/user", "etc/pam.d", "etc/sudoers.d", "root/.ssh", "home"}, 20000, func(p string, fi os.FileInfo) {
-		if strings.HasPrefix(p, "home/") || strings.HasPrefix(p, "root/.ssh/") {
-			if filepath.Base(p) != "authorized_keys" && !strings.Contains(p, "/.config/systemd/user/") {
-				return
+	paths := []string{"etc/rc.local", "etc/profile", "etc/bash.bashrc", "etc/ld.so.conf", "etc/environment", "etc/crontab", "etc/ld.so.preload", "etc/sudoers", "var/log/wtmp", "var/log/wtmp.1", "var/log/btmp", "var/log/btmp.1", "var/log/lastlog", "var/log/auth.log", "var/log/auth.log.1", "var/log/auth.log.2.gz", "var/log/dpkg.log", "var/log/dpkg.log.1", "var/log/apt/history.log", "etc/os-release"}
+	roots := []string{"etc/cron.d", "etc/cron.daily", "etc/cron.hourly", "etc/cron.weekly", "etc/cron.monthly", "var/spool/cron", "etc/systemd/system", "etc/systemd/user", "usr/lib/systemd/system", "lib/systemd/system", "etc/pam.d", "etc/sudoers.d", "etc/profile.d", "etc/ld.so.conf.d", "etc/init.d", "etc/update-motd.d", "etc/udev/rules.d", "etc/apt/apt.conf.d", "etc/logrotate.d"}
+	homes := map[string]bool{"root": true}
+	if b, e := read(root, "etc/passwd", 1<<20); e == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			fields := strings.Split(line, ":")
+			if len(fields) != 7 {
+				continue
+			}
+			home := filepath.Clean(fields[5])
+			if filepath.IsAbs(home) && home != "/" && len(homes) < 4096 {
+				homes[strings.TrimPrefix(home, "/")] = true
 			}
 		}
+	} else if !os.IsNotExist(e) {
+		warn("etc/passwd: " + e.Error())
+	}
+	for home := range homes {
+		for _, name := range []string{".ssh/authorized_keys", ".ssh/rc", ".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile", ".config/fish/config.fish"} {
+			paths = append(paths, home+"/"+name)
+		}
+		roots = append(roots, home+"/.config/systemd/user", home+"/.config/autostart")
+	}
+	complete := investigate.Walk(ctx, root, roots, 20000, func(p string, fi os.FileInfo) {
 		if !excluded(p) {
 			paths = append(paths, p)
 		}
@@ -216,6 +233,10 @@ func Create(ctx context.Context, opt Options, snap *model.Snapshot, audit *model
 	}
 	sort.Strings(paths)
 	for _, p := range paths {
+		if used+manifestBytes >= opt.MaxBytes-(128<<10) {
+			warn("persistence: total size limit")
+			break
+		}
 		if excluded(p) {
 			continue
 		}
@@ -251,7 +272,7 @@ func Create(ctx context.Context, opt Options, snap *model.Snapshot, audit *model
 			return res, err
 		}
 	}
-	// /proc/PID/exe is the sole deliberate symlink exception; verify PID identity twice.
+	// /proc/PID/exe — единственное исключение для симлинков; идентичность PID проверяется повторно.
 	pr, e := os.OpenRoot(opt.ProcRoot)
 	if e != nil {
 		warn("proc: " + e.Error())
@@ -278,7 +299,7 @@ func Create(ctx context.Context, opt Options, snap *model.Snapshot, audit *model
 				return res, ctx.Err()
 			}
 			current, e := pfs.ReadProcess(p.PID, opt.Now)
-			if e != nil || current.Proc.Key != p.Key {
+			if e != nil || current.Proc.Key != p.Key || current.Proc.Exe != p.Exe || current.Proc.ExeDeleted != p.ExeDeleted {
 				warn(p.Key + ": process changed")
 				continue
 			}

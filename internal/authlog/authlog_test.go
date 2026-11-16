@@ -223,3 +223,142 @@ func TestJournalShrinkAndHistoryNull(t *testing.T) {
 		t.Fatal("journal shrink missing")
 	}
 }
+func TestCopyTruncateRotation(t *testing.T) {
+	root := fixture(t)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	line := []byte("2026-11-16T11:59:00Z host sshd[1]: Accepted password for root from 192.0.2.1 port 22 ssh2\n")
+	put(t, root, "var/log/auth.log", line)
+	c := New(Options{Root: root})
+	c.Build(now, nil)
+	put(t, root, "var/log/auth.log.1", line)
+	put(t, root, "var/log/auth.log", nil)
+	rep := c.Build(now.Add(time.Minute), nil)
+	for _, f := range rep.Findings {
+		if f.ID == "log_authlog_truncated" {
+			t.Fatal("copytruncate treated as erasure")
+		}
+	}
+	// An unrelated old rotation is not evidence for a copy of the current contents.
+	put(t, root, "var/log/auth.log", []byte("different content\n"))
+	c.Build(now.Add(2*time.Minute), nil)
+	put(t, root, "var/log/auth.log", nil)
+	rep = c.Build(now.Add(3*time.Minute), nil)
+	found := false
+	for _, f := range rep.Findings {
+		found = found || f.ID == "log_authlog_truncated"
+	}
+	if !found {
+		t.Fatal("unrelated rotation hid truncation")
+	}
+}
+func TestSparseLastlogBothArchitectures(t *testing.T) {
+	for _, arm := range []bool{false, true} {
+		t.Run(map[bool]string{false: "amd64", true: "arm64"}[arm], func(t *testing.T) {
+			root := fixture(t)
+			now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+			put(t, root, "var/log/auth.log", nil)
+			put(t, root, "etc/passwd", []byte("user:x:65534:65534::/home/user:/bin/bash\n"))
+			size, ts := 292, 4
+			if arm {
+				size, ts = 296, 8
+				elf := make([]byte, 20)
+				copy(elf, "\x7fELF")
+				elf[4] = 2
+				elf[5] = 1
+				binary.LittleEndian.PutUint16(elf[18:], 183)
+				put(t, root, "usr/bin/bash", elf)
+			}
+			b := make([]byte, size)
+			if arm {
+				binary.LittleEndian.PutUint64(b, uint64(now.Add(-time.Hour).Unix()))
+			} else {
+				binary.LittleEndian.PutUint32(b, uint32(now.Add(-time.Hour).Unix()))
+			}
+			copy(b[ts:], "pts/1")
+			copy(b[ts+32:], "192.0.2.4")
+			f, e := os.OpenFile(filepath.Join(root, "var/log/lastlog"), os.O_WRONLY, 0600)
+			if e != nil {
+				t.Fatal(e)
+			}
+			_, e = f.WriteAt(b, int64(65534*size))
+			f.Close()
+			if e != nil {
+				t.Fatal(e)
+			}
+			rep := New(Options{Root: root}).Build(now, nil)
+			if len(rep.Events) != 1 || rep.Events[0].Kind != "lastlogin" || rep.Events[0].User != "user" || rep.Events[0].IP != "192.0.2.4" {
+				t.Fatal(rep.Events)
+			}
+		})
+	}
+}
+func TestSessionPairAndKeyMatch(t *testing.T) {
+	root := fixture(t)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	typ := "ssh-ed25519"
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, uint32(len(typ)))
+	b = append(b, []byte(typ)...)
+	b = append(b, 0, 0, 0, 32)
+	b = append(b, make([]byte, 32)...)
+	key := typ + " " + base64.StdEncoding.EncodeToString(b) + " laptop"
+	put(t, root, "root/.ssh/authorized_keys", []byte(key))
+	fp := Keys([]byte(key), "root", "")[0].Fingerprint
+	put(t, root, "var/log/auth.log", []byte("2026-11-16T11:00:00Z host sshd[42]: Accepted publickey for root from 192.0.2.1 port 22 ssh2: ED25519 "+fp+"\n"))
+	start := utRecord(false, 7, now.Add(-time.Hour).Unix())
+	end := utRecord(false, 8, now.Add(-30*time.Minute).Unix())
+	put(t, root, "var/log/wtmp", append(start, end...))
+	rep := New(Options{Root: root}).Build(now, nil)
+	if len(rep.Keys) != 1 || !rep.Keys[0].Used {
+		t.Fatal(rep.Keys)
+	}
+	found := false
+	for _, e := range rep.Events {
+		if e.Kind == "login" {
+			found = true
+			if e.End == nil || e.End.Sub(e.Time) != 30*time.Minute || e.KeyComment != "laptop" || e.TTY != "pts/0" {
+				t.Fatal(e)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("login missing")
+	}
+}
+func TestServiceLoginUnusualHourAndCorruptState(t *testing.T) {
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	c := New(Options{})
+	r := &model.AuthReport{Time: now, Since: now.Add(-48 * time.Hour)}
+	for i := 0; i < 20; i++ {
+		r.Events = append(r.Events, model.LoginEvent{Time: now.Add(-time.Hour), Kind: "login", User: "svc", IP: "192.0.2.1"})
+	}
+	r.Events = append(r.Events, model.LoginEvent{Time: now, Kind: "login", User: "svc", IP: "192.0.2.1"})
+	c.assess(r, map[string][]string{"svc": {"svc", "x", "10", "10", "", "/svc", "/sbin/nologin"}})
+	ids := strings.Join(r.Events[len(r.Events)-1].Findings, ",")
+	if !strings.Contains(ids, "login_unusual_time") || !strings.Contains(ids, "login_service_account") {
+		t.Fatal(ids)
+	}
+	root := fixture(t)
+	state := t.TempDir()
+	put(t, root, "var/log/auth.log", nil)
+	os.WriteFile(filepath.Join(state, "auth-state.json"), []byte("broken"), 0600)
+	rep := New(Options{Root: root, StateDir: state, ReadOnly: true}).Build(now, nil)
+	if !rep.Incomplete {
+		t.Fatal("bad baseline hidden")
+	}
+}
+func TestSudoSessionIsNotCommandOrUsername(t *testing.T) {
+	now := time.Now()
+	prefix := now.UTC().Format(time.RFC3339) + " host sudo: "
+	if _, ok := ParseLine(prefix+"pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1000)", "auth", now, time.UTC); ok {
+		t.Fatal("PAM session invented sudo command")
+	}
+	e, ok := ParseLine(prefix+"pam_unix(sudo:auth): authentication failure; logname=alice uid=1000 user=root", "auth", now, time.UTC)
+	if !ok || e.Kind != "sudo_failed" || strings.Contains(e.User, "pam_unix") {
+		t.Fatal(e)
+	}
+	e, ok = ParseLine(now.UTC().Format(time.RFC3339)+" host passwd[1]: password changed for alice", "auth", now, time.UTC)
+	if !ok || e.User != "alice" {
+		t.Fatal(e)
+	}
+}
