@@ -24,9 +24,8 @@ const (
 	defaultDockerRoot = "/var/lib/docker"
 )
 
-// containerConfig — нужные поля config.v2.json. Остальное (окружение с
-// возможными секретами, метки) в структуру не попадает и никуда не
-// выводится.
+// containerConfig — нужные поля config.v2.json. Из Env остаются только
+// имена переменных; значения и метки не сохраняются и не выводятся.
 type containerConfig struct {
 	ID     string `json:"ID"`
 	Name   string `json:"Name"`

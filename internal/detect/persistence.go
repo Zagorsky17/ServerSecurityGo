@@ -245,6 +245,7 @@ func persistenceContent(path string, data []byte, fi os.FileInfo, now time.Time,
 				if filepath.Base(module) == "pam_exec.so" {
 					risk := model.RiskMedium
 					for _, arg := range fields[j+1:] {
+						arg = strings.Trim(arg, "\"' ")
 						if filepath.IsAbs(arg) && procfs.UnsafeLibraryPath(arg) {
 							risk = model.RiskCritical
 						}

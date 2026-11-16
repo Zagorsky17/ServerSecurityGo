@@ -258,6 +258,8 @@ func (f *FS) ReadProcessLimits(pid int, bootTime time.Time, lim Limits) (*Raw, e
 		}
 	} else if isGone(err) {
 		return nil, ErrGone
+	} else {
+		p.Access = append(p.Access, "status")
 	}
 	if p.RSSBytes == 0 && st.RSSPages > 0 {
 		p.RSSBytes = st.RSSPages * uint64(os.Getpagesize())

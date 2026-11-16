@@ -2,6 +2,7 @@ package detect
 
 import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +79,29 @@ func TestSecurityAllowlistAndContext(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("unset HISTFILE")
+	}
+}
+
+func TestProcessSecuritySuppressionAndContainerContext(t *testing.T) {
+	parent := &model.Process{PID: 20, Key: "20-1", Name: "nginx", Exe: "/usr/sbin/nginx"}
+	p := &model.Process{PID: 21, PPID: 20, Key: "21-2", Name: "bash", Exe: "/usr/bin/bash", ContainerName: "web", ContainerImage: "example/web", EnvFlags: []string{"history_disabled"}}
+	cfg := DefaultConfig()
+	cfg.Allow = []AllowRule{{Exe: p.Exe, Rules: []string{"history_disabled"}}}
+	Analyze([]*model.Process{parent, p}, &Context{Cfg: cfg})
+	suppressed, context := false, false
+	for _, f := range p.Findings {
+		if f.ID == "history_disabled" {
+			suppressed = f.Suppressed
+		}
+		if f.ID == "web_spawns_shell" {
+			for _, ev := range f.Evidence {
+				if strings.Contains(ev.String(), "web (example/web)") {
+					context = true
+				}
+			}
+		}
+	}
+	if !suppressed || !context {
+		t.Fatalf("suppressed=%v context=%v: %+v", suppressed, context, p.Findings)
 	}
 }

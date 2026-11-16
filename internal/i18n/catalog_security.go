@@ -2,6 +2,7 @@ package i18n
 
 func init() {
 	add(map[string]entry{
+		"warn.container_metadata":                  {"Метаданные Docker прочитаны не полностью: {0}", "Docker metadata could not be read completely: {0}"},
 		"ev.tracer_unavailable":                    {"Трассировщик недоступен или PID изменился", "Tracer unavailable or PID changed"},
 		"rule.ptrace_attached.title":               {"Процесс трассируется", "Process is being traced"},
 		"rule.ptrace_attached.rec":                 {"Проверьте назначение трассировщика и владельца процесса; обычная отладка тоже использует ptrace.", "Verify the tracer and process owner; legitimate debugging also uses ptrace."},

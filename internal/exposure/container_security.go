@@ -212,7 +212,7 @@ func readDockerData(hostRoot string, security bool) dockerData {
 	defer root.Close()
 	issue := func(path string) {
 		if len(out.warnings) < 12 {
-			out.warnings = append(out.warnings, i18n.T("warn.docker_unreadable", path))
+			out.warnings = append(out.warnings, i18n.T("warn.container_metadata", path))
 		}
 		if len(out.findings) == 0 || out.findings[len(out.findings)-1].ID != "container_unavailable" {
 			out.findings = append(out.findings, containerFinding("container_unavailable", path, model.RiskInfo))

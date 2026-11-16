@@ -3,6 +3,7 @@ package exposure
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,4 +144,58 @@ func FuzzContainerSecurity(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestDockerSocketPermissionsAndGroup(t *testing.T) {
+	rootDir, err := os.MkdirTemp("/tmp", "ssg-sock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(rootDir) })
+	os.MkdirAll(filepath.Join(rootDir, "run"), 0700)
+	ln, err := net.Listen("unix", filepath.Join(rootDir, "run/docker.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	writeFiles(t, rootDir, map[string]string{"etc/group": "docker:x:900:alice,bob\n"})
+	os.Chmod(filepath.Join(rootDir, "run/docker.sock"), 0666)
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	got := dockerSocketChecks(root)
+	if len(got) != 2 {
+		t.Fatalf("group and world access: %+v", got)
+	}
+	for _, f := range got {
+		if f.ID != "ctr_sock_perms" {
+			t.Fatalf("%+v", f)
+		}
+	}
+	os.Chmod(filepath.Join(rootDir, "run/docker.sock"), 0600)
+	got = dockerSocketChecks(root)
+	expected := 1
+	if os.Geteuid() != 0 {
+		expected++
+	}
+	if len(got) != expected {
+		t.Fatalf("root-only mode: %+v", got)
+	}
+}
+
+func TestDockerMetadataLimitsAndDaemonErrors(t *testing.T) {
+	root := t.TempDir()
+	path := "var/lib/docker/containers/" + cid1 + "/config.v2.json"
+	writeFiles(t, root, map[string]string{path: strings.Repeat(" ", maxContainerConfig+1)})
+	got := readDockerData(root, true)
+	if len(got.findings) == 0 || !got.findings[0].Incomplete() {
+		t.Fatal("oversized config marked clean")
+	}
+	writeFiles(t, root, map[string]string{"etc/docker/daemon.json": "{malformed"})
+	got = readDockerData(root, true)
+	if len(got.warnings) == 0 {
+		t.Fatal("invalid daemon config hidden")
+	}
 }
