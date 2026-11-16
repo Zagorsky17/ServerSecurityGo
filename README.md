@@ -731,3 +731,29 @@ Contributions are very welcome! We gratefully accept bug reports, false-positive
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Login records and incident investigation
+
+The **Logins** panel reads local SSH authentication, sudo/su and account-management events, wtmp/btmp/utmp and sparse lastlog records. SSH SHA256 fingerprints are matched to each user's `authorized_keys`. Failed attempts are aggregated by IP, user and hour. The service retains seen IPs in `auth-state.json`; the initial import establishes a baseline rather than treating every address as new. Retention is the shorter of `SSG_AUTH_LOG_DAYS` and `SSG_HISTORY_RETENTION`. `SSG_AUTH_LOG_ENABLED=false` disables this collector.
+
+The **Timeline** panel and `/api/timeline?since=48h` combine process history, login events and recent file metadata. `/api/logins` uses the same authentication as other APIs. File ctime is an inode change time, not a creation time: chmod/chown and package maintenance also change it. A recent ctime with an old mtime is context for investigation, not proof of timestomping. Package-update windows are approximate and do not suppress findings.
+
+```sh
+serversecuritygo triage --format html --output /root/triage.html
+serversecuritygo triage --full --format json --output /root/triage.json
+serversecuritygo timeline --since 48h --format md --output /root/timeline.md
+serversecuritygo recent --days 3 --format json --output /root/recent.json
+serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
+```
+
+`triage` includes the process scan, configuration audit, authentication records, recent files and ten priority checks with shell-quoted verification commands. `--full` waits for the existing PID sweep and selected dpkg integrity checks; it does not claim a complete SUID/capability inventory. Verification commands are displayed, never executed. Reports support text/JSON/HTML/Markdown and the existing `--fail-on` exit codes. With `SSG_HOST_ROOT` pointing to an image and the default `/proc`, investigation commands exclude the analysis machine's live processes and clearly report unavailable live checks. One-shot commands do not write service history or authentication baselines.
+
+`collect` creates a new archive, refuses overwrite, requires a private destination directory (700), and writes the archive and entries with mode 600. It includes process/network/audit data, bounded persistence and log copies, maps, environment **names with every value omitted**, executable SHA256 hashes and copies of deleted/memfd executables when accessible. `/proc/PID/exe` is the only intentional file-symlink exception; PID identity and executable metadata are rechecked. `MANIFEST.sha256` hashes the stored archive members; `collection.json` records omissions. The CLI also prints the archive SHA256. Do not execute collected binaries. Collection is CLI-only; no archive download or collection endpoint is enabled in the web panel.
+
+The default total collection budget is 500 MiB (`SSG_COLLECT_MAX_MB`), with 50 MiB per executable (`SSG_COLLECT_MAX_BINARY_MB`) and a three-minute deadline. The total budget bounds compressed output, uncompressed members and executable reads; individual configuration/log files are limited to 2 MiB. Private keys, shadow/gshadow and `.env` files are excluded; recognized secrets in text are masked. Archives still contain personal data and potentially sensitive commands; keep them private. A manifest demonstrates consistency of captured bytes, not host authenticity or an atomic filesystem snapshot.
+
+Authentication reads have byte/event bounds: at most 5,000 events and keys, fixed auth.log rotations (`.1`, `.2.gz`), and explicit incomplete warnings for unavailable or over-limit sources. glibc little-endian amd64 and arm64 accounting layouts are supported; unknown image architectures are not guessed. Binary journald parsing remains a later stage: hosts without auth.log have limited authentication visibility. SSH key options/custom `AuthorizedKeysFile`, journal-vacuum intent and all log-rotation schemes cannot be inferred reliably. Journal-size decreases and shell-history suppression require review; empty logs alone are not proof of deletion. Recent-file scans stop at 100,000 paths, 10,000 results or ten seconds and do not traverse symlinks. The service refreshes that metadata hourly; the timeline contains only available, retained observations.
+
+New finding IDs: `login_new_ip`, `login_password_root`, `login_after_bruteforce`, `login_unusual_time`, `login_service_account`, `log_wtmp_truncated`, `log_wtmp_gap`, `log_authlog_truncated`, `log_history_null`, `log_journal_vacuum`, `log_utmp_missing`. A service-account authentication is LOW without a confirmed terminal and HIGH when a session TTY is matched. A successful login after at least ten failures from the same IP within ten minutes is flagged; shared NAT addresses and administrator activity must be considered. Local checks cannot establish trust after kernel compromise: preserve a disk image and analyze it independently.
+
+Accounting layouts follow the [glibc utmp definitions](https://github.com/bminor/glibc/blob/master/bits/utmp.h) and [aarch64 ABI definitions](https://github.com/bminor/glibc/blob/master/sysdeps/aarch64/bits/wordsize.h), checked on 2026-11-16. Linux CI compares a C-generated accounting record against the Go parser and collects a deleted executable from an isolated test process.

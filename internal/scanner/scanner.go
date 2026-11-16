@@ -18,12 +18,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/authlog"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fail2ban"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/investigate"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
@@ -35,6 +37,8 @@ import (
 
 // Options — параметры сканера.
 type Options struct {
+	Auth     *authlog.Collector
+	Recent   bool
 	FS       *procfs.FS
 	Detect   detect.Config
 	History  *history.Store
@@ -71,6 +75,7 @@ type MetricsSource interface {
 
 // Scanner — периодический сканер процессов.
 type Scanner struct {
+	recent      *model.RecentReport
 	opt         Options
 	mu          sync.RWMutex
 	snap        *model.Snapshot
@@ -243,6 +248,18 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 			snap.Warnings = append(snap.Warnings, f.Title)
 		}
 	}
+	if s.opt.Auth != nil {
+		snap.Auth = s.opt.Auth.Build(start, snap.Processes)
+		snap.System = append(snap.System, snap.Auth.Findings...)
+		snap.Warnings = append(snap.Warnings, snap.Auth.Warnings...)
+	}
+	if s.opt.Recent {
+		if s.recent == nil || start.Sub(s.recent.Time) >= time.Hour {
+			s.recent = investigate.Recent(context.Background(), s.opt.FS.HostRoot, start.Add(-7*24*time.Hour), start)
+		}
+		snap.Recent = s.recent
+	}
+	investigate.Attach(snap)
 	events := hist.Record(start, snap.Processes, snap.System)
 
 	snap.Stats = stats(snap)

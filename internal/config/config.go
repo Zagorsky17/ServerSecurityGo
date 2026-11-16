@@ -26,28 +26,31 @@ import (
 
 // Config — все настройки приложения.
 type Config struct {
-	ListenAddr       string // адрес веб-панели; "" — панель выключена (SSG_LISTEN_ADDR=off)
-	SocketPath       string // локальный Unix-сокет для терминального интерфейса; "" — выключен
-	ScanInterval     time.Duration
-	DataDir          string
-	ProcRoot         string
-	HostRoot         string
-	AuthPasswordHash string
-	SessionTTL       time.Duration
-	TLSCert          string
-	TLSKey           string
-	TrustProxyTLS    bool
-	AllowedHosts     []string
-	LocalUIDs        []int // кому разрешена панель без пароля по loopback
-	Retention        time.Duration
-	EventsMaxMB      int
-	CPUThreshold     float64
-	CPUSustainScans  int
-	MemThreshold     float64
-	RecentDays       int
-	AllowlistFile    string
-	MaxFiles         int
-	LogLevel         string
+	AuthLogEnabled     bool
+	CollectMaxMB       int
+	CollectMaxBinaryMB int
+	ListenAddr         string // адрес веб-панели; "" — панель выключена (SSG_LISTEN_ADDR=off)
+	SocketPath         string // локальный Unix-сокет для терминального интерфейса; "" — выключен
+	ScanInterval       time.Duration
+	DataDir            string
+	ProcRoot           string
+	HostRoot           string
+	AuthPasswordHash   string
+	SessionTTL         time.Duration
+	TLSCert            string
+	TLSKey             string
+	TrustProxyTLS      bool
+	AllowedHosts       []string
+	LocalUIDs          []int // кому разрешена панель без пароля по loopback
+	Retention          time.Duration
+	EventsMaxMB        int
+	CPUThreshold       float64
+	CPUSustainScans    int
+	MemThreshold       float64
+	RecentDays         int
+	AllowlistFile      string
+	MaxFiles           int
+	LogLevel           string
 	// RootkitInterval и IntegrityInterval задают паузу между фоновыми проверками.
 	RootkitInterval   time.Duration
 	IntegrityInterval time.Duration
@@ -82,8 +85,7 @@ type Config struct {
 	// NetMaxSockets — предел числа сокетов на одно сетевое пространство
 	// имён при разборе таблиц.
 	NetMaxSockets int
-	// LogDays — глубина разбора журналов (SSG_AUTH_LOG_DAYS): сейчас —
-	// журнала fail2ban.
+	// LogDays — глубина разбора журналов аутентификации и fail2ban (SSG_AUTH_LOG_DAYS).
 	LogDays int
 	// Lang — язык по умолчанию (SSG_LANG): вывод CLI, журнал и первое
 	// открытие панели. Пусто — определяется автоматически (локаль
@@ -97,7 +99,7 @@ const DefaultSocketPath = "/run/serversecuritygo/api.sock"
 
 // Default возвращает значения по умолчанию.
 func Default() Config {
-	return Config{
+	return Config{AuthLogEnabled: true, CollectMaxMB: 500, CollectMaxBinaryMB: 50,
 		ListenAddr:      "127.0.0.1:8090",
 		SocketPath:      DefaultSocketPath,
 		ScanInterval:    30 * time.Second,
@@ -289,6 +291,19 @@ func FromEnv() (Config, error) {
 	flt("SSG_MEM_THRESHOLD", &c.MemThreshold)
 	num("SSG_RECENT_DAYS", &c.RecentDays)
 	num("SSG_AUTH_LOG_DAYS", &c.LogDays)
+	num("SSG_COLLECT_MAX_MB", &c.CollectMaxMB)
+	num("SSG_COLLECT_MAX_BINARY_MB", &c.CollectMaxBinaryMB)
+	if c.CollectMaxMB < 1 || c.CollectMaxMB > 4096 || c.CollectMaxBinaryMB < 1 || c.CollectMaxBinaryMB > 1024 {
+		errs = append(errs, i18n.Errorf("err.collect_limit"))
+	}
+	if v := os.Getenv("SSG_AUTH_LOG_ENABLED"); v != "" {
+		b, e := strconv.ParseBool(v)
+		if e != nil {
+			errs = append(errs, i18n.Errorf("err.env_bool", "SSG_AUTH_LOG_ENABLED"))
+		}
+		c.AuthLogEnabled = b
+	}
+
 	str("SSG_ALLOWLIST_FILE", &c.AllowlistFile)
 	num("SSG_MAX_FILES_PER_PROCESS", &c.MaxFiles)
 	str("SSG_LOG_LEVEL", &c.LogLevel)

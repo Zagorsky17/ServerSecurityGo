@@ -21,9 +21,8 @@ type seg struct {
 }
 type line []seg
 
-// minHeight — минимальная высота окна для раскладки панелей: свёрнутые
-// панели занимают до 2 строк, плюс место для развёрнутой и подсказок.
-func (a *App) minHeight() int { return 2*(len(a.visible())-2) + 4 }
+// minHeight оставляет свёрнутым панелям по строке, активной — рамку и строку списка.
+func (a *App) minHeight() int { return len(a.visible()) + 2 }
 
 // draw рисует кадр целиком и выводит его.
 func (a *App) draw() {
@@ -85,7 +84,7 @@ func (a *App) render() {
 // несколько строк.
 //
 // В низком окне (80×24) свёрнутые панели сжимаются до рамки с заголовком
-// (до 1 строки), а если и этого мало — прячется «Сводка»: развёрнутой
+// (до одной строки), а если и этого мало — прячется «Сводка»: развёрнутой
 // панели нужно хотя бы несколько строк списка.
 func (a *App) layoutLeft(lw, contentH int) {
 	// Свёрнутые панели-списки: все, кроме развёрнутой.
@@ -285,6 +284,8 @@ func (a *App) columnsHeader(p panelID, w int) string {
 		return fit(a.tr("web.ufw.files"), w)
 	case pF2B:
 		return fit(a.tr("tui.cols.f2b"), w)
+	case pAuth, pTimeline:
+		return fit(a.tr("tui.cols.hist"), w)
 	case pHist:
 		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
@@ -433,6 +434,12 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{fit(until, 11) + " ", stDim},
 			{"×" + strconv.Itoa(b.Count), cst},
 		}
+	case pAuth:
+		e := a.logins[i]
+		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.User + " " + e.IP + " " + e.Kind, riskStyle(e.Risk.String())}}
+	case pTimeline:
+		e := a.timeline[i]
+		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.Kind + " " + a.txt(e.Detail), riskStyle(e.Risk.String())}}
 	case pHist:
 		e := a.events[i]
 		who := e.Name
@@ -713,6 +720,58 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.metricDetail(b, m)
 		return a.tr("tui.panel.metrics") + " · " + m.Name, b.lines
+	case pAuth:
+		if a.data.Auth != nil {
+			for _, w := range a.data.Auth.Warnings {
+				b.para(a.txt(w), stDim, 0)
+			}
+		}
+		i := a.lists[pAuth].cursor
+		if i >= 0 && i < len(a.logins) {
+			e := a.logins[i]
+			b.para(fmtTime(e.Time)+" "+e.Kind+" "+e.Risk.String(), stBold, 0)
+			b.kv(a.tr("tui.k.user"), e.User)
+			b.kv("IP", e.IP)
+			b.kv(a.tr("web.auth.method"), e.Method)
+			b.kv(a.tr("web.auth.key"), e.Fingerprint+" "+e.KeyComment)
+			b.kv("TTY", e.TTY)
+			b.para(e.Source+" "+e.Detail, stNormal, 0)
+			if e.End != nil {
+				b.para(e.End.Sub(e.Time).String(), stNormal, 0)
+			}
+			for _, id := range e.Findings {
+				b.para(id, stNormal, 0)
+			}
+		}
+		if a.data.Auth != nil {
+			b.header(a.tr("web.auth.summary"))
+			for _, rows := range [][]model.AuthCount{a.data.Auth.FailedIPs, a.data.Auth.FailedUsers, a.data.Auth.FailedHours} {
+				for _, row := range rows[:min(len(rows), 10)] {
+					b.kv(row.Name, strconv.Itoa(row.Count))
+				}
+			}
+			b.header(a.tr("web.auth.key"))
+			for _, key := range a.data.Auth.Keys[:min(len(a.data.Auth.Keys), 20)] {
+				used := a.tr("web.auth.no")
+				if key.Used {
+					used = a.tr("web.auth.yes")
+				}
+				b.para(key.User+" "+key.Fingerprint+" "+key.Comment+" · "+used, stNormal, 0)
+			}
+		}
+		return a.tr("web.tab.logins"), b.lines
+	case pTimeline:
+		i := a.lists[pTimeline].cursor
+		if i >= 0 && i < len(a.timeline) {
+			e := a.timeline[i]
+			b.para(fmtTime(e.Time)+" "+e.Kind, stBold, 0)
+			b.para(e.Source, stDim, 0)
+			b.para(a.txt(e.Detail), stNormal, 0)
+			for _, cmd := range e.VerifyCommands {
+				b.para(cmd, stNormal, 0)
+			}
+		}
+		return a.tr("web.tab.timeline"), b.lines
 	case pHist:
 		e, ok := a.selEvent()
 		if !ok {
@@ -792,6 +851,9 @@ func (a *App) processDetail(b *lb, key string) {
 		b.header(a.tr("tui.h.findings"))
 		for _, f := range active {
 			findingBlock(b, f)
+			for _, cmd := range f.VerifyCommands {
+				b.para(cmd, stNormal, 2)
+			}
 		}
 	}
 	if len(p.Recommendations) > 0 {
@@ -1338,6 +1400,9 @@ func fmtDur(a *App, sec int64) string {
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
 	rs := f.Risk.String()
 	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
+	for _, cmd := range f.VerifyCommands {
+		b.para(cmd, stNormal, 0)
+	}
 	b.kv(a.tr("tui.k.file"), f.Path)
 	b.kv(a.tr("tui.k.modified"), fmtTime(f.ModTime))
 	b.kv(a.tr("tui.k.rule"), f.ID)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/investigate"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
@@ -24,11 +25,13 @@ import (
 
 // Data — всё, что нужно интерфейсу для одного кадра.
 type Data struct {
-	Status  view.Status
-	Procs   []view.Summary
-	Sockets []model.Socket
-	Events  []model.Event // новые первыми
-	System  []model.SystemFinding
+	Auth     *model.AuthReport
+	Timeline []model.TimelineEvent
+	Status   view.Status
+	Procs    []view.Summary
+	Sockets  []model.Socket
+	Events   []model.Event // новые первыми
+	System   []model.SystemFinding
 	// Exposure — открытые порты; nil, если служба старой версии без
 	// /api/exposure.
 	Exposure *model.ExposureReport
@@ -144,8 +147,11 @@ func (l *LocalSource) Fetch() (*Data, error) {
 	if l.met != nil {
 		st.Metrics = l.met.Brief()
 	}
-	d := &Data{Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap),
+	d := &Data{Auth: snap.Auth, Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap),
 		UFW: snap.UFW, Exposure: view.Exposure(snap), Audit: &av, Metrics: l.metricsView()}
+	if snap.Auth != nil || snap.Recent != nil {
+		d.Timeline = investigate.Timeline(snap, ev, snap.Recent, time.Now().Add(-48*time.Hour))
+	}
 	if l.netOn {
 		nv := view.NetLoad(snap.NetLoad, true)
 		d.Net = &nv
@@ -321,6 +327,20 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 			return nil, fmt.Errorf("/api/netload: %w", err)
 		}
 	}
+	var auth struct {
+		Report *model.AuthReport `json:"report"`
+	}
+	if err := r.get("/api/logins", &auth); err != nil && !errors.Is(err, errNotFound) {
+		return nil, err
+	}
+	d.Auth = auth.Report
+	var timeline struct {
+		Events []model.TimelineEvent `json:"events"`
+	}
+	if err := r.get("/api/timeline", &timeline); err != nil && !errors.Is(err, errNotFound) {
+		return nil, err
+	}
+	d.Timeline = timeline.Events
 	if c, b := r.audit, d.Status.Audit; c != nil && c.Enabled == b.Enabled && c.Running == b.Running && c.Time.Equal(b.Time) {
 		d.Audit = c
 		return d, nil

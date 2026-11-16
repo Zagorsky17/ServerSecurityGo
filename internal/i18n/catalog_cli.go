@@ -12,6 +12,10 @@ func init() {
   serversecuritygo serve [--env-file PATH]          запустить сканер и веб-панель
   serversecuritygo scan [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--min-risk LOW] [--env-file PATH]
   serversecuritygo audit [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--all] [--env-file PATH]
+  serversecuritygo triage [--full] [--format text|json|html|md] [--output FILE]
+  serversecuritygo timeline [--since 48h] [--format text|json|html|md]
+  serversecuritygo recent [--days 3] [--format text|json|html|md]
+  serversecuritygo collect [--output /var/backups/serversecuritygo/evidence.tar.gz]
                                                     проверка настроек SSH, учётных записей, sudo и ядра
   serversecuritygo demo [--tui] [--listen ADDR]     демонстрационные данные (веб или терминал)
   serversecuritygo hash-password                    хеш пароля для SSG_AUTH_PASSWORD_HASH
@@ -30,6 +34,10 @@ Usage:
   serversecuritygo serve [--env-file PATH]          run the scanner and the web panel
   serversecuritygo scan [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--min-risk LOW] [--env-file PATH]
   serversecuritygo audit [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--all] [--env-file PATH]
+  serversecuritygo triage [--full] [--format text|json|html|md] [--output FILE]
+  serversecuritygo timeline [--since 48h] [--format text|json|html|md]
+  serversecuritygo recent [--days 3] [--format text|json|html|md]
+  serversecuritygo collect [--output /var/backups/serversecuritygo/evidence.tar.gz]
                                                     check SSH, account, sudo and kernel settings
   serversecuritygo demo [--tui] [--listen ADDR]     demo data (web or terminal)
   serversecuritygo hash-password                    password hash for SSG_AUTH_PASSWORD_HASH

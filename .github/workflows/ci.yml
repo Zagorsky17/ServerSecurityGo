@@ -86,6 +86,11 @@ jobs:
           test "$code" = 2
       - name: Настоящий systemd-юнит и watchdog
         run: sudo --preserve-env=GITHUB_ACTIONS bash .github/scripts/selfcheck-systemd.sh /tmp/ssg
+      - name: Расследование и сбор улик
+        run: |
+          go test -race -c -o /tmp/collect.test ./internal/collect
+          sudo /tmp/collect.test -test.v -test.run '^TestRealDeletedExecutable$'
+          bash .github/scripts/investigation.sh /tmp/ssg
       - name: Кросс-сборка
         run: make build-linux
       - name: shellcheck

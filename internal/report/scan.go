@@ -70,6 +70,9 @@ func (s *Scan) Verdict() (model.Risk, bool) {
 
 // Incomplete — часть данных не прочитана (нет прав на процессы).
 func (s *Scan) Incomplete() bool {
+	if s.Snap.Auth != nil && s.Snap.Auth.Incomplete {
+		return true
+	}
 	for _, f := range s.Snap.System {
 		if f.Incomplete() {
 			return true
@@ -105,7 +108,7 @@ func (s *Scan) renderJSON(w io.Writer, l i18n.Lang) error {
 		"schema_version": SchemaVersion, "kind": "scan", "tool": "serversecuritygo", "version": s.Version,
 		"time": s.Snap.Time, "host": s.Snap.Host, "stats": s.Snap.Stats, "warnings": s.Snap.Warnings,
 		"minRisk": s.MinRisk, "verdict": v, "found": found, "incomplete": s.Incomplete(),
-		"processes": nonNil(s.procs), "system": nonNil(s.system), "exposure": s.exposure,
+		"auth": s.Snap.Auth, "processes": nonNil(s.procs), "system": nonNil(s.system), "exposure": s.exposure,
 	}, l)
 	if err != nil {
 		return err

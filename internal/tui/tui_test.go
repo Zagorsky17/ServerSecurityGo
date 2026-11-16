@@ -815,7 +815,7 @@ func TestNoFail2banPanel(t *testing.T) {
 	if a.focus != pStatus {
 		t.Errorf("Tab после последней панели: %d", a.focus)
 	}
-	if a.minHeight() != 22 {
+	if a.minHeight() != 13 {
 		t.Errorf("минимальная высота без fail2ban: %d", a.minHeight())
 	}
 }

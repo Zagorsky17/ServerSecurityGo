@@ -731,3 +731,29 @@ API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`G
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。
+
+### 登录记录与事件调查
+
+**登录**面板读取本地 SSH、sudo/su、账户变更事件、wtmp/btmp/utmp 和稀疏 lastlog 文件。SSH SHA256 指纹与用户的 `authorized_keys` 匹配；失败尝试按 IP、用户和小时汇总。服务将已见 IP 保存到 `auth-state.json`，首次导入建立基线，不把所有地址都标为新地址。保留期限取 `SSG_AUTH_LOG_DAYS` 与 `SSG_HISTORY_RETENTION` 中较短者。`SSG_AUTH_LOG_ENABLED=false` 关闭此采集器。
+
+**时间线**面板和 `/api/timeline?since=48h` 合并进程历史、登录事件和最近文件元数据。`/api/logins` 使用与其他 API 相同的身份验证。ctime 是 inode 变更时间，不是创建时间；chmod/chown 和软件包维护也会改变它。旧 mtime 与新 ctime 的差异仅供调查，不证明时间被伪造。软件包更新窗口是近似关联，不会抑制发现。
+
+```sh
+serversecuritygo triage --format html --output /root/triage.html
+serversecuritygo triage --full --format json --output /root/triage.json
+serversecuritygo timeline --since 48h --format md --output /root/timeline.md
+serversecuritygo recent --days 3 --format json --output /root/recent.json
+serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
+```
+
+`triage` 包含进程扫描、配置审计、认证记录、最近文件和十项优先检查，附带经过 shell 引用处理的验证命令。`--full` 等待现有 PID 遍历及选定 dpkg 文件校验，不代表完整的 SUID/capabilities 清单。验证命令只展示，不执行。报告支持 text/JSON/HTML/Markdown 及现有 `--fail-on` 退出码。`SSG_HOST_ROOT` 指向磁盘镜像且使用默认 `/proc` 时，调查命令排除分析机器的实时进程，并明确说明无法进行的实时检查。单次命令不写入服务历史或登录基线。
+
+`collect` 创建新归档，拒绝覆盖，要求私有目标目录（700），归档及其文件权限为 600。内容包括进程、网络、审计数据，受限的持久化配置与日志副本，maps、**所有值均被省略的环境变量名称**，可执行文件 SHA256，以及可访问的已删除/memfd 可执行文件副本。`/proc/PID/exe` 是唯一有意允许的文件符号链接例外；程序会复查 PID 身份与文件元数据。`MANIFEST.sha256` 包含已保存文件的哈希，`collection.json` 记录遗漏，CLI 同时输出归档 SHA256。不要执行采集的二进制文件。采集仅通过 CLI 提供，网页不启用采集或归档下载接口。
+
+默认总预算为 500 MiB（`SSG_COLLECT_MAX_MB`），每个可执行文件 50 MiB（`SSG_COLLECT_MAX_BINARY_MB`），限时三分钟。总预算限制压缩输出、未压缩成员和可执行文件读取；单个配置或日志文件限制为 2 MiB。私钥、shadow/gshadow 和 `.env` 被排除，文本中识别出的秘密被遮盖。归档仍包含个人数据和可能敏感的命令，必须私密保存。清单只能核验已捕获字节的一致性，不能证明主机可信，也不是文件系统的原子快照。
+
+认证读取受字节和记录数量限制：最多 5,000 个事件和密钥，固定 auth.log 轮换文件（`.1`、`.2.gz`）。不可用或超限的数据源会明确报告不完整。支持 glibc 小端 amd64 与 arm64 记账格式；不会猜测未知镜像架构。二进制 journald 解析留待后续，因此没有 auth.log 的主机认证可见性有限。无法可靠推断密钥选项、自定义 `AuthorizedKeysFile`、journal 清理意图和所有轮换方案。journal 大幅缩小或 shell 历史被禁用需要人工核查；空日志本身不证明删除。最近文件遍历限制为 100,000 个路径、10,000 个结果或十秒，不遍历符号链接。服务每小时刷新元数据；时间线只包含可用且仍被保留的观察记录。
+
+新增发现 ID：`login_new_ip`、`login_password_root`、`login_after_bruteforce`、`login_unusual_time`、`login_service_account`、`log_wtmp_truncated`、`log_wtmp_gap`、`log_authlog_truncated`、`log_history_null`、`log_journal_vacuum`、`log_utmp_missing`。服务账户认证在未确认终端时为 LOW，匹配到会话 TTY 时为 HIGH。同一 IP 十分钟内至少十次失败后成功登录会被标记；共享 NAT 和管理员活动也可能解释该现象。内核遭入侵后，本地检查不能恢复信任，应保留磁盘镜像并在独立环境分析。
+
+记账格式于 2026-11-16 对照 [glibc utmp 定义](https://github.com/bminor/glibc/blob/master/bits/utmp.h)及 [aarch64 ABI 定义](https://github.com/bminor/glibc/blob/master/sysdeps/aarch64/bits/wordsize.h)核对。Linux CI 将 C 生成的记账记录与 Go 解析器进行比较，并从独立测试进程采集已删除的可执行文件。
