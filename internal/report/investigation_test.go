@@ -40,3 +40,14 @@ func TestInvestigationAuditAndObservationVerdict(t *testing.T) {
 		t.Fatal("metadata inventory claimed clean system")
 	}
 }
+func TestInvestigationJSONTranslated(t *testing.T) {
+	r := &Investigation{Kind: "recent"}
+	r.Summarize()
+	var b bytes.Buffer
+	if e := r.Render(&b, JSON, i18n.EN); e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(b.String(), "report.observations") || !strings.Contains(b.String(), "Available observations") {
+		t.Fatal(b.String())
+	}
+}

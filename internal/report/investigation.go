@@ -109,7 +109,11 @@ func (r *Investigation) Render(w io.Writer, f Format, l i18n.Lang) error {
 	if f == JSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		return enc.Encode(r)
+		out, err := i18n.RenderJSON(r, l)
+		if err != nil {
+			return err
+		}
+		return enc.Encode(out)
 	}
 	d := &doc{Lang: string(l), Title: r.Kind, Subtitle: r.Time.Format(time.RFC3339), Verdict: r.Verdict.In(l), Summary: i18n.T("report.investigation_state", r.Incomplete).In(l)}
 	for _, n := range r.Warnings {

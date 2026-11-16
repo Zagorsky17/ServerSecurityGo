@@ -724,6 +724,22 @@ func (a *App) mainContent(w int) (string, []line) {
 				b.para(id, stNormal, 0)
 			}
 		}
+		if a.data.Auth != nil {
+			b.header(a.tr("web.auth.summary"))
+			for _, rows := range [][]model.AuthCount{a.data.Auth.FailedIPs, a.data.Auth.FailedUsers, a.data.Auth.FailedHours} {
+				for _, row := range rows[:min(len(rows), 10)] {
+					b.kv(row.Name, strconv.Itoa(row.Count))
+				}
+			}
+			b.header(a.tr("web.auth.key"))
+			for _, key := range a.data.Auth.Keys[:min(len(a.data.Auth.Keys), 20)] {
+				used := a.tr("web.auth.no")
+				if key.Used {
+					used = a.tr("web.auth.yes")
+				}
+				b.para(key.User+" "+key.Fingerprint+" "+key.Comment+" · "+used, stNormal, 0)
+			}
+		}
 		return a.tr("web.tab.logins"), b.lines
 	case pTimeline:
 		i := a.lists[pTimeline].cursor
