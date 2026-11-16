@@ -41,7 +41,7 @@ const riskBadge = (r) => h('span', { class: 'risk risk-' + r }, r);
 // Названия типов событий и категорий признаков — из общего каталога
 // (event.<тип>, cat.<категория>), неизвестное значение выводится как есть.
 const EVENT_TYPES = ['baseline', 'started', 'exited', 'changed', 'risk_up', 'risk_down', 'finding', 'listen', 'system', 'audit'];
-const CATEGORIES = ['location', 'integrity', 'masquerade', 'chain', 'network', 'content', 'behavior', 'environment', 'privilege', 'persistence', 'exposure', 'info'];
+const CATEGORIES = ['location', 'integrity', 'masquerade', 'chain', 'network', 'content', 'behavior', 'environment', 'privilege', 'persistence', 'exposure', 'rootkit', 'info'];
 const eventName = (t) => (EVENT_TYPES.includes(t) ? tr('event.' + t) : t);
 
 // Подписи доступности порта, состояния ufw и межсетевого экрана для порта.

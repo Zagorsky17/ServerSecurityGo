@@ -28,14 +28,48 @@ jobs:
         run: |
           go test -c -o /tmp/procfs.test ./internal/procfs
           sudo /tmp/procfs.test -test.v -test.run TestRealProc
+      - name: Процессы, модули и dpkg на настоящем Linux
+        run: |
+          go test -race -c -o /tmp/rootkit.test ./internal/rootkit
+          go test -race -c -o /tmp/integrity.test ./internal/integrity
+          sudo /tmp/rootkit.test -test.v -test.run '^TestReal'
+          sudo /tmp/integrity.test -test.v -test.run '^TestReal'
       - name: Разовое сканирование настоящей системы
         run: |
           go build -o /tmp/ssg ./cmd/serversecuritygo
           # --fail-on none: находки на раннере CI (сборки из /tmp) не должны
           # ронять шаг; коды выхода проверяет отдельный тест.
-          sudo /tmp/ssg scan --min-risk INFO --fail-on none | head -40
+          # Быстрый scan явно неполон: обход PID и хеширование требуют --full.
+          set +e
+          sudo /tmp/ssg scan --min-risk INFO --fail-on none > /tmp/scan.txt
+          code=$?
+          set -e
+          test "$code" = 3
+          head -40 /tmp/scan.txt
+          set +e
           sudo /tmp/ssg scan --format json --min-risk INFO --fail-on none > /tmp/scan.json
-          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
+          code=$?
+          set -e
+          test "$code" = 3
+          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['incomplete'] and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
+      - name: Полный обход PID и файлов настоящего Linux
+        timeout-minutes: 15
+        run: |
+          set +e
+          sudo /tmp/ssg scan --full --format json --output /tmp/full-scan.json --min-risk INFO --fail-on none
+          code=$?
+          set -e
+          test "$code" = 0 || test "$code" = 3
+          sudo python3 - <<'PYCODE'
+          import json
+          d = json.load(open('/tmp/full-scan.json'))
+          findings = d['system']
+          ids = {f['id'] for f in findings}
+          assert 'rootkit_sweep_complete' in ids, findings
+          assert 'integrity_complete' in ids, findings
+          assert not ids.intersection({'hidden_process', 'kmod_hidden', 'rootkit_sweep_pending', 'integrity_pending'}), findings
+          print('System finding IDs:', sorted(ids), 'incomplete:', d['incomplete'])
+          PYCODE
       - name: Аудит настроек настоящей системы
         run: |
           sudo /tmp/ssg audit --all --fail-on none | head -80

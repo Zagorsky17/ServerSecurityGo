@@ -47,6 +47,10 @@ type Config struct {
 	AllowlistFile    string
 	MaxFiles         int
 	LogLevel         string
+	// RootkitInterval и IntegrityInterval задают паузу между фоновыми проверками.
+	RootkitInterval   time.Duration
+	IntegrityInterval time.Duration
+
 	// AuditEnabled — служба проверяет настройки безопасности (SSH,
 	// учётные записи, sudo) при запуске и затем каждые AuditInterval.
 	AuditEnabled  bool
@@ -113,6 +117,9 @@ func Default() Config {
 		AuditEnabled:    true,
 		AuditInterval:   time.Hour,
 		LogDays:         14,
+
+		RootkitInterval:   10 * time.Minute,
+		IntegrityInterval: 24 * time.Hour,
 
 		MetricsEnabled:    true,
 		MetricsInterval:   5 * time.Second,
@@ -207,6 +214,8 @@ func FromEnv() (Config, error) {
 		c.SocketPath = ""
 	}
 	dur("SSG_SCAN_INTERVAL", &c.ScanInterval)
+	dur("SSG_ROOTKIT_INTERVAL", &c.RootkitInterval)
+	dur("SSG_INTEGRITY_INTERVAL", &c.IntegrityInterval)
 	str("SSG_DATA_DIR", &c.DataDir)
 	str("SSG_PROC_ROOT", &c.ProcRoot)
 	str("SSG_HOST_ROOT", &c.HostRoot)
@@ -291,6 +300,9 @@ func FromEnv() (Config, error) {
 	}
 	if c.ScanInterval < 2*time.Second {
 		errs = append(errs, i18n.Errorf("err.env_interval_min"))
+	}
+	if c.RootkitInterval < time.Minute || c.IntegrityInterval < time.Minute {
+		errs = append(errs, i18n.Errorf("err.env_verification_interval_min"))
 	}
 	if c.AuditInterval < time.Minute {
 		errs = append(errs, i18n.Errorf("err.env_audit_interval_min"))

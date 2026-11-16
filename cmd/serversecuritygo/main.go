@@ -30,6 +30,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,11 +43,13 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/report"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/rootkit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/tui"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
@@ -195,7 +198,7 @@ func cmdServe(args []string) error {
 	mc := metricsCollector(cfg, cfg.DataDir, log)
 	nl := netMonitor(cfg, detCfg, mc)
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log,
-		LogDays: cfg.LogDays, NetLoad: nl})
+		LogDays: cfg.LogDays, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, Interval: cfg.RootkitInterval}), Integrity: integrityRunner(cfg, detCfg, false)})
 	if mc != nil {
 		sc.SetMetrics(mc) // признаки метрик попадают в системные находки
 	}
@@ -500,7 +503,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	nl := netMonitor(cfg, detCfg, mc)
 	pfs.MaxSockets = cfg.NetMaxSockets
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet,
-		LogDays: cfg.LogDays, NetLoad: nl})
+		LogDays: cfg.LogDays, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval}), Integrity: integrityRunner(cfg, detCfg, true)})
 	if mc != nil {
 		sc.SetMetrics(mc)
 	}
@@ -531,6 +534,7 @@ func runScan(args []string) (int, error) {
 	output := fs.String("output", "", i18n.S("cli.flag.output"))
 	failOn := fs.String("fail-on", "HIGH", i18n.S("cli.flag.fail_on"))
 	minRisk := fs.String("min-risk", "LOW", i18n.S("cli.flag.min_risk"))
+	full := fs.Bool("full", false, i18n.S("cli.flag.full"))
 	sample := fs.Duration("sample", 0, i18n.S("cli.flag.sample"))
 	_ = fs.Parse(args)
 
@@ -558,7 +562,15 @@ func runScan(args []string) (int, error) {
 	hist, _ := history.Open(history.Options{CPUThreshold: cfg.CPUThreshold, MemThreshold: cfg.MemThreshold})
 	pfs := procfs.New(cfg.ProcRoot, cfg.HostRoot)
 	pfs.MaxFiles = cfg.MaxFiles
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays})
+	rk := rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval})
+	ir := integrityRunner(cfg, detCfg, true)
+	if *full {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		_ = rk.Sweep(ctx)
+		_ = ir.Check(ctx)
+	}
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays, Rootkit: rk, Integrity: ir})
 	// Метрики разового запуска: один замер без истории. Признаки с
 	// удержанием (steal_high, load_high) так не сработают — для них нужна
 	// работающая служба; disk_almost_full виден сразу.
@@ -752,4 +764,15 @@ func readSecret() (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+func integrityRunner(cfg config.Config, det detect.Config, readOnly bool) *integrity.Runner {
+	return integrity.New(integrity.Options{HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: readOnly, Interval: cfg.IntegrityInterval, Allowed: func(path string) bool {
+		for _, a := range det.Allow {
+			if a.Exe == path && a.Name == "" && a.User == "" && slices.Contains(a.Rules, "bin_unpackaged") {
+				return true
+			}
+		}
+		return false
+	}})
 }

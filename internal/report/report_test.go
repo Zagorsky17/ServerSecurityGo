@@ -233,3 +233,17 @@ func TestAuditReport(t *testing.T) {
 		t.Errorf("Markdown:\n%s", mdOut)
 	}
 }
+
+func TestVerificationCompletenessIgnoresDisplayFilter(t *testing.T) {
+	for _, id := range []string{"rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified"} {
+		snap := &model.Snapshot{Host: model.HostInfo{IsRoot: true}, System: []model.SystemFinding{{Finding: model.Finding{ID: id}, Risk: model.RiskInfo}}}
+		r := NewScan(snap, model.RiskCritical, "test")
+		if !r.Incomplete() || r.ExitCode(FailOn{Off: true}) != ExitIncomplete {
+			t.Fatal("incomplete check reported success", id)
+		}
+		snap.System = append(snap.System, model.SystemFinding{Finding: model.Finding{ID: "bin_modified"}, Risk: model.RiskCritical})
+		if r.ExitCode(FailOn{Level: model.RiskHigh}) != ExitFindings {
+			t.Fatal("incomplete status hid a critical finding")
+		}
+	}
+}

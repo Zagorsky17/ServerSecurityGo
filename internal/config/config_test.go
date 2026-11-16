@@ -175,3 +175,32 @@ func TestPanelOff(t *testing.T) {
 		t.Error("сетевой адрес без пароля должен быть ошибкой")
 	}
 }
+
+func TestVerificationIntervals(t *testing.T) {
+	for _, key := range []string{"SSG_ROOTKIT_INTERVAL", "SSG_INTEGRITY_INTERVAL"} {
+		t.Run(key, func(t *testing.T) {
+			for _, value := range []string{"0s", "-1h", "59s", "bad"} {
+				t.Setenv(key, value)
+				if _, err := FromEnv(); err == nil {
+					t.Fatal("accepted", key, value)
+				}
+			}
+			t.Setenv(key, "2h")
+			c, err := FromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := c.RootkitInterval
+			if key == "SSG_INTEGRITY_INTERVAL" {
+				got = c.IntegrityInterval
+			}
+			if got != 2*time.Hour {
+				t.Fatal(got)
+			}
+		})
+	}
+	d := Default()
+	if d.RootkitInterval != 10*time.Minute || d.IntegrityInterval != 24*time.Hour {
+		t.Fatal("wrong defaults")
+	}
+}

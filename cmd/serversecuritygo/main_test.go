@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/config"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"io"
 	"os"
 	"path/filepath"
@@ -188,5 +191,106 @@ func TestReportFiles(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 8 {
 		t.Errorf("файлов в каталоге: %d", len(entries))
+	}
+}
+
+func TestFullScanVerifiesDpkgAndQuickScanRemainsIncomplete(t *testing.T) {
+	tree := fakeproc.Demo(time.Now())
+	tree.Procs = nil
+	tree.Socks = nil
+	procRoot, hostRoot, err := tree.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(root, path, content string) {
+		t.Helper()
+		p := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(procRoot, "sys/kernel/pid_max", "16")
+	write(procRoot, "sys/kernel/tainted", "0")
+	write(procRoot, "sys/kernel/osrelease", "test")
+	write(procRoot, "sys/kernel/random/boot_id", "12345678-1234-1234-1234-123456789abc")
+	write(procRoot, "modules", "")
+	os.MkdirAll(filepath.Join(hostRoot, "sys/module"), 0700)
+	write(hostRoot, "lib/modules/test/modules.dep", "")
+	write(hostRoot, "var/lib/dpkg/status", "Package: tools\nStatus: install ok installed\nVersion: 1\nArchitecture: all\n\n")
+	write(hostRoot, "var/lib/dpkg/info/tools.list", "/usr/bin/ssh\n")
+	write(hostRoot, "var/lib/dpkg/info/tools.md5sums", "d41d8cd98f00b204e9800998ecf8427e  usr/bin/ssh\n")
+	write(hostRoot, "usr/bin/ssh", "modified")
+	state := t.TempDir()
+	t.Setenv("SSG_PROC_ROOT", procRoot)
+	t.Setenv("SSG_HOST_ROOT", hostRoot)
+	t.Setenv("SSG_DATA_DIR", state)
+	t.Setenv("SSG_ALLOWLIST_FILE", filepath.Join(t.TempDir(), "absent"))
+	t.Setenv("SSG_METRICS_ENABLED", "false")
+	output := filepath.Join(t.TempDir(), "scan.json")
+	code, err := runScan([]string{"--format", "json", "--output", output, "--fail-on", "none"})
+	if err != nil || code != report.ExitIncomplete {
+		t.Fatalf("quick scan: %d %v", code, err)
+	}
+	code, err = runScan([]string{"--full", "--format", "json", "--output", output, "--min-risk", "INFO"})
+	if err != nil || code != report.ExitFindings {
+		t.Fatalf("full scan: %d %v", code, err)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"bin_modified", "rootkit_sweep_complete", "integrity_complete"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("missing %s in %s", want, data)
+		}
+	}
+	if strings.Contains(string(data), "integrity_pending") || strings.Contains(string(data), "rootkit_sweep_pending") {
+		t.Fatal("full scan left pending checks")
+	}
+	entries, _ := os.ReadDir(state)
+	if len(entries) != 0 {
+		t.Fatal("one-shot scan modified service baselines")
+	}
+}
+func TestUnpackagedAcceptanceRequiresExactExplicitRule(t *testing.T) {
+	h := t.TempDir()
+	cfg := config.Default()
+	cfg.HostRoot = h
+	cfg.DataDir = ""
+	for _, tc := range []struct {
+		rule detect.AllowRule
+		want bool
+	}{
+		{detect.AllowRule{Exe: "/usr/bin/manual", Rules: []string{"bin_unpackaged"}}, true},
+		{detect.AllowRule{Exe: "/usr/bin/*", Rules: []string{"bin_unpackaged"}}, false},
+		{detect.AllowRule{Exe: "/usr/bin/manual"}, false},
+		{detect.AllowRule{Name: "manual", Rules: []string{"bin_unpackaged"}}, false},
+	} {
+		r := integrityRunner(cfg, detect.Config{Allow: []detect.AllowRule{tc.rule}}, true)
+		// Приём проверяется через наблюдаемое поведение, без доступа к внутренностям Runner.
+		dir := filepath.Join(h, "var/lib/dpkg/info")
+		os.MkdirAll(dir, 0700)
+		os.MkdirAll(filepath.Join(h, "usr/bin"), 0700)
+		os.WriteFile(filepath.Join(h, "var/lib/dpkg/status"), []byte("Package: empty\nStatus: install ok installed\nVersion: 1\nArchitecture: all\n\n"), 0600)
+		os.WriteFile(filepath.Join(dir, "empty.list"), []byte("/.\n"), 0600)
+		os.WriteFile(filepath.Join(h, "usr/bin/manual"), []byte("manual"), 0700)
+		if err := r.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, f := range r.Findings() {
+			if f.ID == "bin_unpackaged" {
+				found = true
+				if f.Suppressed != tc.want {
+					t.Fatalf("%+v: %+v", tc, f)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("missing unpackaged file")
+		}
 	}
 }
