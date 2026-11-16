@@ -183,6 +183,10 @@ type Process struct {
 	Kernel     bool `json:"kernel"`
 
 	Container        string            `json:"container,omitempty"`
+	ContainerName    string            `json:"containerName,omitempty"`
+	ContainerImage   string            `json:"containerImage,omitempty"`
+	Security         *ProcessSecurity  `json:"security,omitempty"`
+	Maps             []MemoryMap       `json:"maps,omitempty"`
 	ContainerRuntime string            `json:"containerRuntime,omitempty"`
 	Namespaces       map[string]string `json:"namespaces,omitempty"`
 	ForeignNS        []string          `json:"foreignNs,omitempty"` // какие ns отличаются от PID 1
@@ -344,11 +348,12 @@ type FirewallInfo struct {
 
 // ExposureReport — внешняя поверхность атаки по данным одного сканирования.
 type ExposureReport struct {
-	Entries  []Exposure    `json:"entries"`
-	Addrs    []IfaceAddr   `json:"addrs"`
-	Firewall FirewallInfo  `json:"firewall"`
-	Bindings []PortBinding `json:"bindings"`
-	Warnings []i18n.Msg    `json:"warnings,omitempty"`
+	ContainerFindings []SystemFinding `json:"containerFindings,omitempty"`
+	Entries           []Exposure      `json:"entries"`
+	Addrs             []IfaceAddr     `json:"addrs"`
+	Firewall          FirewallInfo    `json:"firewall"`
+	Bindings          []PortBinding   `json:"bindings"`
+	Warnings          []i18n.Msg      `json:"warnings,omitempty"`
 }
 
 // Fail2banJail — включённый jail fail2ban: параметры из конфигурации и
@@ -633,7 +638,7 @@ type Event struct {
 // Incomplete показывает, что отсутствие находок нельзя считать результатом полной проверки.
 func (f SystemFinding) Incomplete() bool {
 	switch f.ID {
-	case "self_check_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
+	case "self_check_unavailable", "persistence_unavailable", "container_unavailable", "package_ownership_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
 		return true
 	}
 	return false

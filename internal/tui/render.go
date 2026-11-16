@@ -832,6 +832,26 @@ func (a *App) processDetail(b *lb, key string) {
 	}
 	b.kv("CPU", cpu)
 	b.kv(a.tr("tui.k.memory"), a.tr("tui.memory", fmtBytes(p.RSSBytes), fmt.Sprintf("%.1f", p.MemPercent), p.Threads, p.FDCount))
+	if s := p.Security; s != nil {
+		b.kv("TracerPid", strconv.Itoa(s.TracerPID))
+		for _, v := range []struct {
+			k string
+			v []string
+		}{{"CapEff", s.CapEff}, {"CapPrm", s.CapPrm}, {"CapBnd", s.CapBnd}, {"CapAmb", s.CapAmb}} {
+			if v.v != nil {
+				b.kv(v.k, orDash(strings.Join(v.v, ", ")))
+			}
+		}
+		if s.NoNewPrivs != nil {
+			b.kv("NoNewPrivs", strconv.Itoa(*s.NoNewPrivs))
+		}
+		if s.Seccomp != nil {
+			b.kv("Seccomp", strconv.Itoa(*s.Seccomp))
+		}
+	}
+	if p.ContainerName != "" {
+		b.kv("Docker", p.ContainerName+" ("+p.ContainerImage+")")
+	}
 	if len(p.EnvFlags) > 0 {
 		b.kv(a.tr("tui.k.env"), strings.Join(p.EnvFlags, ", ")+" "+a.tr("tui.env_values"))
 	}

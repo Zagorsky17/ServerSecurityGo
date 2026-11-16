@@ -46,8 +46,31 @@ func Build(in Input) *model.ExposureReport {
 	rep := &model.ExposureReport{Addrs: ClassifyAddrs(in.Addrs), Entries: []model.Exposure{}, Bindings: []model.PortBinding{}}
 	ufw := ReadUFW(in.HostRoot)
 	rep.Firewall = ufw.Info
-	bindings, warns := ReadDocker(in.HostRoot)
-	rep.Warnings = warns
+	docker := readDockerData(in.HostRoot, true)
+	bindings := docker.bindings
+	rep.Warnings = docker.warnings
+	rep.ContainerFindings = docker.findings
+	for _, p := range in.Procs {
+		if p.ContainerRuntime != "docker" || p.Container == "" {
+			continue
+		}
+		var match *containerConfig
+		for i := range docker.containers {
+			c := &docker.containers[i]
+			if c.State.Running && strings.HasPrefix(c.ID, p.Container) {
+				if match != nil {
+					match = nil
+					break
+				}
+				match = c
+			}
+		}
+		if match != nil {
+			p.ContainerName = strings.TrimPrefix(match.Name, "/")
+			p.ContainerImage = match.Config.Image
+		}
+	}
+
 	if bindings != nil {
 		rep.Bindings = bindings
 	}
@@ -359,7 +382,7 @@ func SystemFindings(rep *model.ExposureReport) []model.SystemFinding {
 			})
 		}
 	}
-	out := make([]model.SystemFinding, 0, len(order))
+	out := append([]model.SystemFinding{}, rep.ContainerFindings...)
 	for _, k := range order {
 		g := groups[k]
 		if g.suppressed {

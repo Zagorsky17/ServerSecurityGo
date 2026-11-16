@@ -208,11 +208,14 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	snap.Exposure = exposure.Build(exposure.Input{Procs: snap.Processes, Sockets: snap.Sockets, Addrs: addrs,
 		HostRoot: s.opt.FS.HostRoot, Allowed: s.opt.Detect.Allowed})
 	snap.Warnings = append(snap.Warnings, snap.Exposure.Warnings...)
-	ctx := &detect.Context{Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
+	owners, ownerErr := integrity.Owners(s.opt.FS.HostRoot)
+	ctx := &detect.Context{Owners: owners, Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
 	detect.Analyze(snap.Processes, ctx)
-	snap.System = append(detect.SystemChecks(s.opt.FS.HostRoot, start, s.opt.Detect), exposure.SystemFindings(snap.Exposure)...)
+	snap.System = append(detect.SystemChecksWithContext(s.opt.FS.HostRoot, start, s.opt.Detect, owners, snap.Processes), exposure.SystemFindings(snap.Exposure)...)
+	if ownerErr != nil {
+		snap.System = append(snap.System, model.SystemFinding{Path: "/var/lib/dpkg", Risk: model.RiskInfo, Finding: model.Finding{ID: "package_ownership_unavailable", Title: i18n.T("rule.package_ownership_unavailable.title"), Category: model.CatInfo, Recommendation: i18n.T("rule.package_ownership_unavailable.rec")}})
+	}
 	snap.UFW = ufw.Read(s.opt.FS.HostRoot)
-
 	// fail2ban: из журнала читаются только новые строки, а сводка
 	// пересчитывается, лишь когда что-то изменилось (и не чаще раза в
 	// минуту без изменений).
@@ -294,7 +297,9 @@ var (
 	// сканирования (≈1 с на 2 МБ).
 	scanCmdlineBudget = 2 << 20 // байт командных строк на сканирование
 	minCmdline        = 512     // столько читается и после исчерпания бюджета
-	scanFilesBudget   = 50_000  // записей Process.Files на сканирование
+	scanEnvBudget     = 32 << 20
+	scanMapsBudget    = 32 << 20
+	scanFilesBudget   = 50_000 // записей Process.Files на сканирование
 )
 
 // collect читает все процессы и сокеты.
@@ -316,9 +321,9 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 
 	raws := make([]*procfs.Raw, 0, len(pids))
 	readErrors := 0
-	cmdBudget, filesBudget := scanCmdlineBudget, scanFilesBudget
+	cmdBudget, filesBudget, mapsBudget, envBudget := scanCmdlineBudget, scanFilesBudget, scanMapsBudget, scanEnvBudget
 	for _, pid := range pids {
-		lim := procfs.Limits{Cmdline: min(fs.MaxCmdline, max(cmdBudget, minCmdline)), Files: min(fs.MaxFiles, filesBudget)}
+		lim := procfs.Limits{Cmdline: min(fs.MaxCmdline, max(cmdBudget, minCmdline)), Files: min(fs.MaxFiles, filesBudget), Maps: min(1<<20, max(0, mapsBudget)), Env: min(8<<20, max(0, envBudget))}
 		if fs.MaxCmdline <= 0 {
 			lim.Cmdline = min(procfs.DefaultMaxCmdline, max(cmdBudget, minCmdline))
 		}
@@ -330,6 +335,8 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 			continue
 		}
 		p := raw.Proc
+		mapsBudget -= raw.MapsBytes
+		envBudget -= raw.EnvBytes
 		for _, a := range raw.RawArgs {
 			cmdBudget -= len(a) + 1
 		}

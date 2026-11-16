@@ -47,6 +47,7 @@ type Counters struct {
 
 // Context — всё, что правило может узнать о системе помимо процесса.
 type Context struct {
+	Owners   map[string]bool
 	Cfg      Config
 	ByPID    map[int]*model.Process
 	Counters func(key string) Counters
@@ -68,6 +69,7 @@ type Rule func(p *model.Process, c *Context) []model.Finding
 
 // Rules — все процессные правила в порядке применения.
 var Rules = []Rule{
+	ruleProcessSecurity,
 	ruleExeLocation,
 	ruleHiddenPath,
 	ruleCwdTemp,
@@ -125,6 +127,9 @@ func AnalyzeOne(p *model.Process, c *Context) {
 		findings = append(findings, r(p, c)...)
 	}
 	for i := range findings {
+		if (findings[i].ID == "web_spawns_shell" || findings[i].ID == "stdio_socket") && p.ContainerName != "" {
+			findings[i].Evidence = append(findings[i].Evidence, i18n.L(p.ContainerName+" ("+p.ContainerImage+")"))
+		}
 		if c.Cfg.allowed(p, findings[i].ID) {
 			findings[i].Suppressed = true
 		}

@@ -36,6 +36,8 @@ jobs:
           sudo /tmp/integrity.test -test.v -test.run '^TestReal'
           go test -race -c -o /tmp/ufw.test ./internal/ufw
           sudo /tmp/ufw.test -test.v -test.run '^TestReal'
+      - name: Настоящие метаданные Docker без запуска контейнера
+        run: bash .github/scripts/container-security.sh
       - name: Разовое сканирование настоящей системы
         run: |
           go build -o /tmp/ssg ./cmd/serversecuritygo
@@ -53,7 +55,7 @@ jobs:
           code=$?
           set -e
           test "$code" = 3
-          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['incomplete'] and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
+          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['incomplete'] and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets']); [print('security diagnostic:', json.dumps(f, ensure_ascii=False)) for f in d['system'] if f['id'] in ('pam_module_unusual', 'persistence_unavailable', 'package_ownership_unavailable')]"
       - name: Полный обход PID и файлов настоящего Linux
         timeout-minutes: 15
         run: |

@@ -24,24 +24,26 @@ import (
 
 // Proc — описание поддельного процесса.
 type Proc struct {
-	PID, PPID  int
-	Comm       string
-	Args       []string
-	Exe        string // цель симлинка exe; "" — нет (поток ядра)
-	Cwd        string
-	UID        int
-	State      string
-	Kernel     bool
-	StartTicks uint64 // тики с момента загрузки
-	UTime      uint64
-	STime      uint64
-	RSSKB      uint64
-	Threads    int
-	FDs        map[int]string // номер fd → цель симлинка
-	Env        []string       // KEY=VALUE
-	Cgroup     string
-	NetNS      string // например net:[4026531840]
-	PidNS      string
+	PID, PPID   int
+	Comm        string
+	Args        []string
+	Exe         string // цель симлинка exe; "" — нет (поток ядра)
+	Cwd         string
+	UID         int
+	State       string
+	Kernel      bool
+	StartTicks  uint64 // тики с момента загрузки
+	UTime       uint64
+	STime       uint64
+	RSSKB       uint64
+	Threads     int
+	FDs         map[int]string // номер fd → цель симлинка
+	Maps        string         // /proc/PID/maps
+	StatusExtra string         // дополнительные поля status
+	Env         []string       // KEY=VALUE
+	Cgroup      string
+	NetNS       string // например net:[4026531840]
+	PidNS       string
 }
 
 // Sock — строка таблицы /proc/net/tcp|udp.
@@ -322,7 +324,8 @@ func (t *Tree) writeProc(procRoot string, p *Proc) error {
 	files := map[string]string{
 		"stat":    statLine(p),
 		"cmdline": cmdline(p.Args),
-		"status":  status(p),
+		"status":  status(p) + p.StatusExtra,
+		"maps":    p.Maps,
 		"environ": strings.Join(p.Env, "\x00"),
 		"cgroup":  orDefault(p.Cgroup, "0::/system.slice/demo.service\n"),
 		"comm":    p.Comm + "\n",
