@@ -21,11 +21,8 @@ type seg struct {
 }
 type line []seg
 
-// minHeight — минимальная высота окна для раскладки панелей: свёрнутые
-// панели — по рамке с заголовком (2 строки), у развёрнутой — хотя бы одна
-// строка списка, плюс строка подсказок. 16 строк при восьми панелях, 18 —
-// при девяти (с fail2ban).
-func (a *App) minHeight() int { return 2*(len(a.visible())-2) + 4 }
+// minHeight оставляет свёрнутым панелям по строке, активной — рамку и строку списка.
+func (a *App) minHeight() int { return len(a.visible()) + 2 }
 
 // draw рисует кадр целиком и выводит его.
 func (a *App) draw() {
@@ -87,13 +84,13 @@ func (a *App) render() {
 // несколько строк.
 //
 // В низком окне (80×24) свёрнутые панели сжимаются до рамки с заголовком
-// (2 строки), а если и этого мало — прячется «Сводка»: развёрнутой
+// (до одной строки), а если и этого мало — прячется «Сводка»: развёрнутой
 // панели нужно хотя бы несколько строк списка.
 func (a *App) layoutLeft(lw, contentH int) {
 	// Свёрнутые панели-списки: все, кроме развёрнутой.
 	lists := a.visible()[1:]
 	folded := len(lists) - 1
-	const bigMin = 6
+	const bigMin = 10
 	statusH := 6
 	if contentH-statusH < folded*2+bigMin {
 		statusH = max(0, contentH-(folded*2+bigMin))
@@ -106,7 +103,7 @@ func (a *App) layoutLeft(lw, contentH int) {
 	small := min(max(avail/(folded+3), 3), 7)
 	big := avail - small*folded
 	if big < bigMin {
-		small = max(2, min(3, (avail-bigMin)/folded))
+		small = max(1, min(3, (avail-bigMin)/folded))
 		big = avail - small*folded
 	}
 	y := statusH
@@ -199,6 +196,15 @@ func (a *App) listTitle(p panelID) string {
 func (a *App) drawList(p panelID, r rect) {
 	s := a.scr
 	active := a.panelActive(p)
+	if r.h == 1 {
+		st := stDim
+		if active {
+			st = stNormal
+		}
+		s.Text(r.x, r.y, r.w, a.listTitle(p), st)
+		a.headers[p] = 0
+		return
+	}
 	s.Box(r.x, r.y, r.w, r.h, a.listTitle(p), active)
 	iw := r.w - 2
 	ih := r.h - 2
@@ -274,8 +280,12 @@ func (a *App) columnsHeader(p panelID, w int) string {
 		return fit(a.tr("tui.cols.ports"), w)
 	case pAudit:
 		return fit(a.tr("tui.cols.audit"), w)
+	case pUFW:
+		return fit(a.tr("web.ufw.files"), w)
 	case pF2B:
 		return fit(a.tr("tui.cols.f2b"), w)
+	case pAuth, pTimeline:
+		return fit(a.tr("tui.cols.hist"), w)
 	case pHist:
 		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
@@ -400,6 +410,14 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{fit(a.groupName(c.Group), 8) + " ", stDim},
 			{a.txt(c.Title), stNormal},
 		}
+	case pUFW:
+		f := a.ufwFiles[i]
+		st := stNormal
+		if f.Status != "ok" {
+			st = stWarn
+		}
+		return []seg{{f.Path, st}}
+
 	case pF2B:
 		b := a.bans[i]
 		until := a.tr("web.f2b.forever")
@@ -416,6 +434,12 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{fit(until, 11) + " ", stDim},
 			{"×" + strconv.Itoa(b.Count), cst},
 		}
+	case pAuth:
+		e := a.logins[i]
+		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.User + " " + e.IP + " " + e.Kind, riskStyle(e.Risk.String())}}
+	case pTimeline:
+		e := a.timeline[i]
+		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.Kind + " " + a.txt(e.Detail), riskStyle(e.Risk.String())}}
 	case pHist:
 		e := a.events[i]
 		who := e.Name
@@ -659,6 +683,10 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.auditDetail(b, c)
 		return a.tr("tui.panel.audit") + " · " + auditShort(c.Status), b.lines
+	case pUFW:
+		a.ufwDetail(b)
+		return a.tr("tui.panel.ufw"), b.lines
+
 	case pF2B:
 		// Сверху — выбранный бан, ниже — состояние и статистика fail2ban.
 		title := a.tr("tui.panel.f2b")
@@ -692,6 +720,58 @@ func (a *App) mainContent(w int) (string, []line) {
 		}
 		a.metricDetail(b, m)
 		return a.tr("tui.panel.metrics") + " · " + m.Name, b.lines
+	case pAuth:
+		if a.data.Auth != nil {
+			for _, w := range a.data.Auth.Warnings {
+				b.para(a.txt(w), stDim, 0)
+			}
+		}
+		i := a.lists[pAuth].cursor
+		if i >= 0 && i < len(a.logins) {
+			e := a.logins[i]
+			b.para(fmtTime(e.Time)+" "+e.Kind+" "+e.Risk.String(), stBold, 0)
+			b.kv(a.tr("tui.k.user"), e.User)
+			b.kv("IP", e.IP)
+			b.kv(a.tr("web.auth.method"), e.Method)
+			b.kv(a.tr("web.auth.key"), e.Fingerprint+" "+e.KeyComment)
+			b.kv("TTY", e.TTY)
+			b.para(e.Source+" "+e.Detail, stNormal, 0)
+			if e.End != nil {
+				b.para(e.End.Sub(e.Time).String(), stNormal, 0)
+			}
+			for _, id := range e.Findings {
+				b.para(id, stNormal, 0)
+			}
+		}
+		if a.data.Auth != nil {
+			b.header(a.tr("web.auth.summary"))
+			for _, rows := range [][]model.AuthCount{a.data.Auth.FailedIPs, a.data.Auth.FailedUsers, a.data.Auth.FailedHours} {
+				for _, row := range rows[:min(len(rows), 10)] {
+					b.kv(row.Name, strconv.Itoa(row.Count))
+				}
+			}
+			b.header(a.tr("web.auth.key"))
+			for _, key := range a.data.Auth.Keys[:min(len(a.data.Auth.Keys), 20)] {
+				used := a.tr("web.auth.no")
+				if key.Used {
+					used = a.tr("web.auth.yes")
+				}
+				b.para(key.User+" "+key.Fingerprint+" "+key.Comment+" · "+used, stNormal, 0)
+			}
+		}
+		return a.tr("web.tab.logins"), b.lines
+	case pTimeline:
+		i := a.lists[pTimeline].cursor
+		if i >= 0 && i < len(a.timeline) {
+			e := a.timeline[i]
+			b.para(fmtTime(e.Time)+" "+e.Kind, stBold, 0)
+			b.para(e.Source, stDim, 0)
+			b.para(a.txt(e.Detail), stNormal, 0)
+			for _, cmd := range e.VerifyCommands {
+				b.para(cmd, stNormal, 0)
+			}
+		}
+		return a.tr("web.tab.timeline"), b.lines
 	case pHist:
 		e, ok := a.selEvent()
 		if !ok {
@@ -771,6 +851,9 @@ func (a *App) processDetail(b *lb, key string) {
 		b.header(a.tr("tui.h.findings"))
 		for _, f := range active {
 			findingBlock(b, f)
+			for _, cmd := range f.VerifyCommands {
+				b.para(cmd, stNormal, 2)
+			}
 		}
 	}
 	if len(p.Recommendations) > 0 {
@@ -811,6 +894,26 @@ func (a *App) processDetail(b *lb, key string) {
 	}
 	b.kv("CPU", cpu)
 	b.kv(a.tr("tui.k.memory"), a.tr("tui.memory", fmtBytes(p.RSSBytes), fmt.Sprintf("%.1f", p.MemPercent), p.Threads, p.FDCount))
+	if s := p.Security; s != nil {
+		b.kv("TracerPid", strconv.Itoa(s.TracerPID))
+		for _, v := range []struct {
+			k string
+			v []string
+		}{{"CapEff", s.CapEff}, {"CapPrm", s.CapPrm}, {"CapBnd", s.CapBnd}, {"CapAmb", s.CapAmb}} {
+			if v.v != nil {
+				b.kv(v.k, orDash(strings.Join(v.v, ", ")))
+			}
+		}
+		if s.NoNewPrivs != nil {
+			b.kv("NoNewPrivs", strconv.Itoa(*s.NoNewPrivs))
+		}
+		if s.Seccomp != nil {
+			b.kv("Seccomp", strconv.Itoa(*s.Seccomp))
+		}
+	}
+	if p.ContainerName != "" {
+		b.kv("Docker", p.ContainerName+" ("+p.ContainerImage+")")
+	}
 	if len(p.EnvFlags) > 0 {
 		b.kv(a.tr("tui.k.env"), strings.Join(p.EnvFlags, ", ")+" "+a.tr("tui.env_values"))
 	}
@@ -1297,6 +1400,9 @@ func fmtDur(a *App, sec int64) string {
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
 	rs := f.Risk.String()
 	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
+	for _, cmd := range f.VerifyCommands {
+		b.para(cmd, stNormal, 0)
+	}
 	b.kv(a.tr("tui.k.file"), f.Path)
 	b.kv(a.tr("tui.k.modified"), fmtTime(f.ModTime))
 	b.kv(a.tr("tui.k.rule"), f.ID)
@@ -1731,5 +1837,34 @@ func (a *App) drawHelp() {
 		}
 		s.Text(x+4, row, 26, k, stKey)
 		s.Text(x+31, row, w-33, a.tr(hl[1]), stNormal)
+	}
+}
+
+func (a *App) ufwDetail(b *lb) {
+	b.para(a.tr("web.ufw.hint"), stDim, 0)
+	u := a.data.UFW
+	if u == nil {
+		b.para(a.tr("web.ufw.unavailable"), stWarn, 0)
+		return
+	}
+	if u.State == "absent" {
+		b.para(a.tr("web.ufw.absent"), stDim, 0)
+		return
+	}
+	for _, f := range u.Settings {
+		b.para(a.txt(f.Label)+": "+a.txt(f.Value), stNormal, 0)
+	}
+	for _, w := range u.Warnings {
+		b.para(a.txt(w), stWarn, 0)
+	}
+	if f, ok := a.selUFW(); ok {
+		b.header(f.Path)
+		if f.Status != "ok" {
+			b.para(a.txt(f.Error), stWarn, 0)
+			return
+		}
+		for _, line := range strings.Split(f.Content, "\n") {
+			b.para(line, stNormal, 0)
+		}
 	}
 }

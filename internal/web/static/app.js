@@ -124,7 +124,7 @@ async function copyText(text) {
 // ---------------------------------------------------------------------
 
 const state = {
-  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null,
+  csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null, ufw: null,
   metrics: null, mrange: '1h', netload: null,
   tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
@@ -360,6 +360,21 @@ function renderAudit() {
 }
 
 // ---------------------------------------------------------------------
+function renderUFW() {
+  const u = state.ufw;
+  const opened = new Set([...$('ufw-files').querySelectorAll('details[open]')].map(el => el.dataset.path));
+  $('ufw-state').textContent = !u ? tr('web.ufw.unavailable') : u.state === 'absent' ? tr('web.ufw.absent') : '';
+  $('ufw-settings').replaceChildren(...(u && u.state !== 'absent' ? u.settings || [] : []).flatMap(s => [h('dt', null, tx(s.label)), h('dd', null, tx(s.value))]));
+  $('ufw-warn').replaceChildren(...(u ? u.warnings || [] : []).map(w => h('li', null, tx(w))));
+  $('ufw-files').replaceChildren(...(u && u.state !== 'absent' ? u.files || [] : []).map(f => {
+    const d = h('details', { class: 'card' }, h('summary', null, f.path),
+      f.status === 'ok' ? h('pre', null, f.content || tr('web.ufw.empty')) : h('p', { class: 'warn-list' }, tx(f.error)));
+    d.dataset.path = f.path;
+    d.open = opened.has(f.path);
+    return d;
+  }));
+}
+
 // fail2ban
 // ---------------------------------------------------------------------
 
@@ -784,7 +799,7 @@ function renderSystem() {
     { t: tr('tui.k.file'), v: (f) => f.path, r: (f) => f.path, c: 'mono' },
     { t: tr('tui.k.modified'), v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
     { t: tr('tui.h.facts'), v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))), c: 'wrap' },
-    { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => tx(f.recommendation), c: 'wrap' },
+    { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => h('div', {}, tx(f.recommendation), h('pre', {}, (f.verifyCommands || []).join('\n'))), c: 'wrap' },
   ], s.findings || [], null, tr('web.empty.system'));
 }
 
@@ -913,6 +928,9 @@ function renderCard(data) {
       ...kv(tr('tui.k.container'), p.containerRuntime ? `${p.containerRuntime} ${p.container || ''}` : tr('tui.no')),
       ...kv(tr('web.k.nspid'), p.nspid ? p.nspid.join(' → ') : '—'),
       ...kv(tr('web.k.foreign_ns'), p.foreignNs && p.foreignNs.length ? p.foreignNs.join(', ') : tr('tui.no')),
+      ...['capEff', 'capPrm', 'capBnd', 'capAmb'].filter(k => p.security && p.security[k] != null).flatMap(k => kv(k, p.security[k].join(', ') || '—')),
+      ...['tracerPid', 'noNewPrivs', 'seccomp'].filter(k => p.security && p.security[k] != null).flatMap(k => kv(k, String(p.security[k]))),
+      ...(p.containerName ? kv('Docker', `${p.containerName} (${p.containerImage || ''})`) : []),
       ...Object.entries(p.namespaces || {}).flatMap(([k, v]) => kv('ns/' + k, v)),
     )),
     section(tr('web.card.connections'), socketsTable(p.sockets || [])),
@@ -931,6 +949,7 @@ function findingBlock(f) {
       f.strong ? h('span', { class: 'tag strong' }, tr('web.card.strong')) : '',
       f.suppressed ? h('span', { class: 'tag' }, tr('tui.suppressed')) : ''),
     h('ul', { class: 'ev' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))),
+    h('pre', { class: 'mono' }, (f.verifyCommands || []).join('\n')),
     tx(f.recommendation) ? h('div', { class: 'rec' }, '→ ' + tx(f.recommendation)) : '');
 }
 
@@ -1026,7 +1045,10 @@ function renderAll() {
     case 'ports': renderPorts(); break;
     case 'audit': renderAudit(); break;
     case 'fail2ban': renderFail2ban(); break;
-    case 'history': renderHistory(); break;
+    case 'ufw': renderUFW(); break;
+    case 'logins': renderLogins(); break;
+case 'timeline': renderTimeline(); break;
+case 'history': renderHistory(); break;
     case 'system': renderSystem(); break;
     case 'metrics': renderMetrics(); break;
     case 'netload': renderNetload(); break;
@@ -1040,7 +1062,10 @@ async function loadTabData() {
     case 'ports': state.exposure = (await api('/api/exposure')).exposure || null; break;
     case 'audit': state.audit = await api('/api/audit'); break;
     case 'fail2ban': state.fail2ban = await api('/api/fail2ban'); break;
-    case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
+    case 'ufw': state.ufw = await api('/api/ufw'); break;
+    case 'logins': state.auth = await api('/api/logins'); break;
+case 'timeline': state.timeline = await api('/api/timeline?since=48h'); break;
+case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
     case 'system': state.system = await api('/api/system'); break;
     case 'metrics': state.metrics = await api('/api/metrics?range=' + encodeURIComponent(state.mrange)); break;
     case 'netload': state.netload = await api('/api/netload'); break;
@@ -1055,7 +1080,7 @@ async function refresh() {
     state.status = await api('/api/status');
     state.csrf = state.status.csrf;
     if (!state.status.ready) {
-      $('hostline').textContent = tr('web.first_scan');
+      $('hostline').textContent = (state.status.warnings || []).map(tx).join(' · ') || tr('web.first_scan');
       setTimeout(refresh, 1500);
       return;
     }
@@ -1182,3 +1207,39 @@ async function init() {
 }
 
 init();
+
+function renderLogins() {
+ const a = state.auth?.report;
+ $('auth-notes').replaceChildren(...(a?.warnings || []).map(w => h('p', {}, tx(w))));
+ if (!a) $('auth-notes').textContent = tr('web.auth.disabled');
+ renderTable('t-logins', [
+ {t: tr('web.col.time'), v:e=>e.time, r:e=>fmtTime(e.time)},
+ {t: tr('tui.title.event'), v:e=>e.kind, r:e=>e.kind},
+ {t: tr('tui.k.user'), v:e=>e.user || '', r:e=>e.user || ''},
+ {t:'IP',v:e=>e.ip || '',r:e=>e.ip || ''},
+ {t:tr('web.auth.method'),v:e=>e.method || '',r:e=>e.method || ''},
+ {t:tr('web.auth.key'),v:e=>e.fingerprint || '',r:e=>[e.fingerprint,e.keyComment].filter(Boolean).join(' ')},
+ {t:tr('tui.title.details'),v:e=>e.detail || '',r:e=>h('div',{},e.detail || '',h('div',{},e.source),h('div',{},(e.findings || []).join(', ')),e.end ? h('div',{},fmtTime(e.end)) : '')},
+ {t:tr('web.col.risk'),v:e=>riskNum(e.risk),r:e=>riskBadge(e.risk)}
+ ], [...(a?.events || [])].reverse(), null, tr('web.empty.events'));
+
+ for (const [id, rows, label] of [['t-auth-ips',a?.failedIPs,'IP'],['t-auth-users',a?.failedUsers,tr('tui.k.user')],['t-auth-hours',a?.failedHours,'UTC']]) {
+ renderTable(id,[{t:label,v:e=>e.name,r:e=>e.name},{t:tr('web.auth.count'),v:e=>e.count,r:e=>e.count}],rows || [],null,tr('web.empty.events'));
+ }
+ renderTable('t-auth-keys',[
+ {t:tr('tui.k.user'),v:e=>e.user,r:e=>e.user},
+ {t:tr('web.auth.key'),v:e=>e.fingerprint,r:e=>e.fingerprint+' '+(e.comment || '')},
+ {t:tr('web.auth.used'),v:e=>e.usedInWindow?1:0,r:e=>e.usedInWindow?tr('web.auth.yes'):tr('web.auth.no')}
+ ],a?.keys || [],null,tr('web.empty.events'));
+}
+function renderTimeline() {
+ const t=state.timeline || {};
+ $('timeline-notes').replaceChildren(...(t.warnings || []).map(w=>h('p',{},tx(w))));
+ renderTable('t-timeline',[
+ {t:tr('web.col.time'),v:e=>e.time,r:e=>fmtTime(e.time)},
+ {t:tr('tui.title.event'),v:e=>e.kind,r:e=>e.kind},
+ {t:tr('tui.k.file'),v:e=>e.source,r:e=>e.source},
+ {t:tr('tui.title.details'),v:e=>tx(e.detail),r:e=>h('div',{},tx(e.detail),h('pre',{},(e.verifyCommands || []).join('\n')))},
+ {t:tr('web.col.risk'),v:e=>riskNum(e.risk),r:e=>riskBadge(e.risk)}
+ ],t.events || [],null,'');
+}

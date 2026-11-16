@@ -34,6 +34,10 @@ jobs:
           go test -race -c -o /tmp/integrity.test ./internal/integrity
           sudo /tmp/rootkit.test -test.v -test.run '^TestReal'
           sudo /tmp/integrity.test -test.v -test.run '^TestReal'
+          go test -race -c -o /tmp/ufw.test ./internal/ufw
+          sudo /tmp/ufw.test -test.v -test.run '^TestReal'
+      - name: Настоящие метаданные Docker без запуска контейнера
+        run: bash .github/scripts/container-security.sh
       - name: Разовое сканирование настоящей системы
         run: |
           go build -o /tmp/ssg ./cmd/serversecuritygo
@@ -51,7 +55,9 @@ jobs:
           code=$?
           set -e
           test "$code" = 3
-          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['incomplete'] and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets'])"
+          python3 -c "import json; d=json.load(open('/tmp/scan.json')); assert d['schema_version']==1 and d['incomplete'] and d['stats']['total']>10, d['stats']; print('процессов:', d['stats']['total'], 'сокетов:', d['stats']['sockets']); [print('security diagnostic:', json.dumps(f, ensure_ascii=False)) for f in d['system'] if f['id'] in ('pam_module_unusual', 'persistence_unavailable', 'package_ownership_unavailable')]"
+      - name: Настоящий systemd-юнит и watchdog
+        run: sudo --preserve-env=GITHUB_ACTIONS bash .github/scripts/selfcheck-systemd.sh /tmp/ssg
       - name: Полный обход PID и файлов настоящего Linux
         timeout-minutes: 15
         run: |
@@ -59,7 +65,8 @@ jobs:
           sudo /tmp/ssg scan --full --format json --output /tmp/full-scan.json --min-risk INFO --fail-on none
           code=$?
           set -e
-          test "$code" = 0 || test "$code" = 3
+          # В разовом запуске нет эталона установки самоконтроля.
+          test "$code" = 3
           sudo python3 - <<'PYCODE'
           import json
           d = json.load(open('/tmp/full-scan.json'))
@@ -67,6 +74,7 @@ jobs:
           ids = {f['id'] for f in findings}
           assert 'rootkit_sweep_complete' in ids, findings
           assert 'integrity_complete' in ids, findings
+          assert 'self_check_unavailable' in ids and d['incomplete'], findings
           assert not ids.intersection({'hidden_process', 'kmod_hidden', 'rootkit_sweep_pending', 'integrity_pending'}), findings
           print('System finding IDs:', sorted(ids), 'incomplete:', d['incomplete'])
           PYCODE
@@ -80,7 +88,12 @@ jobs:
           # Код выхода: ошибка неверного флага — 2.
           set +e; /tmp/ssg audit --fail-on bogus; code=$?; set -e
           test "$code" = 2
+      - name: Расследование и сбор улик
+        run: |
+          go test -race -c -o /tmp/collect.test ./internal/collect
+          sudo /tmp/collect.test -test.v -test.run '^TestRealDeletedExecutable$'
+          bash .github/scripts/investigation.sh /tmp/ssg
       - name: Кросс-сборка
         run: make build-linux
       - name: shellcheck
-        run: shellcheck -x scripts/*.sh
+        run: shellcheck -x scripts/*.sh .github/scripts/*.sh

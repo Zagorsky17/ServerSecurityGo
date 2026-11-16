@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/investigate"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
@@ -196,8 +197,8 @@ func (s *Server) routes() {
 	static, _ := fs.Sub(staticFS, "static")
 	files := http.FileServerFS(static)
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		if s.opt.Scanner.Snapshot() == nil {
-			http.Error(w, "starting", http.StatusServiceUnavailable)
+		if !s.opt.Scanner.Healthy(time.Now()) {
+			http.Error(w, "starting or stale", http.StatusServiceUnavailable)
 			return
 		}
 		w.Write([]byte("ok\n"))
@@ -215,6 +216,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/connections", s.api(s.handleConnections))
 	s.mux.HandleFunc("GET /api/exposure", s.api(s.handleExposure))
 	s.mux.HandleFunc("GET /api/fail2ban", s.api(s.handleFail2ban))
+	s.mux.HandleFunc("GET /api/ufw", s.api(s.handleUFW))
+	s.mux.HandleFunc("GET /api/logins", s.api(s.handleLogins))
+	s.mux.HandleFunc("GET /api/timeline", s.api(s.handleTimeline))
 	s.mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	s.mux.HandleFunc("GET /api/system", s.api(s.handleSystem))
 	s.mux.HandleFunc("GET /api/metrics", s.api(s.handleMetrics))
@@ -489,6 +493,12 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) *model.Snapsho
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, sess session) {
 	st := view.Status{Version: s.opt.Version, Auth: s.authEnabled(), CSRF: sess.csrf, Demo: s.opt.Demo, Interval: s.opt.Scanner.Interval().Seconds()}
 	st = view.BuildStatus(st, s.opt.Scanner.Snapshot())
+	st.Stale = !s.opt.Scanner.Healthy(time.Now())
+	if !st.Ready {
+		for _, f := range s.opt.Scanner.SelfFindings() {
+			st.Warnings = append(st.Warnings, f.Title)
+		}
+	}
 	if a := s.opt.Audit; a != nil {
 		st.Audit = view.BuildAuditBrief(true, a.Running(), a.Report())
 	}
@@ -543,6 +553,14 @@ func (s *Server) handleExposure(w http.ResponseWriter, r *http.Request, _ sessio
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"time": snap.Time, "seq": snap.Seq, "exposure": view.Exposure(snap)})
+}
+
+func (s *Server) handleUFW(w http.ResponseWriter, r *http.Request, _ session) {
+	snap := s.snapshot(w, r)
+	if snap == nil {
+		return
+	}
+	writeJSON(w, http.StatusOK, snap.UFW)
 }
 
 // handleFail2ban отдаёт состояние fail2ban и статистику перебора паролей.
@@ -628,4 +646,34 @@ func (s *Server) handleAuditRun(w http.ResponseWriter, r *http.Request, _ sessio
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request, _ session) {
 	s.opt.Scanner.Rescan()
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+}
+
+func (s *Server) handleLogins(w http.ResponseWriter, r *http.Request, _ session) {
+	snap := s.snapshot(w, r)
+	if snap == nil {
+		return
+	}
+	writeJSON(w, 200, map[string]any{"enabled": snap.Auth != nil, "report": snap.Auth})
+}
+func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request, _ session) {
+	snap := s.snapshot(w, r)
+	if snap == nil {
+		return
+	}
+	since := 48 * time.Hour
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		d, e := time.ParseDuration(raw)
+		if e != nil || d <= 0 || d > 365*24*time.Hour {
+			s.errJSON(w, r, 400, "err.investigation_window")
+			return
+		}
+		since = d
+	}
+	warnings := append([]i18n.Msg(nil), snap.Warnings...)
+	incomplete := snap.Auth != nil && snap.Auth.Incomplete
+	if snap.Recent != nil {
+		warnings = append(warnings, snap.Recent.Warnings...)
+		incomplete = incomplete || snap.Recent.Incomplete
+	}
+	writeJSON(w, 200, map[string]any{"events": investigate.Timeline(snap, s.opt.Scanner.History().Events(5000), snap.Recent, time.Now().Add(-since)), "warnings": warnings, "incomplete": incomplete})
 }

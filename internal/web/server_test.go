@@ -26,6 +26,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/selfcheck"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
 
@@ -864,5 +865,84 @@ func TestNetLoadAPI(t *testing.T) {
 	}
 	if w := do(sn, "POST", "/api/netload", "127.0.0.1:8090", "", map[string]string{"X-CSRF-Token": sn.noAuthCSRF}); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST: %d", w.Code)
+	}
+}
+
+func TestSelfCheckStatusAndStaleHealth(t *testing.T) {
+	tree := fakeproc.Demo(time.Now())
+	procRoot, hostRoot, err := tree.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist, _ := history.Open(history.Options{})
+	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: detect.DefaultConfig(), History: hist, Interval: time.Nanosecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	m := selfcheck.New(selfcheck.Options{HostRoot: hostRoot, Executable: "/absent", Interval: time.Nanosecond, Progress: sc.LastSuccess, Record: hist.RecordSelfCheck, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	sc.SetSelfCheck(m)
+	s := New(Options{Scanner: sc, ListenAddr: "127.0.0.1:8090"})
+	if w := do(s, "GET", "/healthz", "127.0.0.1:8090", "", nil); w.Code != 503 {
+		t.Fatal("starting is healthy")
+	}
+	if _, err := sc.ScanOnce(); err != nil {
+		t.Fatal(err)
+	}
+	m.Check(time.Now())
+	for _, handler := range []http.Handler{s, s.LocalHandler()} {
+		req := httptest.NewRequest("GET", "/healthz", nil)
+		req.Host = "127.0.0.1:8090"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 503 || strings.Contains(w.Body.String(), hostRoot) {
+			t.Fatalf("stale health leaked details or returned success: %d %s", w.Code, w.Body)
+		}
+	}
+	w := do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil)
+	var st view.Status
+	if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil || !st.Stale || !st.Ready || len(st.Warnings) == 0 {
+		t.Fatalf("status: %s %v", w.Body, err)
+	}
+	for _, path := range []string{"/api/system", "/api/events"} {
+		w := do(s, "GET", path, "127.0.0.1:8090", "", nil)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "self_scan_stalled") {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+	}
+}
+
+func TestUFWAPI(t *testing.T) {
+	tree := fakeproc.Demo(time.Now())
+	tree.HostFiles["etc/ufw/after.rules"] = "*nat\n# <script>alert(1)</script>\n-A PREROUTING -j REDIRECT\nCOMMIT\n"
+	s := newTreeServer(t, tree, "")
+	w := do(s, "GET", "/api/ufw", "127.0.0.1:8090", "", nil)
+	var report model.UFWReport
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.State != "enabled" || len(report.Files) < 10 || len(report.Settings) != 10 {
+		t.Fatalf("%+v", report)
+	}
+	found := false
+	for _, f := range report.Files {
+		if f.Path == "/etc/ufw/after.rules" && strings.Contains(f.Content, "PREROUTING") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("raw rules lost")
+	}
+	if strings.Contains(w.Body.String(), "<script>") {
+		t.Fatal("unescaped HTML in JSON")
+	}
+	hash, _ := HashPassword("correct horse battery")
+	if w := do(newTestServer(t, hash), "GET", "/api/ufw", "127.0.0.1:8090", "", nil); w.Code != http.StatusUnauthorized {
+		t.Fatal("unauthenticated UFW read", w.Code)
+	}
+	if w := do(s, "GET", "/api/ufw", "evil.example", "", nil); w.Code == 200 {
+		t.Fatal("foreign Host allowed")
+	}
+	if w := do(s, "POST", "/api/ufw", "127.0.0.1:8090", "", nil); w.Code == 200 {
+		t.Fatal("UFW modification endpoint")
 	}
 }

@@ -88,6 +88,7 @@ const (
 // Finding — один сработавший признак. Evidence содержит проверяемые
 // факты (что именно прочитано и откуда), а не выводы.
 type Finding struct {
+	VerifyCommands []string   `json:"verifyCommands,omitempty"`
 	ID             string     `json:"id"`
 	Title          i18n.Msg   `json:"title"`
 	Category       string     `json:"category"`
@@ -183,6 +184,10 @@ type Process struct {
 	Kernel     bool `json:"kernel"`
 
 	Container        string            `json:"container,omitempty"`
+	ContainerName    string            `json:"containerName,omitempty"`
+	ContainerImage   string            `json:"containerImage,omitempty"`
+	Security         *ProcessSecurity  `json:"security,omitempty"`
+	Maps             []MemoryMap       `json:"maps,omitempty"`
 	ContainerRuntime string            `json:"containerRuntime,omitempty"`
 	Namespaces       map[string]string `json:"namespaces,omitempty"`
 	ForeignNS        []string          `json:"foreignNs,omitempty"` // какие ns отличаются от PID 1
@@ -242,6 +247,8 @@ type Stats struct {
 
 // Snapshot — результат одного сканирования.
 type Snapshot struct {
+	Auth      *AuthReport         `json:"auth,omitempty"`
+	Recent    *RecentReport       `json:"recent,omitempty"`
 	Time      time.Time           `json:"time"`
 	Duration  time.Duration       `json:"duration"`
 	Seq       uint64              `json:"seq"`
@@ -250,6 +257,7 @@ type Snapshot struct {
 	Sockets   []Socket            `json:"sockets"`
 	System    []SystemFinding     `json:"system"`
 	Exposure  *ExposureReport     `json:"exposure,omitempty"`
+	UFW       *UFWReport          `json:"ufw,omitempty"`
 	Fail2ban  *Fail2banReport     `json:"fail2ban,omitempty"`
 	NetLoad   *NetLoadReport      `json:"netLoad,omitempty"`
 	Warnings  []i18n.Msg          `json:"warnings"`
@@ -343,11 +351,12 @@ type FirewallInfo struct {
 
 // ExposureReport — внешняя поверхность атаки по данным одного сканирования.
 type ExposureReport struct {
-	Entries  []Exposure    `json:"entries"`
-	Addrs    []IfaceAddr   `json:"addrs"`
-	Firewall FirewallInfo  `json:"firewall"`
-	Bindings []PortBinding `json:"bindings"`
-	Warnings []i18n.Msg    `json:"warnings,omitempty"`
+	ContainerFindings []SystemFinding `json:"containerFindings,omitempty"`
+	Entries           []Exposure      `json:"entries"`
+	Addrs             []IfaceAddr     `json:"addrs"`
+	Firewall          FirewallInfo    `json:"firewall"`
+	Bindings          []PortBinding   `json:"bindings"`
+	Warnings          []i18n.Msg      `json:"warnings,omitempty"`
 }
 
 // Fail2banJail — включённый jail fail2ban: параметры из конфигурации и
@@ -632,7 +641,7 @@ type Event struct {
 // Incomplete показывает, что отсутствие находок нельзя считать результатом полной проверки.
 func (f SystemFinding) Incomplete() bool {
 	switch f.ID {
-	case "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
+	case "self_check_unavailable", "persistence_unavailable", "container_unavailable", "package_ownership_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
 		return true
 	}
 	return false

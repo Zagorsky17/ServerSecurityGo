@@ -2,7 +2,6 @@
 
 **English** | [Русский](README.ru.md) | [简体中文](README.zh-CN.md)
 
-[![CI](https://github.com/Zagorsky17/ServerSecurityGo/actions/workflows/ci.yml/badge.svg)](https://github.com/Zagorsky17/ServerSecurityGo/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Zagorsky17/ServerSecurityGo)](https://github.com/Zagorsky17/ServerSecurityGo/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -26,6 +25,7 @@ Process monitoring and analysis for Linux servers (Ubuntu, Debian). It looks for
   - [fail2ban](#fail2ban)
   - [Server metrics](#server-metrics)
   - [Network load and signs of a DDoS](#network-load-and-signs-of-a-ddos)
+- [Scanner self-checks](#scanner-self-checks)
 - [How risk is scored](#how-risk-is-scored)
 - [Examples of detected anomalies](#examples-of-detected-anomalies)
 - [Detection limitations](#detection-limitations)
@@ -327,6 +327,14 @@ The data comes from `/proc` only: `net/netstat`, `net/snmp`, `net/sockstat`, `ne
 
 **Protecting the scanner itself.** During an attack `/proc/net/tcp` grows to hundreds of thousands of lines, so the number of sockets per network namespace is capped by `SSG_NET_MAX_SOCKETS` (100,000, about 200 bytes per socket); beyond the cap sockets are skipped and `net_table_truncated` appears. The per-address aggregates are size-capped too.
 
+### UFW and PID sweep timing
+
+The **UFW** section follows fail2ban (or audit when fail2ban is absent). It shows saved incoming, outgoing and forwarding policies, IPv6, logging, application profiles, conntrack modules and the sysctl file. Open the full contents of `ufw.conf`, `/etc/default/ufw`, `before/user/after.rules` and their IPv6 counterparts, `before/after.init`, `sysctl.conf`, the file selected by `IPT_SYSCTL` and `applications.d` profiles. In the TUI, select a file and press Enter to scroll its details; `/` filters paths and contents, and `y` copies the path and `Y` copies JSON. Expand a file in the web panel. API: `GET /api/ufw`, with the same authorization as other sections.
+
+This is on-disk configuration; changes may not have been applied. Active kernel rules and third-party Docker rules are not verified here. Reads execute no commands and are limited to 1 MiB per file, 4 MiB total and 1000 profiles; errors, exceeded limits and missing required files are explicit. Missing settings are not replaced with assumed defaults. [UFW evaluation order](https://manpages.ubuntu.com/manpages/noble/man8/ufw-framework.8.html): before → user → after, separately for IPv4 and IPv6.
+
+During a full PID sweep, the warning shows elapsed time, approximate remaining time and the percentage of the range covered. Times use `HH:MM:SS`; the estimate uses the current sweep's average speed and varies with load. It shows “calculating” until initial measurements are available. Cancellation or failure freezes the elapsed time; each new pass resets it. Display updates with scanner snapshots (`SSG_SCAN_INTERVAL`), and a successful result includes total duration.
+
 ### Hidden processes, kernel modules and package integrity
 
 Results appear in **System**, history and `scan` reports. The service compares `/proc` listings with task TGIDs and parent PIDs, then confirms a missing process leader by PID and start time twice, 50 ms apart. Ordinary thread IDs, exited processes and reused PIDs are excluded. A separate worker probes all PID numbers in batches of 1,024 with 100 ms pauses, repeating after `SSG_ROOTKIT_INTERVAL` (default `10m`). A large PID range takes several minutes; short-lived processes can be missed. `loadavg` task counts are not used as proof of hiding because namespaces and concurrent task creation make that inference unreliable.
@@ -344,6 +352,36 @@ serversecuritygo scan --full --min-risk INFO --format json --output /root/full-s
 `--full` waits for the PID sweep and file verification and supports cancellation. One-shot scans and local TUI sessions read service baselines without rewriting them. A quick `scan` leaves these checks pending and returns code **3**, including with `--fail-on none`, unless a finding triggers code 1. `rootkit_unavailable`, `rootkit_sweep_pending`, `integrity_pending`, `integrity_unavailable` and `integrity_unverified` also make the report incomplete and appear as warnings regardless of the risk filter. Completed passes include their timestamp (`rootkit_sweep_complete`, `integrity_complete`). Demo mode does not probe the host with these checks.
 
 The baseline is local trust established on first observation, not an independent authenticity check. MD5 and the [local dpkg database](https://manpages.debian.org/trixie/dpkg/dpkg.1.en.html) can be modified by root; the local SHA-256 baseline can also be replaced. A compromised kernel can deceive both procfs and sysfs. Verification against independently trusted `.deb` archives is a later stage. Read limits are explicit: 100,000 `/proc` entries, 16,384 module entries, 64 MiB of dpkg metadata per pass, and 1 GiB per hashed file; exceeding a limit produces an incomplete result rather than a clean verdict.
+
+## Scanner self-checks
+
+The service checks its installation and scan freshness independently of the scan loop. Findings appear in System, overview warnings, history and `scan` reports. Self-checks do not change server settings or automatically apply allowlist changes.
+
+| Finding | Meaning |
+|---|---|
+| `self_binary_changed` — CRITICAL | The running binary's startup SHA256 differs from the installation baseline. Linux reads `/proc/self/exe`, checking the running inode even after its pathname is replaced. |
+| `self_unit_changed` — HIGH | A `serversecuritygo.service`, `serversecuritygo.service.d/*.conf` or shared `service.d/*.conf` file changed, appeared or disappeared under `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` or `/lib/systemd/system`. Evidence lists affected paths. |
+| `self_baseline_changed` — HIGH | The baseline changed after startup; comparisons continue against the original baseline. |
+| `self_allowlist_changed` — MEDIUM | The allowlist changed, appeared or disappeared. Only its path and SHA256 are persisted; contents are never included in history. Loaded rules remain active until restart. |
+| `self_scan_stalled` — HIGH | No successful scan completed for more than three scan intervals, including the first scan. Failed scans do not refresh the last-success timestamp. |
+| `self_clock_back` — MEDIUM | Wall time moved backwards by more than one second relative to monotonic time between checks. The warning remains until restart; clock adjustments do not affect scan timeouts. |
+| `self_check_unavailable` — MEDIUM | A missing/corrupt baseline, unreadable file, unsupported file type or size limit prevents verification. This means an incomplete check, not verified integrity. |
+
+Installation and updates atomically write `/var/lib/serversecuritygo/self.sha256` with mode `600` before starting the service. This fixed path does not depend on `SSG_DATA_DIR`. Rollback restores the previous baseline together with the binary. The service never creates or refreshes this baseline itself. For manual installation, after verifying the binary and unit files, run from the project directory as root:
+
+```bash
+source scripts/lib.sh
+write_self_baseline
+systemctl restart serversecuritygo
+```
+
+This accepts the current files as the baseline: investigate changes before using it to clear a warning. Checksums do not replace trusted release signatures; an attacker with root can replace both the program and its baseline. Unit checks cover files on disk, including overridden files; they do not prove which configuration systemd has already loaded. Legitimate administrator changes also require review.
+
+The running observer checks files at least every five seconds under normal operation. Allowlists must be regular files up to 1 MiB, without symlinks; rule loading enforces the same limits. `SSG_DATA_DIR/self-allowlist.json` stores observation state with mode `600` to detect changes across restarts. One-shot `scan` and local TUI use memory and do not modify service state. Demo mode does not check the real installation.
+
+`GET /api/status` includes `stale`; `/healthz` returns `503` before the first successful scan and when scan data is stale. Integrity findings alone do not fail the liveness endpoint: inspect the report. Unavailable self-checks make `scan` incomplete (exit `3`, unless a finding takes precedence with exit `1`); even `--fail-on none` preserves incomplete status.
+
+The unit enables `WatchdogSec=30s` and `NotifyAccess=main`. Local `WATCHDOG=1` notifications continue while scans are fresh. When heartbeats stop, systemd restarts only ServerSecurityGo; other processes and networking are untouched. With the default 30-second scan interval, data becomes stale after 90 seconds without a result, followed by the watchdog timeout. Protocol references: [systemd.service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html) and [sd_notify](https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html).
 
 ## How risk is scored
 
@@ -384,6 +422,19 @@ All examples are included in the demo data (`serversecuritygo demo`) and in the 
 
 Full list of rule IDs for the allowlist:
 `exe_in_temp`, `exe_hidden_path`, `cwd_in_temp`, `exe_deleted`, `exe_memfd`, `exe_world_writable`, `exe_setuid_nonstd`, `exe_system_nonroot`, `kthread_masquerade`, `system_name_masquerade`, `name_mismatch`, `unusual_name`, `empty_cmdline`, `cmdline_truncated`, `unicode_control`, `web_spawns_shell`, `scheduler_suspicious`, `stdio_socket`, `revshell_pattern`, `download_exec`, `miner_pattern`, `miner_name`, `pool_port`, `shell_network`, `suspicious_listen`, `cpu_sustained`, `mem_sustained`, `ld_preload`, `root_from_writable`, `exposed_database`, `exposed_docker_api`, `exposed_admin_panel`, `exposed_remote_access`, `exposed_file_sharing`, `exposed_info_service`, `exposed_amplifier`. System checks: `ld_so_preload`, `autostart_suspicious`, `autostart_temp`, `autostart_recent`, `ssh_key_command`, `ssh_keys_recent`, `ssh_keys_not_regular`, `fw_docker_bypass`, the `exposed_*` IDs above for dangerous public ports, `fail2ban_not_running`, `fail2ban_sshd_disabled`, `fail2ban_log_unavailable`, `steal_high`, `disk_almost_full`, `load_high`, `memory_pressure`, `oom_recent`, `net_syn_flood`, `net_listen_overflow`, `net_conn_flood_ip`, `net_conn_flood_subnet`, `net_conn_surge`, `net_conntrack_full`, `net_orphans_high`, `net_udp_flood`, `net_rx_drops`, `net_pps_surge`, `net_ddos_suspected`, `net_table_truncated`.
+
+### Persistence, process memory and Docker security
+
+Persistence checks include login-shell users from `/etc/passwd` (including homes outside `/home`), shell profiles, cron/at/incron, systemd services/timers/user units/drop-ins/generators, PAM, motd, udev, Xsession/autostart, SysV init, network/apt/logrotate hooks, SSH rc/config and Git hooks under `/opt/*` and `/var/www/*`. PAM commands in temporary directories receive CRITICAL; local systemd/SysV files without package ownership are inventory information. A complete local dpkg index is required before declaring a file unowned. A PAM module reference that cannot be found in standard directories is INFO: optional modules may legitimately be absent; an existing unowned module remains HIGH. `hosts` repository overrides are reported for review; DNS addresses and empty shell history are inventory, not proof of tampering. System symlink targets are resolved within the inspected host root, with a cycle limit. User-controlled symlinks and unreadable, oversized or excessive files make the check incomplete. Persistence reads are limited to 1 MiB and 4,096 lines/file, 32 MiB/scan, 4,096 directory entries, 20,000 path candidates and 64 PAM module directories.
+
+Process cards display TracerPid, named CapEff/CapPrm/CapBnd/CapAmb, NoNewPrivs and Seccomp. Executable mappings identify temporary/deleted libraries and anonymous executable memory. Known JIT runtimes receive lower weight; a deleted library receives lower weight only when a replacement exists in the process root and the host package index applies. A foreign mount namespace never inherits host package ownership. Tracer links require a matching PID/start-time key. Maps are limited to 1 MiB/process, 256 distinct executable mappings and 32 MiB/scan. Environ is streamed with an 8 MiB/process and 32 MiB/scan budget; only the first 4,096 bytes per entry are inspected. Limits and denied access are visible. Only derived environment flags are retained; `/proc/environ` may omit shell changes made after startup.
+
+Docker checks read bounded `config.v2.json` and `hostconfig.json` files (2 MiB/file, 32 MiB total, at most 4,096 containers), including a configured `data-root`. They inspect privileged mode, Docker socket and sensitive host mounts, added capabilities, host namespaces, explicitly unconfined seccomp/AppArmor, configured root user, devices and secret-like environment **names**. Both bind syntax and structured mounts are supported. Stopped containers are labelled as saved configuration. Familiar Docker-management image names reduce the socket finding to HIGH but do not establish trust. Socket permissions and docker group membership are also reviewed; restrictive root-only sockets are accepted. Container names/images are attached to process findings. These are configuration observations, not a verification of live isolation. Docker API is never called; containerd/Podman security metadata is deferred.
+
+New process rule IDs: `ptrace_attached`, `lib_from_temp`, `lib_deleted`, `anon_exec_memory`, `history_disabled`, `prompt_command_net`, `ld_library_path_temp`, `proc_dangerous_caps`, `proc_ambient_caps`.
+New system rule IDs: `systemd_unit_no_package`, `pam_exec`, `pam_module_unusual`, `library_search_path`, `sysv_no_package`, `shell_history_disabled`, `hosts_override`, `dns_configuration`, `persistence_unavailable`, `package_ownership_unavailable`, `ctr_privileged`, `ctr_docker_sock`, `ctr_host_root_mount`, `ctr_dangerous_caps`, `ctr_host_namespaces`, `ctr_no_seccomp`, `ctr_no_apparmor`, `ctr_runs_as_root`, `ctr_devices`, `ctr_secrets_in_env`, `ctr_sock_perms`, `container_unavailable`. System findings appear in the existing System view and reports. The process allowlist applies to the new process rules; `systemd_unit_no_package` also accepts an exact unit path as `exe`. Docker/system advisories otherwise remain visible.
+
+Source semantics: [Linux proc documentation](https://docs.kernel.org/filesystems/proc.html), [Docker security](https://docs.docker.com/engine/security/) and [Docker seccomp](https://docs.docker.com/engine/security/seccomp/).
 
 ## Detection limitations
 
@@ -679,3 +730,31 @@ Contributions are very welcome! We gratefully accept bug reports, false-positive
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Login records and incident investigation
+
+The **Logins** panel reads local SSH authentication, sudo/su and account-management events, wtmp/btmp/utmp and sparse lastlog records. SSH SHA256 fingerprints are matched to each user's `authorized_keys`. Failed attempts are aggregated by IP, user and hour. The service retains seen IPs in `auth-state.json`; the initial import establishes a baseline rather than treating every address as new. Retention is the shorter of `SSG_AUTH_LOG_DAYS` and `SSG_HISTORY_RETENTION`. `SSG_AUTH_LOG_ENABLED=false` disables this collector.
+
+The **Timeline** panel and `/api/timeline?since=48h` combine process history, login events and recent file metadata. `/api/logins` uses the same authentication as other APIs. File ctime is an inode change time, not a creation time: chmod/chown and package maintenance also change it. A recent ctime with an old mtime is context for investigation, not proof of timestomping. Package-update windows are approximate and do not suppress findings.
+
+File metadata is collected by a separate hourly worker so traversal does not delay process scans or watchdog heartbeats. Timeline reports the initial scan as pending until its result is available.
+
+```sh
+serversecuritygo triage --format html --output /root/triage.html
+serversecuritygo triage --full --format json --output /root/triage.json
+serversecuritygo timeline --since 48h --format md --output /root/timeline.md
+serversecuritygo recent --days 3 --format json --output /root/recent.json
+serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
+```
+
+`triage` includes the process scan, configuration audit, authentication records, recent files and ten priority checks with shell-quoted verification commands. `--full` waits for the existing PID sweep and selected dpkg integrity checks; it does not claim a complete SUID/capability inventory. Verification commands are displayed, never executed. Reports support text/JSON/HTML/Markdown and the existing `--fail-on` exit codes. With `SSG_HOST_ROOT` pointing to an image and the default `/proc`, investigation commands exclude the analysis machine's live processes and clearly report unavailable live checks. One-shot commands do not write service history or authentication baselines.
+
+`collect` creates a new archive, refuses overwrite, requires a private destination directory (700), and writes the archive and entries with mode 600. It includes process/network/audit data, bounded persistence and log copies, maps, environment **names with every value omitted**, executable SHA256 hashes and copies of deleted/memfd executables when accessible. `/proc/PID/exe` is the only intentional file-symlink exception; PID identity and executable metadata are rechecked. `MANIFEST.sha256` hashes the stored archive members; `collection.json` records omissions. The CLI also prints the archive SHA256. Do not execute collected binaries. Collection is CLI-only; no archive download or collection endpoint is enabled in the web panel.
+
+The default total collection budget is 500 MiB (`SSG_COLLECT_MAX_MB`), with 50 MiB per executable (`SSG_COLLECT_MAX_BINARY_MB`) and a three-minute deadline. The total budget bounds compressed output, uncompressed members and executable reads; individual configuration/log files are limited to 2 MiB. Private keys, shadow/gshadow and `.env` files are excluded; recognized secrets in text are masked. Archives still contain personal data and potentially sensitive commands; keep them private. A manifest demonstrates consistency of captured bytes, not host authenticity or an atomic filesystem snapshot.
+
+Authentication reads have byte/event bounds: at most 5,000 events and keys, fixed auth.log rotations (`.1`, `.2.gz`), and explicit incomplete warnings for unavailable or over-limit sources. glibc little-endian amd64 and arm64 accounting layouts are supported; unknown image architectures are not guessed. Binary journald parsing remains a later stage: hosts without auth.log have limited authentication visibility. SSH key options/custom `AuthorizedKeysFile`, journal-vacuum intent and all log-rotation schemes cannot be inferred reliably. Journal-size decreases and shell-history suppression require review; empty logs alone are not proof of deletion. Recent-file scans stop at 100,000 paths, 10,000 results or ten seconds and do not traverse symlinks. The service refreshes that metadata hourly; the timeline contains only available, retained observations.
+
+New finding IDs: `login_new_ip`, `login_password_root`, `login_after_bruteforce`, `login_unusual_time`, `login_service_account`, `log_wtmp_truncated`, `log_wtmp_gap`, `log_authlog_truncated`, `log_history_null`, `log_journal_vacuum`, `log_utmp_missing`. A service-account authentication is LOW without a confirmed terminal and HIGH when a session TTY is matched. A successful login after at least ten failures from the same IP within ten minutes is flagged; shared NAT addresses and administrator activity must be considered. Local checks cannot establish trust after kernel compromise: preserve a disk image and analyze it independently.
+
+Accounting layouts follow the [glibc utmp definitions](https://github.com/bminor/glibc/blob/master/bits/utmp.h) and [aarch64 ABI definitions](https://github.com/bminor/glibc/blob/master/sysdeps/aarch64/bits/wordsize.h), checked on 2026-11-16. Linux CI compares a C-generated accounting record against the Go parser and collects a deleted executable from an isolated test process.

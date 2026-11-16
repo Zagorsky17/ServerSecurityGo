@@ -18,21 +18,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/authlog"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fail2ban"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/investigate"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/redact"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/rootkit"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/selfcheck"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/ufw"
 )
 
 // Options — параметры сканера.
 type Options struct {
+	Auth     *authlog.Collector
+	Recent   bool
 	FS       *procfs.FS
 	Detect   detect.Config
 	History  *history.Store
@@ -69,13 +75,16 @@ type MetricsSource interface {
 
 // Scanner — периодический сканер процессов.
 type Scanner struct {
-	opt    Options
-	mu     sync.RWMutex
-	snap   *model.Snapshot
-	seq    atomic.Uint64
-	rescan chan struct{}
-	scanMu sync.Mutex // сканирования не должны пересекаться
-	f2b    *fail2ban.Collector
+	recent      *model.RecentReport
+	opt         Options
+	mu          sync.RWMutex
+	snap        *model.Snapshot
+	lastSuccess time.Time
+	self        *selfcheck.Monitor
+	seq         atomic.Uint64
+	rescan      chan struct{}
+	scanMu      sync.Mutex // сканирования не должны пересекаться
+	f2b         *fail2ban.Collector
 	// sockDropped — сколько сокетов не вошло в предел на этом
 	// сканировании (под scanMu: сканирования не пересекаются).
 	sockDropped int
@@ -90,18 +99,56 @@ func New(opt Options) *Scanner {
 		opt.Logger = slog.Default()
 	}
 	opt.Detect.ScanInterval = opt.Interval
-	return &Scanner{opt: opt, rescan: make(chan struct{}, 1), f2b: fail2ban.NewCollector()}
+	s := &Scanner{opt: opt, rescan: make(chan struct{}, 1), f2b: fail2ban.NewCollector()}
+	if opt.Recent {
+		s.recent = &model.RecentReport{Time: time.Now(), Incomplete: true, Warnings: []i18n.Msg{i18n.T("warn.recent_pending")}}
+	}
+	return s
 }
 
 // SetMetrics подключает метрики после создания сканера (их сборщик
 // создаётся отдельно, со своим интервалом и каталогом данных).
 func (s *Scanner) SetMetrics(m MetricsSource) { s.opt.Metrics = m }
 
+// SetSelfCheck вызывается до запуска фоновых задач.
+func (s *Scanner) SetSelfCheck(m *selfcheck.Monitor) { s.self = m }
+
+func (s *Scanner) LastSuccess() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastSuccess
+}
+
+func (s *Scanner) Healthy(now time.Time) bool {
+	return selfcheck.Fresh(now, s.LastSuccess(), s.opt.Interval)
+}
+
+func (s *Scanner) SelfFindings() []model.SystemFinding {
+	if s.self == nil {
+		return nil
+	}
+	return s.self.Findings()
+}
+
 // Snapshot возвращает последний снимок (nil до первого сканирования).
 func (s *Scanner) Snapshot() *model.Snapshot {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.snap
+	snap := s.snap
+	recent := s.recent
+	s.mu.RUnlock()
+	if snap == nil || (s.self == nil && recent == nil) {
+		return snap
+	}
+	// Снимки неизменяемы; самоконтроль обновляется даже при зависшем сканировании.
+	copy := *snap
+	copy.Recent = recent
+	findings := s.SelfFindings()
+	copy.System = append(append([]model.SystemFinding(nil), snap.System...), findings...)
+	copy.Warnings = append([]i18n.Msg(nil), snap.Warnings...)
+	for _, f := range findings {
+		copy.Warnings = append(copy.Warnings, f.Title)
+	}
+	return &copy
 }
 
 // History возвращает хранилище истории.
@@ -131,6 +178,14 @@ func (s *Scanner) Run(ctx context.Context) {
 		workers.Add(1)
 		go func() { defer workers.Done(); s.opt.Integrity.Run(ctx) }()
 	}
+	if s.opt.Recent {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.runRecent(ctx) }()
+	}
+	if s.self != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.self.Run(ctx) }()
+	}
 	t := time.NewTicker(s.opt.Interval)
 	defer t.Stop()
 	for {
@@ -142,6 +197,27 @@ func (s *Scanner) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		case <-s.rescan:
+		}
+	}
+}
+
+// Обход файлов не должен задерживать сканирование процессов и heartbeat.
+func (s *Scanner) runRecent(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		now := time.Now()
+		recent := investigate.Recent(ctx, s.opt.FS.HostRoot, now.Add(-7*24*time.Hour), now)
+		if ctx.Err() != nil {
+			return
+		}
+		s.mu.Lock()
+		s.recent = recent
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }
@@ -168,9 +244,14 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	snap.Exposure = exposure.Build(exposure.Input{Procs: snap.Processes, Sockets: snap.Sockets, Addrs: addrs,
 		HostRoot: s.opt.FS.HostRoot, Allowed: s.opt.Detect.Allowed})
 	snap.Warnings = append(snap.Warnings, snap.Exposure.Warnings...)
-	ctx := &detect.Context{Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
+	owners, ownerErr := integrity.Owners(s.opt.FS.HostRoot)
+	ctx := &detect.Context{Owners: owners, Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
 	detect.Analyze(snap.Processes, ctx)
-	snap.System = append(detect.SystemChecks(s.opt.FS.HostRoot, start, s.opt.Detect), exposure.SystemFindings(snap.Exposure)...)
+	snap.System = append(detect.SystemChecksWithContext(s.opt.FS.HostRoot, start, s.opt.Detect, owners, snap.Processes), exposure.SystemFindings(snap.Exposure)...)
+	if ownerErr != nil {
+		snap.System = append(snap.System, model.SystemFinding{Path: "/var/lib/dpkg", Risk: model.RiskInfo, Finding: model.Finding{ID: "package_ownership_unavailable", Title: i18n.T("rule.package_ownership_unavailable.title"), Category: model.CatInfo, Recommendation: i18n.T("rule.package_ownership_unavailable.rec")}})
+	}
+	snap.UFW = ufw.Read(s.opt.FS.HostRoot)
 	// fail2ban: из журнала читаются только новые строки, а сводка
 	// пересчитывается, лишь когда что-то изменилось (и не чаще раза в
 	// минуту без изменений).
@@ -198,6 +279,12 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 			snap.Warnings = append(snap.Warnings, f.Title)
 		}
 	}
+	if s.opt.Auth != nil {
+		snap.Auth = s.opt.Auth.Build(start, snap.Processes)
+		snap.System = append(snap.System, snap.Auth.Findings...)
+		snap.Warnings = append(snap.Warnings, snap.Auth.Warnings...)
+	}
+	investigate.Attach(snap)
 	events := hist.Record(start, snap.Processes, snap.System)
 
 	snap.Stats = stats(snap)
@@ -214,8 +301,9 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 
 	s.mu.Lock()
 	s.snap = snap
+	s.lastSuccess = time.Now()
 	s.mu.Unlock()
-	return snap, nil
+	return s.Snapshot(), nil
 }
 
 // exposedByInode — опасные публичные порты по inode сокета (для правила
@@ -251,7 +339,9 @@ var (
 	// сканирования (≈1 с на 2 МБ).
 	scanCmdlineBudget = 2 << 20 // байт командных строк на сканирование
 	minCmdline        = 512     // столько читается и после исчерпания бюджета
-	scanFilesBudget   = 50_000  // записей Process.Files на сканирование
+	scanEnvBudget     = 32 << 20
+	scanMapsBudget    = 32 << 20
+	scanFilesBudget   = 50_000 // записей Process.Files на сканирование
 )
 
 // collect читает все процессы и сокеты.
@@ -273,9 +363,9 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 
 	raws := make([]*procfs.Raw, 0, len(pids))
 	readErrors := 0
-	cmdBudget, filesBudget := scanCmdlineBudget, scanFilesBudget
+	cmdBudget, filesBudget, mapsBudget, envBudget := scanCmdlineBudget, scanFilesBudget, scanMapsBudget, scanEnvBudget
 	for _, pid := range pids {
-		lim := procfs.Limits{Cmdline: min(fs.MaxCmdline, max(cmdBudget, minCmdline)), Files: min(fs.MaxFiles, filesBudget)}
+		lim := procfs.Limits{Cmdline: min(fs.MaxCmdline, max(cmdBudget, minCmdline)), Files: min(fs.MaxFiles, filesBudget), Maps: min(1<<20, max(0, mapsBudget)), Env: min(8<<20, max(0, envBudget))}
 		if fs.MaxCmdline <= 0 {
 			lim.Cmdline = min(procfs.DefaultMaxCmdline, max(cmdBudget, minCmdline))
 		}
@@ -287,6 +377,8 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 			continue
 		}
 		p := raw.Proc
+		mapsBudget -= raw.MapsBytes
+		envBudget -= raw.EnvBytes
 		for _, a := range raw.RawArgs {
 			cmdBudget -= len(a) + 1
 		}

@@ -347,3 +347,31 @@ func TestRecordAuditChangeCheck(t *testing.T) {
 		t.Errorf("«исправлено» для устаревшего изменения: %+v", evs)
 	}
 }
+
+func TestSelfCheckHistoryPersistenceAndWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := model.Event{Time: time.Now(), Type: model.EvSystem, Name: "self_scan_stalled", Risk: model.RiskHigh, Details: i18n.L("stalled")}
+	if err := s.RecordSelfCheck(e); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := again.Events(10)
+	if len(events) != 1 || events[0].Name != e.Name {
+		t.Fatal(events)
+	}
+	os.Remove(s.eventsPath())
+	os.Mkdir(s.eventsPath(), 0700)
+	if err := s.RecordSelfCheck(e); err == nil {
+		t.Fatal("journal write failure hidden")
+	}
+	if len(s.Events(10)) != 2 {
+		t.Fatal("event lost from memory on disk error")
+	}
+}

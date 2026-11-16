@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/authlog"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/config"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
@@ -51,6 +52,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/report"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/rootkit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/selfcheck"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/tui"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/web"
@@ -88,6 +90,8 @@ func main() {
 		err = cmdServe(os.Args[2:])
 	case "scan":
 		err = cmdScan(os.Args[2:])
+	case "triage", "timeline", "recent", "collect":
+		err = cmdInvestigation(os.Args[1], os.Args[2:])
 	case "audit":
 		err = cmdAudit(os.Args[2:])
 	case "demo":
@@ -198,10 +202,12 @@ func cmdServe(args []string) error {
 	mc := metricsCollector(cfg, cfg.DataDir, log)
 	nl := netMonitor(cfg, detCfg, mc)
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log,
-		LogDays: cfg.LogDays, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, Interval: cfg.RootkitInterval}), Integrity: integrityRunner(cfg, detCfg, false)})
+		LogDays: cfg.LogDays, Auth: authCollector(cfg, false), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, Interval: cfg.RootkitInterval}), Integrity: integrityRunner(cfg, detCfg, false)})
 	if mc != nil {
 		sc.SetMetrics(mc) // признаки метрик попадают в системные находки
 	}
+
+	attachSelfCheck(sc, cfg, cfg.DataDir, log, true)
 
 	// Без пароля панель только для LocalUIDs: владельца подключения служба
 	// определяет по /proc/net/tcp (см. web.Options.CheckPeer).
@@ -238,6 +244,13 @@ func cmdServe(args []string) error {
 		bg = append(bg, mc.Run)
 	}
 	return run(sc, srv, srv.LocalHandler(), connCtx, cfg, log, func() { _ = hist.Flush(time.Now()) }, bg...)
+}
+
+// Каталог состояния пуст для разовых проверок: файлы службы не изменяются.
+func attachSelfCheck(sc *scanner.Scanner, cfg config.Config, stateDir string, log *slog.Logger, watchdog bool) {
+	m := selfcheck.New(selfcheck.Options{HostRoot: cfg.HostRoot, DataDir: stateDir, Allowlist: cfg.AllowlistFile,
+		Interval: sc.Interval(), Progress: sc.LastSuccess, Record: sc.History().RecordSelfCheck, Logger: log, Watchdog: watchdog})
+	sc.SetSelfCheck(m)
 }
 
 // auditRunner создаёт фоновый аудит настроек службы (nil, если он
@@ -503,10 +516,11 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	nl := netMonitor(cfg, detCfg, mc)
 	pfs.MaxSockets = cfg.NetMaxSockets
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet,
-		LogDays: cfg.LogDays, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval}), Integrity: integrityRunner(cfg, detCfg, true)})
+		LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval}), Integrity: integrityRunner(cfg, detCfg, true)})
 	if mc != nil {
 		sc.SetMetrics(mc)
 	}
+	attachSelfCheck(sc, cfg, "", quiet, false)
 	// Аудит без каталога данных: базовая линия только на время сеанса,
 	// файлы службы не трогаются.
 	var ar *audit.Runner
@@ -570,7 +584,8 @@ func runScan(args []string) (int, error) {
 		_ = rk.Sweep(ctx)
 		_ = ir.Check(ctx)
 	}
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays, Rootkit: rk, Integrity: ir})
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Rootkit: rk, Integrity: ir})
+	attachSelfCheck(sc, cfg, "", newLogger("error"), false)
 	// Метрики разового запуска: один замер без истории. Признаки с
 	// удержанием (steal_high, load_high) так не сработают — для них нужна
 	// работающая служба; disk_almost_full виден сразу.
@@ -695,7 +710,7 @@ func cmdDemo(args []string) error {
 		Baseline: mc.Median, FastHolds: true})
 	mc.SetExtra(nl)
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
-		BeforeScan: anim.Step, Hostname: "demo-server", Demo: true, Metrics: mc, NetLoad: nl})
+		Auth: authlog.New(authlog.Options{Root: hostRoot, ReadOnly: true}), Recent: true, BeforeScan: anim.Step, Hostname: "demo-server", Demo: true, Metrics: mc, NetLoad: nl})
 	// Демо-файлы принадлежат текущему пользователю: он и считается root.
 	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Logger: log})
 	if *useTUI {
@@ -775,4 +790,11 @@ func integrityRunner(cfg config.Config, det detect.Config, readOnly bool) *integ
 		}
 		return false
 	}})
+}
+
+func authCollector(cfg config.Config, readOnly bool) *authlog.Collector {
+	if !cfg.AuthLogEnabled {
+		return nil
+	}
+	return authlog.New(authlog.Options{Root: cfg.HostRoot, StateDir: cfg.DataDir, Days: cfg.LogDays, Retention: cfg.Retention, ReadOnly: readOnly})
 }

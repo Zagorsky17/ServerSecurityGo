@@ -204,3 +204,41 @@ func TestVerificationIntervals(t *testing.T) {
 		t.Fatal("wrong defaults")
 	}
 }
+
+func TestAllowlistRejectsOversizeAndSymlink(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.json")
+	if err := os.WriteFile(path, []byte(strings.Repeat(" ", (1<<20)+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAllowlist(path); err == nil {
+		t.Fatal("oversized allowlist accepted")
+	}
+	link := path + ".link"
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAllowlist(link); err == nil {
+		t.Fatal("symlink accepted")
+	}
+}
+
+func TestInvestigationConfig(t *testing.T) {
+	t.Setenv("SSG_AUTH_LOG_ENABLED", "false")
+	t.Setenv("SSG_COLLECT_MAX_MB", "64")
+	t.Setenv("SSG_COLLECT_MAX_BINARY_MB", "8")
+	c, e := FromEnv()
+	if e != nil || c.AuthLogEnabled || c.CollectMaxMB != 64 || c.CollectMaxBinaryMB != 8 {
+		t.Fatalf("%+v %v", c, e)
+	}
+	for _, k := range []string{"SSG_COLLECT_MAX_MB", "SSG_COLLECT_MAX_BINARY_MB"} {
+		t.Setenv(k, "0")
+		if _, e := FromEnv(); e == nil {
+			t.Fatal(k)
+		}
+		t.Setenv(k, "8")
+	}
+	t.Setenv("SSG_AUTH_LOG_ENABLED", "invalid")
+	if _, e := FromEnv(); e == nil {
+		t.Fatal("invalid boolean")
+	}
+}

@@ -27,6 +27,7 @@ func Demo(now time.Time) *Tree {
 		MemTotalKB: 4 * 1024 * 1024,
 		Kernel:     "6.8.0-demo",
 		HostFiles: map[string]string{
+			"var/log/auth.log": now.Add(-15*time.Minute).UTC().Format(time.RFC3339) + " demo sshd[100]: Accepted password for root from 198.51.100.7 port 4567 ssh2\n" + now.Add(-10*time.Minute).UTC().Format(time.RFC3339) + " demo sudo: deploy : TTY=pts/0 ; COMMAND=/usr/bin/id\n",
 			"etc/passwd": "root:x:0:0:root:/root:/bin/bash\n" +
 				"daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n" +
 				"www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n" +
@@ -58,10 +59,20 @@ func Demo(now time.Time) *Tree {
 			"etc/ld.so.preload":    "/usr/local/lib/libprocesshider.so\n",
 			// ufw включён и открывает только SSH и веб: Redis на 0.0.0.0
 			// закрыт им, а порты Docker — нет (Docker обходит ufw).
-			"etc/ufw/ufw.conf":   "ENABLED=yes\nLOGLEVEL=low\n",
-			"etc/default/ufw":    "IPV6=yes\nDEFAULT_INPUT_POLICY=\"DROP\"\n",
-			"etc/ufw/user.rules": ufwDemoRules,
+			"etc/ufw/ufw.conf":                      "ENABLED=yes\nLOGLEVEL=low\n",
+			"etc/default/ufw":                       "IPV6=yes\nDEFAULT_INPUT_POLICY=\"DROP\"\nDEFAULT_OUTPUT_POLICY=ACCEPT\nDEFAULT_FORWARD_POLICY=DROP\nDEFAULT_APPLICATION_POLICY=SKIP\nMANAGE_BUILTINS=no\nIPT_SYSCTL=/etc/ufw/sysctl.conf\nIPT_MODULES=\"\"\n",
+			"etc/ufw/user.rules":                    ufwDemoRules,
+			"etc/ufw/before.rules":                  "*filter\n-A ufw-before-input -i lo -j ACCEPT\nCOMMIT\n",
+			"etc/ufw/after.rules":                   "*filter\n-A ufw-after-input -p udp --dport 137 -j ufw-skip-to-policy-input\nCOMMIT\n",
+			"etc/ufw/before6.rules":                 "*filter\n-A ufw6-before-input -i lo -j ACCEPT\nCOMMIT\n",
+			"etc/ufw/user6.rules":                   "*filter\n### tuple ### allow tcp 22 ::/0 any ::/0 in\n-A ufw6-user-input -p tcp --dport 22 -j ACCEPT\nCOMMIT\n",
+			"etc/ufw/after6.rules":                  "*filter\nCOMMIT\n",
+			"etc/ufw/sysctl.conf":                   "net/ipv4/ip_forward=0\nnet/ipv6/conf/default/forwarding=0\n",
+			"etc/ufw/applications.d/openssh-server": "[OpenSSH]\ntitle=Secure shell server\nports=22/tcp\n",
 			// Контейнер приложения: порт 3000 опубликован через docker-proxy.
+			"var/lib/docker/containers/" + webappID + "/hostconfig.json":  `{}`,
+			"var/lib/docker/containers/" + mongoID + "/hostconfig.json":   `{}`,
+			"var/lib/docker/containers/" + stoppedID + "/hostconfig.json": `{}`,
 			"var/lib/docker/containers/" + webappID + "/config.v2.json": `{"ID":"` + webappID + `","Name":"/webapp","Config":{"Image":"node:20-alpine","Env":["SECRET=demo"]},` +
 				`"State":{"Running":true},"NetworkSettings":{"Ports":{"3000/tcp":[{"HostIp":"0.0.0.0","HostPort":"3000"}]}}}`,
 			// Контейнер MongoDB без docker-proxy (userland-proxy=false):
@@ -158,7 +169,9 @@ func Demo(now time.Time) *Tree {
 		// 3. Бинарник удалён после запуска, LD_PRELOAD, слушает порт.
 		{PID: 3301, PPID: 1, Comm: "dbus-daemon", Args: []string{"/tmp/.ICE-unix/dbus-daemon", "--session"}, Exe: "/tmp/.ICE-unix/dbus-daemon (deleted)", Cwd: "/tmp",
 			StartTicks: ticks(3 * time.Hour), RSSKB: 4000, Env: []string{"LD_PRELOAD=/tmp/.ICE-unix/libc.so.7", "PATH=/usr/bin"},
-			FDs: map[int]string{3: sock(2003)}},
+			Maps:        "1000-2000 r-xp 0 00:00 123 /tmp/.ICE-unix/libc.so.7 (deleted)\n2000-3000 rwxp 0 00:00 0\n",
+			StatusExtra: "CapEff:\t0000000000200000\nCapPrm:\t0000000000200000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t0\n",
+			FDs:         map[int]string{3: sock(2003)}},
 		// 4. Безфайловый запуск через memfd.
 		{PID: 3401, PPID: 1, Comm: "3", Args: []string{"/proc/self/fd/3"}, Exe: "/memfd: (deleted)", StartTicks: ticks(25 * time.Minute), RSSKB: 3000,
 			FDs: map[int]string{4: sock(2004)}},

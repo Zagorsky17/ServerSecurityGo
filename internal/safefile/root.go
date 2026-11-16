@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 )
 
 // OpenRooted ограничивает путь root и сверяет обычный файл до и после открытия.
@@ -78,4 +80,107 @@ func WriteJSON(path string, v any, maxBytes int64) error {
 		return cerr
 	}
 	return os.Rename(f.Name(), path)
+}
+
+// ReadRooted читает обычный файл внутри root с ограничением размера.
+func ReadRooted(root *os.Root, name string, limit int64) ([]byte, os.FileInfo, error) {
+	f, fi, err := OpenRooted(root, name)
+	if err != nil {
+		return nil, fi, err
+	}
+	defer f.Close()
+	if limit < 0 || fi.Size() > limit {
+		return nil, fi, ErrTooLarge
+	}
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if int64(len(b)) > limit {
+		clear(b)
+		return nil, fi, ErrTooLarge
+	}
+	return b, fi, err
+}
+
+// ReadDirRooted не следует за последним симлинком и не открывает FIFO с блокировкой.
+func ReadDirRooted(root *os.Root, name string, limit int) ([]os.DirEntry, error) {
+	fi, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.IsDir() {
+		return nil, ErrNotRegular
+	}
+	f, err := root.OpenFile(name, readFlags(), 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	after, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !after.IsDir() || !os.SameFile(fi, after) {
+		return nil, ErrNotRegular
+	}
+	entries, err := f.ReadDir(limit + 1)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if len(entries) > limit {
+		return nil, ErrTooLarge
+	}
+	return entries, nil
+}
+
+// ResolveRooted разрешает доверенный системный путь; абсолютные цели ссылок
+// отсчитываются от проверяемого root. Открывать результат нужно снова через root.
+func ResolveRooted(root *os.Root, name string) (string, error) {
+	if filepath.IsAbs(name) {
+		return "", os.ErrPermission
+	}
+	pending := strings.Split(name, string(os.PathSeparator))
+	var parts []string
+	links := 0
+	for len(pending) > 0 {
+		part := pending[0]
+		pending = pending[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			if len(parts) == 0 {
+				return "", os.ErrPermission
+			}
+			parts = parts[:len(parts)-1]
+			continue
+		}
+		current := filepath.Join(append(slices.Clone(parts), part)...)
+		fi, err := root.Lstat(current)
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			if len(pending) > 0 && !fi.IsDir() {
+				return "", os.ErrInvalid
+			}
+			parts = append(parts, part)
+			continue
+		}
+		links++
+		if links > 40 {
+			return "", os.ErrInvalid
+		}
+		target, err := os.Readlink(filepath.Join(root.Name(), current))
+		if err != nil {
+			return "", err
+		}
+		if filepath.IsAbs(target) {
+			parts = nil
+			target = strings.TrimLeft(target, string(os.PathSeparator))
+		}
+		pending = append(strings.Split(target, string(os.PathSeparator)), pending...)
+	}
+	if len(parts) == 0 {
+		return ".", nil
+	}
+	return filepath.Join(parts...), nil
 }

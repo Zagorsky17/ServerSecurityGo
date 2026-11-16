@@ -12,11 +12,12 @@ require_root
 
 log "Текущая: $(bin/serversecuritygo version 2>/dev/null || echo '?'); откат к: $(bin/serversecuritygo.prev version)"
 cp -f bin/serversecuritygo bin/serversecuritygo.failed 2>/dev/null || true
+systemctl stop "$APP_NAME"
 cp -f bin/serversecuritygo.prev bin/serversecuritygo
 if [ -f bin/.prev-ref ]; then
   git -c advice.detachedHead=false checkout -q "$(cat bin/.prev-ref)" || warn "не удалось вернуть исходники к $(cat bin/.prev-ref)"
 fi
-install_unit
+restore_self_baseline
 systemctl restart "$APP_NAME"
 if health_check; then
   log "Откат выполнен: $(bin/serversecuritygo version)"

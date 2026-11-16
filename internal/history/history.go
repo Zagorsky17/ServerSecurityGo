@@ -410,30 +410,39 @@ func listenList(p *model.Process) []string {
 	return slices.Compact(out)
 }
 
+// RecordSelfCheck записывает событие независимо от цикла сканирования.
+func (s *Store) RecordSelfCheck(e model.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendEvents([]model.Event{e})
+}
+
 // appendEvents добавляет события в память и в файл журнала.
-func (s *Store) appendEvents(evs []model.Event) {
+func (s *Store) appendEvents(evs []model.Event) error {
 	if len(evs) == 0 {
-		return
+		return nil
 	}
 	s.events = append(s.events, evs...)
 	if over := len(s.events) - s.opt.MemoryEvents; over > 0 {
 		s.events = slices.Clone(s.events[over:])
 	}
 	if s.opt.Dir == "" {
-		return
+		return nil
 	}
 	s.rotateIfNeeded()
 	f, err := os.OpenFile(s.eventsPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return
+		return err
 	}
 	defer f.Close()
 	w := bufio.NewWriter(f)
 	enc := json.NewEncoder(w)
 	for _, e := range evs {
-		_ = enc.Encode(e)
+		if err := enc.Encode(e); err != nil {
+			return err
+		}
 	}
-	_ = w.Flush()
+	return w.Flush()
 }
 
 // rotateIfNeeded переименовывает журнал в events.jsonl.1, если он

@@ -2,7 +2,6 @@
 
 [English](README.md) | [Русский](README.ru.md) | **简体中文**
 
-[![CI](https://github.com/Zagorsky17/ServerSecurityGo/actions/workflows/ci.yml/badge.svg)](https://github.com/Zagorsky17/ServerSecurityGo/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Zagorsky17/ServerSecurityGo)](https://github.com/Zagorsky17/ServerSecurityGo/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -26,6 +25,7 @@
   - [fail2ban](#fail2ban)
   - [服务器指标](#服务器指标)
   - [网络负载与 DDoS 迹象](#网络负载与-ddos-迹象)
+- [扫描器自检](#扫描器自检)
 - [风险评分方式](#风险评分方式)
 - [可检测的异常示例](#可检测的异常示例)
 - [检测局限](#检测局限)
@@ -327,6 +327,14 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 **保护扫描器自身。** 攻击期间 `/proc/net/tcp` 会增长到数十万行，因此每个网络命名空间的套接字数量受 `SSG_NET_MAX_SOCKETS` 限制（100 000，每个套接字约 200 字节）；超出部分会被跳过，并出现 `net_table_truncated`。按地址聚合的数据同样有大小上限。
 
+### UFW 与 PID 扫描耗时
+
+**UFW** 位于 fail2ban 后面（未安装 fail2ban 时位于审计后面）。显示已保存的入站、出站和转发策略、IPv6、日志、应用程序配置、conntrack 模块及 sysctl 文件。可以查看 `ufw.conf`、`/etc/default/ufw`、`before/user/after.rules` 及其 IPv6 版本、`before/after.init`、`sysctl.conf`、`IPT_SYSCTL` 指定的文件和 `applications.d` 配置的完整内容。TUI 中选择文件后按 Enter 滚动详情；`/` 按路径和内容过滤，`y` 复制路径，`Y` 复制 JSON。网页中展开文件即可。API 为 `GET /api/ufw`，采用与其他接口相同的授权机制。
+
+这里展示磁盘上的配置，文件修改可能尚未生效；不验证内核当前规则或 Docker 的第三方规则。读取时不执行命令，每个文件限制 1 MiB，总计 4 MiB，应用配置最多 1000 个；读取错误、超限和必需文件缺失会明确显示。缺失设置不会被假定的默认值代替。[UFW 处理顺序](https://manpages.ubuntu.com/manpages/noble/man8/ufw-framework.8.html) 为 before → user → after，IPv4 和 IPv6 分别处理。
+
+完整 PID 扫描期间，警告显示已用时间、预计剩余时间和已扫描范围百分比。时间格式为 `HH:MM:SS`；预估按本次扫描的平均速度计算，随负载变化。尚无初始测量时显示正在计算。取消或失败后耗时停止增长，新一轮扫描重新计时。显示随扫描器快照（`SSG_SCAN_INTERVAL`）更新，成功完成后显示总耗时。
+
 ### 隐藏进程、内核模块与软件包完整性
 
 结果显示在**系统**、历史记录和 `scan` 报告中。服务将 `/proc` 列表与线程 TGID、父进程 PID 对照，并根据 PID 和启动时间，两次确认缺失的进程组组长，两次间隔 50 毫秒。普通线程、已退出进程和复用的 PID 被排除。独立工作线程每批探测 1024 个 PID，批次之间暂停 100 毫秒，完成后按 `SSG_ROOTKIT_INTERVAL`（默认 `10m`）重新运行。较大的 PID 范围需要数分钟，短命进程可能被漏掉。`loadavg` 的任务总数不作为隐藏进程的证据，因为命名空间和并发创建任务会使这种推断不可靠。
@@ -344,6 +352,36 @@ serversecuritygo scan --full --min-risk INFO --format json --output /root/full-s
 `--full` 等待 PID 扫描及文件验证，支持取消。单次扫描和本地 TUI 读取服务基线，但不覆盖它们。快速 `scan` 会将这些检查保留为待执行状态，并返回代码 **3**，使用 `--fail-on none` 时也是如此；达到阈值的发现仍优先返回代码 1。`rootkit_unavailable`、`rootkit_sweep_pending`、`integrity_pending`、`integrity_unavailable` 和 `integrity_unverified` 也会使报告不完整，并在警告中显示，不受风险过滤器影响。完成的检查含时间戳（`rootkit_sweep_complete`、`integrity_complete`）。演示模式不会通过这些检查探测真实主机。
 
 基线是首次观察时建立的本地信任，并非独立真实性验证。root 可以修改 MD5、[本地 dpkg 数据库](https://manpages.debian.org/trixie/dpkg/dpkg.1.en.html)和 SHA-256 基线。被入侵的内核也可以欺骗 procfs 与 sysfs。与独立可信 `.deb` 归档对照属于后续阶段。读取限制为：100,000 个 `/proc` 条目、16,384 个模块条目、每次 64 MiB 的 dpkg 元数据、每个待哈希文件 1 GiB。超限会报告检查不完整，而不会给出无异常结论。
+
+## 扫描器自检
+
+服务独立于扫描循环检查安装文件的完整性和扫描数据的新鲜度。结果显示在系统页面、概览警告、历史记录及 `scan` 报告中。自检不会修改服务器配置，也不会自动应用例外规则的变更。
+
+| 检测项 | 含义 |
+|---|---|
+| `self_binary_changed` — CRITICAL | 启动时正在运行的二进制文件 SHA256 与安装基线不一致。Linux 读取 `/proc/self/exe`，即使文件路径已被替换，仍检查正在运行的文件。 |
+| `self_unit_changed` — HIGH | `/etc`、`/run`、`/usr/local/lib`、`/usr/lib` 或 `/lib/systemd/system` 下的 `serversecuritygo.service`、`serversecuritygo.service.d/*.conf` 或通用 `service.d/*.conf` 发生修改、新增或删除。证据列出受影响路径。 |
+| `self_baseline_changed` — HIGH | 启动后基线被修改；服务继续使用原始基线进行比较。 |
+| `self_allowlist_changed` — MEDIUM | 例外文件被修改、新增或删除。仅保存路径和 SHA256，不将内容写入历史记录。已加载的规则持续生效至重启。 |
+| `self_scan_stalled` — HIGH | 超过三个扫描间隔没有成功完成扫描，包括第一次扫描。失败的扫描不会更新成功时间。 |
+| `self_clock_back` — MEDIUM | 两次检查之间，系统时间相对单调时钟后退超过一秒。警告保留至重启；扫描超时不受系统时间调整影响。 |
+| `self_check_unavailable` — MEDIUM | 基线缺失或损坏、文件无法读取、类型不受支持或超出大小限制。这表示检查不完整，并不代表完整性已确认。 |
+
+安装和更新在启动服务前原子写入 `/var/lib/serversecuritygo/self.sha256`，权限为 `600`。此固定路径不受 `SSG_DATA_DIR` 影响。回滚同时恢复原二进制文件和旧基线。服务本身不会创建或更新此基线。手动安装时，确认二进制文件及单元文件可信后，在项目目录中以 root 执行：
+
+```bash
+source scripts/lib.sh
+write_self_baseline
+systemctl restart serversecuritygo
+```
+
+此命令将当前文件接受为基线；应先查明变更原因，不能仅为消除警告而运行。校验和不能替代可信的发行签名，具有 root 权限的攻击者能够同时替换程序与基线。单元检查覆盖磁盘文件，包括被其他文件覆盖的配置，并不能证明 systemd 已加载这些配置。管理员的合法变更也需要核实。
+
+观察器正常运行时，至少每五秒检查一次文件。例外文件必须是普通文件，不得使用符号链接，且不超过 1 MiB；规则加载也执行相同限制。观察状态保存在 `SSG_DATA_DIR/self-allowlist.json`，权限为 `600`，以检测重启之间的变更。单次 `scan` 和本地 TUI 仅使用内存，不修改服务状态；演示模式不检查实际安装。
+
+`GET /api/status` 包含 `stale` 字段；首次扫描成功之前及数据过期时，`/healthz` 返回 `503`。完整性警告本身不会导致存活检查失败，应查看报告。自检不可用时，`scan` 返回不完整状态（退出码 `3`，除非风险结果优先触发退出码 `1`）；`--fail-on none` 也不会隐藏不完整状态。
+
+单元启用 `WatchdogSec=30s` 和 `NotifyAccess=main`。扫描仍有效时发送本地 `WATCHDOG=1` 通知；通知停止后，systemd 只重启 ServerSecurityGo，不更改其他进程或网络。默认扫描间隔为 30 秒，超过 90 秒无成功结果后数据过期，再等待 watchdog 超时。协议参考：[systemd.service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html) 和 [sd_notify](https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html)。
 
 ## 风险评分方式
 
@@ -384,6 +422,19 @@ Web 面板和终端界面会以所选语言显示这段文字。
 
 可用于白名单的完整规则 ID 列表：
 `exe_in_temp`、`exe_hidden_path`、`cwd_in_temp`、`exe_deleted`、`exe_memfd`、`exe_world_writable`、`exe_setuid_nonstd`、`exe_system_nonroot`、`kthread_masquerade`、`system_name_masquerade`、`name_mismatch`、`unusual_name`、`empty_cmdline`、`cmdline_truncated`、`unicode_control`、`web_spawns_shell`、`scheduler_suspicious`、`stdio_socket`、`revshell_pattern`、`download_exec`、`miner_pattern`、`miner_name`、`pool_port`、`shell_network`、`suspicious_listen`、`cpu_sustained`、`mem_sustained`、`ld_preload`、`root_from_writable`、`exposed_database`、`exposed_docker_api`、`exposed_admin_panel`、`exposed_remote_access`、`exposed_file_sharing`、`exposed_info_service`、`exposed_amplifier`。系统检查：`ld_so_preload`、`autostart_suspicious`、`autostart_temp`、`autostart_recent`、`ssh_key_command`、`ssh_keys_recent`、`ssh_keys_not_regular`、`fw_docker_bypass`、上面针对危险公网端口的 `exposed_*` ID，以及 `fail2ban_not_running`、`fail2ban_sshd_disabled`、`fail2ban_log_unavailable`、`steal_high`、`disk_almost_full`、`load_high`、`memory_pressure`、`oom_recent`、`net_syn_flood`、`net_listen_overflow`、`net_conn_flood_ip`、`net_conn_flood_subnet`、`net_conn_surge`、`net_conntrack_full`、`net_orphans_high`、`net_udp_flood`、`net_rx_drops`、`net_pps_surge`、`net_ddos_suspected`、`net_table_truncated`。
+
+### 持久化、进程内存与 Docker 安全
+
+持久化检查覆盖 `/etc/passwd` 中具有登录 shell 的用户，包括 `/home` 之外的主目录：shell 配置、cron/at/incron、systemd 服务/定时器/用户单元/drop-in/生成器、PAM、motd、udev、Xsession/autostart、SysV init、网络/apt/logrotate 钩子、SSH rc/config，以及 `/opt/*` 和 `/var/www/*` 下的 Git hooks。临时目录中的 PAM 命令评为 CRITICAL；不属于软件包的本地 systemd/SysV 文件属于清单信息。只有完整的本地 dpkg 索引才能支持“无软件包归属”的判断。标准目录中找不到的 PAM 模块引用为 INFO：可选模块可能未安装；实际存在但无软件包归属的模块仍为 HIGH。hosts 中的软件仓库域名覆盖需要核查；DNS 地址和空 shell 历史本身不能证明篡改。系统符号链接在被检查主机根目录内解析，并限制跳转次数。用户符号链接、读取失败或超限会使检查不完整。限制为每文件 1 MiB 和 4,096 行、每轮 32 MiB、每目录 4,096 项、20,000 个候选路径及 64 个 PAM 模块目录。
+
+进程详情显示 TracerPid、具名的 CapEff/CapPrm/CapBnd/CapAmb、NoNewPrivs 和 Seccomp。可执行内存映射用于检查临时/已删除库和匿名可执行内存。已知 JIT 运行时降低权重；只有进程根目录中存在替代文件且主机软件包索引适用时，已删除库才降低权重。不同挂载命名空间不会继承主机的软件包归属。跟踪器关联要求 PID 与启动时间同时匹配。maps 限制为每进程 1 MiB、256 个不同可执行映射，每轮 32 MiB。environ 流式读取限制为每进程 8 MiB、每轮 32 MiB，每项仅分析前 4,096 字节。超限和拒绝访问均明确显示。仅保留环境信号，不保留变量值；`/proc/environ` 可能不反映 shell 启动后的变量更改。
+
+Docker 检查读取 `config.v2.json` 与 `hostconfig.json`，支持自定义 `data-root`：每文件 2 MiB，总计 32 MiB，最多 4,096 个容器。检查 privileged、Docker socket、敏感主机挂载、额外 capabilities、主机命名空间、显式关闭 seccomp/AppArmor、配置的 root 用户、设备及疑似秘密的环境变量**名称**。支持 bind 字符串和结构化挂载。停止的容器标记为保存的配置。已知 Docker 管理镜像名称将 socket 信号降为 HIGH，但不证明可信。还检查 socket 权限及 docker 组成员；仅允许 root 的严格权限可接受。进程信号包含容器名称及镜像。这些是配置观察，不能验证实时隔离。应用从不调用 Docker API；containerd/Podman 安全元数据留待后续实现。
+
+新增进程规则 ID：`ptrace_attached`, `lib_from_temp`, `lib_deleted`, `anon_exec_memory`, `history_disabled`, `prompt_command_net`, `ld_library_path_temp`, `proc_dangerous_caps`, `proc_ambient_caps`。
+新增系统规则 ID：`systemd_unit_no_package`, `pam_exec`, `pam_module_unusual`, `library_search_path`, `sysv_no_package`, `shell_history_disabled`, `hosts_override`, `dns_configuration`, `persistence_unavailable`, `package_ownership_unavailable`, `ctr_privileged`, `ctr_docker_sock`, `ctr_host_root_mount`, `ctr_dangerous_caps`, `ctr_host_namespaces`, `ctr_no_seccomp`, `ctr_no_apparmor`, `ctr_runs_as_root`, `ctr_devices`, `ctr_secrets_in_env`, `ctr_sock_perms`, `container_unavailable`。系统信号显示在现有“系统”视图及报告中。新增进程规则支持 allowlist；`systemd_unit_no_package` 可用精确单元路径作为 `exe`。其他新增系统和 Docker 提示保持可见。
+
+来源语义：[Linux proc 文档](https://docs.kernel.org/filesystems/proc.html)、[Docker 安全](https://docs.docker.com/engine/security/)及 [Docker seccomp](https://docs.docker.com/engine/security/seccomp/)。
 
 ## 检测局限
 
@@ -679,3 +730,31 @@ API（JSON，用于自动化；文本字段的格式见[语言](#语言)）：`G
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。
+
+### 登录记录与事件调查
+
+**登录**面板读取本地 SSH、sudo/su、账户变更事件、wtmp/btmp/utmp 和稀疏 lastlog 文件。SSH SHA256 指纹与用户的 `authorized_keys` 匹配；失败尝试按 IP、用户和小时汇总。服务将已见 IP 保存到 `auth-state.json`，首次导入建立基线，不把所有地址都标为新地址。保留期限取 `SSG_AUTH_LOG_DAYS` 与 `SSG_HISTORY_RETENTION` 中较短者。`SSG_AUTH_LOG_ENABLED=false` 关闭此采集器。
+
+**时间线**面板和 `/api/timeline?since=48h` 合并进程历史、登录事件和最近文件元数据。`/api/logins` 使用与其他 API 相同的身份验证。ctime 是 inode 变更时间，不是创建时间；chmod/chown 和软件包维护也会改变它。旧 mtime 与新 ctime 的差异仅供调查，不证明时间被伪造。软件包更新窗口是近似关联，不会抑制发现。
+
+文件元数据由独立的每小时工作任务收集，不会阻塞进程扫描或 watchdog 心跳。首次扫描完成前，时间线会明确显示等待状态。
+
+```sh
+serversecuritygo triage --format html --output /root/triage.html
+serversecuritygo triage --full --format json --output /root/triage.json
+serversecuritygo timeline --since 48h --format md --output /root/timeline.md
+serversecuritygo recent --days 3 --format json --output /root/recent.json
+serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
+```
+
+`triage` 包含进程扫描、配置审计、认证记录、最近文件和十项优先检查，附带经过 shell 引用处理的验证命令。`--full` 等待现有 PID 遍历及选定 dpkg 文件校验，不代表完整的 SUID/capabilities 清单。验证命令只展示，不执行。报告支持 text/JSON/HTML/Markdown 及现有 `--fail-on` 退出码。`SSG_HOST_ROOT` 指向磁盘镜像且使用默认 `/proc` 时，调查命令排除分析机器的实时进程，并明确说明无法进行的实时检查。单次命令不写入服务历史或登录基线。
+
+`collect` 创建新归档，拒绝覆盖，要求私有目标目录（700），归档及其文件权限为 600。内容包括进程、网络、审计数据，受限的持久化配置与日志副本，maps、**所有值均被省略的环境变量名称**，可执行文件 SHA256，以及可访问的已删除/memfd 可执行文件副本。`/proc/PID/exe` 是唯一有意允许的文件符号链接例外；程序会复查 PID 身份与文件元数据。`MANIFEST.sha256` 包含已保存文件的哈希，`collection.json` 记录遗漏，CLI 同时输出归档 SHA256。不要执行采集的二进制文件。采集仅通过 CLI 提供，网页不启用采集或归档下载接口。
+
+默认总预算为 500 MiB（`SSG_COLLECT_MAX_MB`），每个可执行文件 50 MiB（`SSG_COLLECT_MAX_BINARY_MB`），限时三分钟。总预算限制压缩输出、未压缩成员和可执行文件读取；单个配置或日志文件限制为 2 MiB。私钥、shadow/gshadow 和 `.env` 被排除，文本中识别出的秘密被遮盖。归档仍包含个人数据和可能敏感的命令，必须私密保存。清单只能核验已捕获字节的一致性，不能证明主机可信，也不是文件系统的原子快照。
+
+认证读取受字节和记录数量限制：最多 5,000 个事件和密钥，固定 auth.log 轮换文件（`.1`、`.2.gz`）。不可用或超限的数据源会明确报告不完整。支持 glibc 小端 amd64 与 arm64 记账格式；不会猜测未知镜像架构。二进制 journald 解析留待后续，因此没有 auth.log 的主机认证可见性有限。无法可靠推断密钥选项、自定义 `AuthorizedKeysFile`、journal 清理意图和所有轮换方案。journal 大幅缩小或 shell 历史被禁用需要人工核查；空日志本身不证明删除。最近文件遍历限制为 100,000 个路径、10,000 个结果或十秒，不遍历符号链接。服务每小时刷新元数据；时间线只包含可用且仍被保留的观察记录。
+
+新增发现 ID：`login_new_ip`、`login_password_root`、`login_after_bruteforce`、`login_unusual_time`、`login_service_account`、`log_wtmp_truncated`、`log_wtmp_gap`、`log_authlog_truncated`、`log_history_null`、`log_journal_vacuum`、`log_utmp_missing`。服务账户认证在未确认终端时为 LOW，匹配到会话 TTY 时为 HIGH。同一 IP 十分钟内至少十次失败后成功登录会被标记；共享 NAT 和管理员活动也可能解释该现象。内核遭入侵后，本地检查不能恢复信任，应保留磁盘镜像并在独立环境分析。
+
+记账格式于 2026-11-16 对照 [glibc utmp 定义](https://github.com/bminor/glibc/blob/master/bits/utmp.h)及 [aarch64 ABI 定义](https://github.com/bminor/glibc/blob/master/sysdeps/aarch64/bits/wordsize.h)核对。Linux CI 将 C 生成的记账记录与 Go 解析器进行比较，并从独立测试进程采集已删除的可执行文件。
