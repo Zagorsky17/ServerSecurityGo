@@ -114,3 +114,22 @@ func TestConcurrentDpkgLockIsReadOnly(t *testing.T) {
 		t.Fatal("lock file was changed")
 	}
 }
+
+func TestChecksumFilenameMatchesCoreutils(t *testing.T) {
+	h := t.TempDir()
+	p := `usr/lib/systemd/system/system-systemd\x2dcryptsetup.slice`
+	write(t, h, p, "test unit")
+	cmd := exec.Command("md5sum", p)
+	cmd.Dir = h
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := &database{files: map[string]expected{}}
+	if err := db.parseSums(string(output), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if db.files[p].MD5 != md("test unit") {
+		t.Fatalf("coreutils output not matched: %q", output)
+	}
+}

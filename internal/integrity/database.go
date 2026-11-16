@@ -30,7 +30,7 @@ var packageName = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]*(:[a-z0-9][a-z0-9-]*)
 var errDatabase = i18n.Errorf("err.integrity_database")
 
 func validPath(p string) bool {
-	return p != "" && !strings.HasPrefix(p, "/") && path.Clean(p) == p && p != "." && p != ".." && !strings.HasPrefix(p, "../") && !strings.ContainsAny(p, "\x00\r\n\\")
+	return p != "" && !strings.HasPrefix(p, "/") && path.Clean(p) == p && p != "." && p != ".." && !strings.HasPrefix(p, "../") && !strings.ContainsAny(p, "\x00\r\n")
 }
 func (db *database) canonical(p string) string {
 	first, rest, ok := strings.Cut(p, "/")
@@ -296,10 +296,22 @@ func (db *database) parseSums(data, pkg string) error {
 		if line == "" {
 			continue
 		}
-		if len(line) < 35 || line[32:34] != "  " {
+		escaped := strings.HasPrefix(line, "\\")
+		if escaped {
+			line = line[1:]
+		}
+		if len(line) < 35 || line[32] != ' ' || (line[33] != ' ' && line[33] != '*') {
 			return errDatabase
 		}
-		sum, p := line[:32], strings.TrimPrefix(line[34:], "./")
+		sum, p := line[:32], line[34:]
+		if escaped {
+			var err error
+			p, err = unescapeChecksumPath(p)
+			if err != nil {
+				return err
+			}
+		}
+		p = strings.TrimPrefix(p, "./")
 		raw, err := hex.DecodeString(sum)
 		if err != nil || len(raw) != 16 || !validPath(p) {
 			return errDatabase
@@ -315,4 +327,30 @@ func (db *database) parseSums(data, pkg string) error {
 		db.files[p] = next
 	}
 	return nil
+}
+
+// GNU md5sum помечает экранированные имена обратной косой чертой перед хешем.
+func unescapeChecksumPath(p string) (string, error) {
+	var out strings.Builder
+	for i := 0; i < len(p); i++ {
+		if p[i] != '\\' {
+			out.WriteByte(p[i])
+			continue
+		}
+		i++
+		if i == len(p) {
+			return "", errDatabase
+		}
+		switch p[i] {
+		case '\\':
+			out.WriteByte('\\')
+		case 'n':
+			out.WriteByte('\n')
+		case 'r':
+			out.WriteByte('\r')
+		default:
+			return "", errDatabase
+		}
+	}
+	return out.String(), nil
 }

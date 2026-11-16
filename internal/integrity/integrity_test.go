@@ -260,12 +260,12 @@ func TestParsersAndScope(t *testing.T) {
 			t.Fatal("included", p)
 		}
 	}
-	for _, p := range []string{"/usr/bin/x", "../x", "usr/../x", "./x", "usr//x", "usr/bin/x\n", "usr/bin/\\x"} {
+	for _, p := range []string{"/usr/bin/x", "../x", "usr/../x", "./x", "usr//x", "usr/bin/x\n"} {
 		if validPath(p) {
 			t.Fatal("unsafe path", p)
 		}
 	}
-	for _, line := range []string{"bad", strings.Repeat("g", 32) + "  usr/bin/x", md("x") + "  ../x", md("x") + " *usr/bin/x"} {
+	for _, line := range []string{"bad", strings.Repeat("g", 32) + "  usr/bin/x", md("x") + "  ../x"} {
 		db := &database{files: map[string]expected{}}
 		if db.parseSums(line, "test") == nil {
 			t.Fatal("accepted", line)
@@ -431,5 +431,32 @@ func TestPackageDiversionAllowsDifferentChecksumsForOriginalPath(t *testing.T) {
 	}
 	if len(find(r, "bin_modified")) != 0 || len(find(r, "bin_unpackaged")) != 0 {
 		t.Fatalf("%+v", r.Findings())
+	}
+}
+
+func TestSystemdEscapedUnitFilename(t *testing.T) {
+	h, state := fixture(t)
+	p := `usr/lib/systemd/system/system-systemd\x2dcryptsetup.slice`
+	write(t, h, "var/lib/dpkg/info/tools.list", "/usr/bin/ssh\n/usr/bin/helper\n/"+p+"\n")
+	write(t, h, "var/lib/dpkg/info/tools.md5sums", md("ssh good")+"  usr/bin/ssh\n"+md("helper good")+"  usr/bin/helper\n\\"+md("unit")+"  "+strings.ReplaceAll(p, `\`, `\\`)+"\n")
+	write(t, h, p, "unit")
+	r := runner(h, state)
+	if err := r.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(find(r, "bin_modified")) != 0 || r.base.Files[p].SHA256 == "" {
+		t.Fatal("escaped systemd unit not verified")
+	}
+}
+
+func TestChecksumEscapingAndBinaryMode(t *testing.T) {
+	db := &database{files: map[string]expected{}}
+	if err := db.parseSums(md("x")+" *usr/bin/x", "test"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{`usr/bin/bad\`, `usr/bin/bad\q`, `usr/bin/bad\n`, `usr/bin/bad\r`} {
+		if err := db.parseSums("\\"+md("x")+"  "+p, "test"); err == nil {
+			t.Fatal("malformed/unsupported path accepted", p)
+		}
 	}
 }
