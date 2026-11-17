@@ -780,6 +780,10 @@ func (a *App) mainContent(w int) (string, []line) {
 			} else {
 				b.para(a.tr("web.learning.disabled"), stDim, 0)
 			}
+			if r.BaselineCommand != "" {
+				b.para(a.tr("web.learning.baseline"), stDim, 0)
+				b.para(r.BaselineCommand, stNormal, 0)
+			}
 			for _, w := range r.Warnings {
 				b.para(a.txt(w), stWarn, 0)
 			}

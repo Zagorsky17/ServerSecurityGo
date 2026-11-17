@@ -188,6 +188,9 @@ func (t *Tracker) Observe(now time.Time, procs []*model.Process) *model.Learning
 			}
 		}
 	}
+	if len(r.Candidates) > 0 {
+		r.BaselineCommand = "serversecuritygo baseline save --name reviewed-" + now.UTC().Format("20060102-150405")
+	}
 	sort.Slice(r.Candidates, func(i, j int) bool {
 		x, y := r.Candidates[i], r.Candidates[j]
 		if x.Exe != y.Exe {

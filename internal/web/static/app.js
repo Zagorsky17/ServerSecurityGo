@@ -1286,4 +1286,5 @@ function renderLearning() {
  box.append(h('p',null,r.enabled ? tr('web.learning.until',fmtTime(r.until)) : tr('web.learning.disabled')));
  for (const w of r.warnings || []) box.append(h('p',null,tx(w)));
  for (const c of r.candidates || []) box.append(h('div',{class:'card'},h('b',null,c.exe+' · '+c.user+' · '+c.rule),h('p',null,tr('web.learning.count',c.count,fmtTime(c.first),fmtTime(c.last))),allowlistProposal(c.proposal)));
+ if (r.baselineCommand) box.append(h('p',null,tr('web.learning.baseline')),h('pre',null,r.baselineCommand),h('button',{type:'button',onclick:()=>copyText(r.baselineCommand)},tr('tui.hint.copy')));
 }

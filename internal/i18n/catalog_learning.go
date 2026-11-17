@@ -2,6 +2,7 @@ package i18n
 
 func init() {
 	add(map[string]entry{
+		"web.learning.baseline": {"После проверки всех кандидатов можно вручную сохранить текущую конфигурацию как именованный снимок. Команда сохраняет состояние всей системы для сравнения; она не принимает порты и не подавляет признаки.", "After reviewing all candidates, you can manually save the current configuration as a named snapshot. The command records the whole system for comparison; it does not accept ports or suppress findings."},
 		"err.learning_hours":    {"SSG_LEARNING_HOURS должен быть от 0 до 168; 0 выключает обучение.", "SSG_LEARNING_HOURS must be between 0 and 168; 0 disables learning."},
 		"allow.weak_scope":      {"Правило allowlist #{0} имеет широкий шаблон пути или подавляет все признаки: {1}", "Allowlist rule #{0} has a broad path pattern or suppresses all findings: {1}"},
 		"warn.allow_unused":     {"Правило allowlist #{0} не совпадало с находками с {1} (прошло не менее 30 календарных дней; простой службы тоже учитывается). Проверьте, нужно ли оно.", "Allowlist rule #{0} has not matched findings since {1} (at least 30 calendar days; service downtime also counts). Review whether it is still needed."},

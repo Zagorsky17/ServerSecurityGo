@@ -86,6 +86,7 @@ func PromiscuousInterfaces(host string, procs []*model.Process, owners map[strin
 	if e != nil {
 		return []model.SystemFinding{unavailable}
 	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 	var out []model.SystemFinding
 	incomplete := false
 	for _, entry := range entries {

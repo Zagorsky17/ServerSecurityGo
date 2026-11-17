@@ -15,8 +15,9 @@ type LearningCandidate struct {
 	Proposal string    `json:"proposal"`
 }
 type LearningReport struct {
-	Enabled    bool                `json:"enabled"`
-	Until      time.Time           `json:"until"`
-	Candidates []LearningCandidate `json:"candidates"`
-	Warnings   []i18n.Msg          `json:"warnings"`
+	BaselineCommand string              `json:"baselineCommand,omitempty"`
+	Enabled         bool                `json:"enabled"`
+	Until           time.Time           `json:"until"`
+	Candidates      []LearningCandidate `json:"candidates"`
+	Warnings        []i18n.Msg          `json:"warnings"`
 }

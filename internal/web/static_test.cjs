@@ -28,9 +28,10 @@ test('allowlist proposal and learning content stay text and copy only', () => {
     get textContent(){return this.text+this.children.map(c=>c.textContent).join('');}
   }
   const box=new Node('section');const payload='{"exe":"<img src=x onerror=attack()>"}';let copied;
-  const ctx=vm.createContext({Node,document:{createElement:t=>new Node(t),createTextNode:t=>new Node('#text',t)},vis:String,tr:k=>k,tx:m=>m,fmtTime:String,copyText:s=>{copied=s},$:()=>box,state:{learning:{enabled:true,until:'tomorrow',warnings:['review'],candidates:[{exe:'<script>attack()</script>',user:'app',rule:'cpu_sustained',count:3,proposal:payload}]}},fetch:()=>{throw Error('unexpected mutation')}});
+  const ctx=vm.createContext({Node,document:{createElement:t=>new Node(t),createTextNode:t=>new Node('#text',t)},vis:String,tr:k=>k,tx:m=>m,fmtTime:String,copyText:s=>{copied=s},$:()=>box,state:{learning:{enabled:true,until:'tomorrow',baselineCommand:'serversecuritygo baseline save --name reviewed-fixture',warnings:['review'],candidates:[{exe:'<script>attack()</script>',user:'app',rule:'cpu_sustained',count:3,proposal:payload}]}},fetch:()=>{throw Error('unexpected mutation')}});
   vm.runInContext(functions(['h','allowlistProposal','renderLearning']),ctx);ctx.renderLearning();
   assert.ok(box.textContent.includes('<script>attack()</script>'));
+  assert.ok(box.textContent.includes('baseline save --name reviewed-fixture'));
   const all=[];function walk(n){all.push(n);n.children.forEach(walk);}walk(box);
   assert.equal(all.some(n=>n.tag==='script'||n.tag==='img'),false);
   const button=all.find(n=>n.tag==='button');assert.ok(button);button.events.click();assert.equal(copied,payload);

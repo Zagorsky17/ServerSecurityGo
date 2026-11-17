@@ -24,7 +24,7 @@ func TestLearningWindowPersistenceAndNoAutomaticTrust(t *testing.T) {
 	for _, d := range []time.Duration{0, 2 * time.Minute, 5 * time.Minute} {
 		r = tr.Observe(now.Add(d), []*model.Process{p, p})
 	}
-	if len(r.Candidates) != 1 || r.Candidates[0].Count != 3 || p.Findings[0].Suppressed || p.Risk != model.RiskLow {
+	if !strings.HasPrefix(r.BaselineCommand, "serversecuritygo baseline save --name reviewed-") || len(r.Candidates) != 1 || r.Candidates[0].Count != 3 || p.Findings[0].Suppressed || p.Risk != model.RiskLow {
 		t.Fatal(r, p)
 	}
 	var proposal struct{ Rules []detect.AllowRule }
@@ -42,12 +42,12 @@ func TestLearningWindowPersistenceAndNoAutomaticTrust(t *testing.T) {
 		t.Fatal("mutated prior report")
 	}
 	p.Risk = model.RiskCritical
-	if got := restart.Observe(now.Add(3*time.Hour), []*model.Process{p}); len(got.Candidates) != 0 {
+	if got := restart.Observe(now.Add(3*time.Hour), []*model.Process{p}); len(got.Candidates) != 0 || got.BaselineCommand != "" {
 		t.Fatal("critical proposal", got)
 	}
 	p.Risk = model.RiskLow
 	p.Findings[0].Strong = true
-	if got := restart.Observe(now.Add(4*time.Hour), []*model.Process{p}); len(got.Candidates) != 0 {
+	if got := restart.Observe(now.Add(4*time.Hour), []*model.Process{p}); len(got.Candidates) != 0 || got.BaselineCommand != "" {
 		t.Fatal("strong proposal", got)
 	}
 	if e := New("", 0, nil); e != nil {
