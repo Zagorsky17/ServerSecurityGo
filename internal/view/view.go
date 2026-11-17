@@ -489,6 +489,12 @@ func AuditGroupText(g string) i18n.Msg {
 		return i18n.T("audit.group.accounts")
 	case model.AuditGroupSudo:
 		return i18n.T("audit.group.sudo")
+	case model.AuditGroupFS:
+		return i18n.T("audit.group.filesystem")
+	case model.AuditGroupUpdates:
+		return i18n.T("audit.group.updates")
+	case model.AuditGroupFirewall:
+		return i18n.T("audit.group.firewall")
 	case model.AuditGroupKernel:
 		return i18n.T("audit.group.kernel")
 	}

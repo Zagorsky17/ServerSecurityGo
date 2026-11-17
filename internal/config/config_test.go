@@ -242,3 +242,24 @@ func TestInvestigationConfig(t *testing.T) {
 		t.Fatal("invalid boolean")
 	}
 }
+
+func TestFilesystemScanSettings(t *testing.T) {
+	t.Setenv("SSG_FS_SCAN_INTERVAL", "2h")
+	t.Setenv("SSG_FS_SCAN_RATE", "1234")
+	t.Setenv("SSG_FS_SCAN_EXCLUDE", "/opt/cache,/home/test")
+	t.Setenv("SSG_FS_SCAN_MOUNTS", "/srv")
+	c, e := FromEnv()
+	if e != nil || c.FSScanInterval != 2*time.Hour || c.FSScanRate != 1234 || len(c.FSScanExclude) != 2 || len(c.FSScanMounts) != 1 {
+		t.Fatal(c, e)
+	}
+	for k, values := range map[string][]string{"SSG_FS_SCAN_INTERVAL": {"1s", "invalid"}, "SSG_FS_SCAN_RATE": {"0", "100001", "abc"}, "SSG_FS_SCAN_EXCLUDE": {"/", "relative", "/a/../b", "/a\nb"}} {
+		for _, v := range values {
+			t.Run(k+v, func(t *testing.T) {
+				t.Setenv(k, v)
+				if _, e := FromEnv(); e == nil {
+					t.Fatal("accepted invalid filesystem scan setting")
+				}
+			})
+		}
+	}
+}

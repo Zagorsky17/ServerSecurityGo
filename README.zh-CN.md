@@ -747,7 +747,7 @@ serversecuritygo recent --days 3 --format json --output /root/recent.json
 serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
 ```
 
-`triage` 包含进程扫描、配置审计、认证记录、最近文件和十项优先检查，附带经过 shell 引用处理的验证命令。`--full` 等待现有 PID 遍历及选定 dpkg 文件校验，不代表完整的 SUID/capabilities 清单。验证命令只展示，不执行。报告支持 text/JSON/HTML/Markdown 及现有 `--fail-on` 退出码。`SSG_HOST_ROOT` 指向磁盘镜像且使用默认 `/proc` 时，调查命令排除分析机器的实时进程，并明确说明无法进行的实时检查。单次命令不写入服务历史或登录基线。
+`triage` 包含进程扫描、配置审计、认证记录、最近文件和十项优先检查，附带经过 shell 引用处理的验证命令。`--full` 等待 PID 遍历、选定 dpkg 文件校验及有界 SUID/capabilities 清单。验证命令只展示，不执行。报告支持 text/JSON/HTML/Markdown 及现有 `--fail-on` 退出码。`SSG_HOST_ROOT` 指向磁盘镜像且使用默认 `/proc` 时，调查命令排除分析机器的实时进程，并明确说明无法进行的实时检查。单次命令不写入服务历史或登录基线。
 
 `collect` 创建新归档，拒绝覆盖，要求私有目标目录（700），归档及其文件权限为 600。内容包括进程、网络、审计数据，受限的持久化配置与日志副本，maps、**所有值均被省略的环境变量名称**，可执行文件 SHA256，以及可访问的已删除/memfd 可执行文件副本。`/proc/PID/exe` 是唯一有意允许的文件符号链接例外；程序会复查 PID 身份与文件元数据。`MANIFEST.sha256` 包含已保存文件的哈希，`collection.json` 记录遗漏，CLI 同时输出归档 SHA256。不要执行采集的二进制文件。采集仅通过 CLI 提供，网页不启用采集或归档下载接口。
 
@@ -758,3 +758,27 @@ serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
 新增发现 ID：`login_new_ip`、`login_password_root`、`login_after_bruteforce`、`login_unusual_time`、`login_service_account`、`log_wtmp_truncated`、`log_wtmp_gap`、`log_authlog_truncated`、`log_history_null`、`log_journal_vacuum`、`log_utmp_missing`。服务账户认证在未确认终端时为 LOW，匹配到会话 TTY 时为 HIGH。同一 IP 十分钟内至少十次失败后成功登录会被标记；共享 NAT 和管理员活动也可能解释该现象。内核遭入侵后，本地检查不能恢复信任，应保留磁盘镜像并在独立环境分析。
 
 记账格式于 2026-11-16 对照 [glibc utmp 定义](https://github.com/bminor/glibc/blob/master/bits/utmp.h)及 [aarch64 ABI 定义](https://github.com/bminor/glibc/blob/master/sysdeps/aarch64/bits/wordsize.h)核对。Linux CI 将 C 生成的记账记录与 Go 解析器进行比较，并从独立测试进程采集已删除的可执行文件。
+
+### 发现详情、加固审计与基线比较
+
+进程、系统和审计详情包含原因、正常场景、验证命令、建议、MITRE ATT&CK 上下文，以及最近 2,000 条记录中最多八条相关事件。进程按 PID 与启动时间关联，文件按路径关联。ATT&CK 和软件包归属不能证明入侵或完整性；程序不会执行显示的命令。
+
+审计新增内核加固、临时目录挂载与敏感权限、SUID/SGID 和文件 capabilities、重启标记、同类型较新内核、APT 数据时间、unattended-upgrades、发行版支持期限及保存的防火墙配置。`audit --full` 等待文件清单；快速审计明确报告清单缺失。未知状态也包括不支持的语法和无法读取的数据源。运行中的内核规则及云提供商防火墙未经验证；待安装安全更新计数和 netlink 规则读取仍留待后续阶段。
+
+独立文件扫描默认每六小时执行一次，每秒 2,000 个路径。配置项为 `SSG_FS_SCAN_INTERVAL`、`SSG_FS_SCAN_RATE`，以及逗号分隔的 `SSG_FS_SCAN_EXCLUDE` 和额外挂载根目录 `SSG_FS_SCAN_MOUNTS`。默认覆盖根文件系统与 `/dev/shm`，不跨越其他文件系统、不跟随符号链接；排除 `/proc`、`/sys`、`/dev`（`/dev/shm` 除外）、`/run`、Docker/容器存储以及网络/FUSE 挂载。限制为 200 万路径、10,000 个特权文件/发现、128 层和 30 分钟。超限、取消或读取失败均明确标记不完整。首个完整清单保存在 `baseline.json`，新增权限生成 `fs_privilege_new`。软件包归属不是可信签名。新增 ID：`fs_suid_inventory`、`fs_capabilities`、`fs_world_writable_system`、`fs_unowned`、`fs_privilege_new`、`fs_inventory_pending`、`fs_inventory_unavailable`、`new_public_listener`、`ports_baseline_unavailable`。
+
+```sh
+serversecuritygo audit --full --format json --output /root/audit.json
+serversecuritygo baseline save --name before-upgrade
+serversecuritygo baseline list
+serversecuritygo diff --from before-upgrade --to now --format json --output /root/diff.json
+serversecuritygo baseline accept --ports
+```
+
+快照保存在 `SSG_DATA_DIR/baselines`，目录权限 700、文件权限 600，命名快照禁止覆盖。保存及与 `now` 比较会等待有界文件扫描。内容包括本地用户/组、公网监听端口及其进程文件、保存的 systemd 单元/服务、SUID/SGID、capabilities、默认 authorized_keys 指纹、模块名称、选定关键程序的哈希及审计状态。不保存密码哈希、密钥材料、密钥注释或单元内容。比较要求相同 machine-id，且仅比较完整、范围一致的部分；不可读数据不会产生虚假的删除结论。这是分时采集的观察结果，不是原子快照或独立的主机可信证明。
+
+安装创建 `installation`；升级后的服务在首次获得清单且该快照不存在时创建它。每周自动保存快照，保留最近 12 个，手动命名快照不删除。Web/TUI 的“Changes”和 `/api/changes` 每小时更新，使用最新文件清单（通常可滞后六小时）。七天视图使用截止点之前最近的快照，并显示实际比较时间；历史不足时显示缺失信息。
+
+完整的初始公网端口清单确定预期的协议、地址、端口和进程文件组合。新组合触发 HIGH `new_public_listener` 与 `listen` 事件。审核后执行 `baseline accept --ports` 仅更新预期清单，服务一分钟内加载；必须拥有完整套接字表和已知进程文件。无法确定所有者的 Docker 发布端口等情况会阻止接受。此操作不修改防火墙，也不抑制其他发现。
+
+离线支持表于 2026-11-18 根据 [Ubuntu](https://ubuntu.com/project/docs/release-team/list-of-releases/) 和 [Debian](https://www.debian.org/releases/) 核对，区分 Ubuntu 标准支持、Debian LTS 与需管理员确认的 Pro/ESM/ELTS。文件 capabilities 遵循 [Linux 格式](https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h)，支持版本 1–3。

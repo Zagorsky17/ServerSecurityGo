@@ -19,9 +19,11 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/authlog"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/baseline"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fail2ban"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/fsinspect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
@@ -37,13 +39,14 @@ import (
 
 // Options — параметры сканера.
 type Options struct {
-	Auth     *authlog.Collector
-	Recent   bool
-	FS       *procfs.FS
-	Detect   detect.Config
-	History  *history.Store
-	Interval time.Duration
-	Logger   *slog.Logger
+	Inventory *fsinspect.Runner
+	Auth      *authlog.Collector
+	Recent    bool
+	FS        *procfs.FS
+	Detect    detect.Config
+	History   *history.Store
+	Interval  time.Duration
+	Logger    *slog.Logger
 	// BeforeScan вызывается перед каждым сканированием (демо-режим
 	// использует его, чтобы «оживлять» поддельные процессы).
 	BeforeScan func()
@@ -81,6 +84,7 @@ type Scanner struct {
 	snap        *model.Snapshot
 	lastSuccess time.Time
 	self        *selfcheck.Monitor
+	baselines   *baseline.Monitor
 	seq         atomic.Uint64
 	rescan      chan struct{}
 	scanMu      sync.Mutex // сканирования не должны пересекаться
@@ -170,6 +174,10 @@ func (s *Scanner) Run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
+	if s.opt.Inventory != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.opt.Inventory.Run(ctx) }()
+	}
 	if s.opt.Rootkit != nil {
 		workers.Add(1)
 		go func() { defer workers.Done(); s.opt.Rootkit.Run(ctx) }()
@@ -243,6 +251,7 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	addrs := s.opt.FS.LocalAddrs()
 	snap.Exposure = exposure.Build(exposure.Input{Procs: snap.Processes, Sockets: snap.Sockets, Addrs: addrs,
 		HostRoot: s.opt.FS.HostRoot, Allowed: s.opt.Detect.Allowed})
+	snap.Exposure.Incomplete = s.sockDropped > 0
 	snap.Warnings = append(snap.Warnings, snap.Exposure.Warnings...)
 	owners, ownerErr := integrity.Owners(s.opt.FS.HostRoot)
 	ctx := &detect.Context{Owners: owners, Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
@@ -271,8 +280,15 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	if s.opt.Rootkit != nil {
 		snap.System = append(snap.System, s.opt.Rootkit.Check(context.Background())...)
 	}
+	if s.opt.Inventory != nil {
+		snap.Inventory = s.opt.Inventory.Report()
+		snap.System = append(snap.System, s.opt.Inventory.Findings()...)
+	}
 	if s.opt.Integrity != nil {
 		snap.System = append(snap.System, s.opt.Integrity.Findings()...)
+	}
+	if s.baselines != nil {
+		snap.System = append(snap.System, s.baselines.PortFindings(snap)...)
 	}
 	for _, f := range snap.System {
 		if f.Incomplete() {
@@ -284,8 +300,8 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 		snap.System = append(snap.System, snap.Auth.Findings...)
 		snap.Warnings = append(snap.Warnings, snap.Auth.Warnings...)
 	}
-	investigate.Attach(snap)
 	events := hist.Record(start, snap.Processes, snap.System)
+	investigate.Attach(snap, hist.Events(2000)...)
 
 	snap.Stats = stats(snap)
 	snap.Duration = time.Since(start)
@@ -600,4 +616,12 @@ func stats(snap *model.Snapshot) model.Stats {
 		st.ByRisk[p.Risk.String()]++
 	}
 	return st
+}
+
+func (s *Scanner) SetBaselines(m *baseline.Monitor) { s.baselines = m }
+func (s *Scanner) Changes() *model.ChangesReport {
+	if s.baselines == nil {
+		return nil
+	}
+	return s.baselines.Report()
 }

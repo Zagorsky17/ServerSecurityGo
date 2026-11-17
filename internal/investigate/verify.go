@@ -57,15 +57,31 @@ func Commands(id string, pid int, path string) []string {
 	}
 	return []string{"serversecuritygo scan --full --format json"}
 }
-func Attach(snap *model.Snapshot) {
+func Attach(snap *model.Snapshot, events ...model.Event) {
+	idx := indexEvents(events)
+	parents := map[int]*model.Process{}
+	for _, p := range snap.Processes {
+		parents[p.PID] = p
+	}
 	for _, p := range snap.Processes {
 		for i := range p.Findings {
 			f := &p.Findings[i]
 			f.VerifyCommands = Commands(f.ID, p.PID, p.Exe)
+			f.FindingContext = contextFor(f.ID, f.Category, p.Exe)
+			if f.ID == "scheduler_suspicious" {
+				if par := parents[p.PPID]; par != nil && (par.Name == "cron" || par.Name == "crond") {
+					f.Attack = []string{"T1053.003"}
+				}
+			}
+			f.RelatedEvents = idx["key:"+p.Key]
 		}
 	}
 	for i := range snap.System {
 		f := &snap.System[i]
 		f.VerifyCommands = Commands(f.ID, 0, f.Path)
+		f.FindingContext = contextFor(f.ID, f.Category, f.Path)
+		if f.Path != "" {
+			f.RelatedEvents = idx["path:"+f.Path]
+		}
 	}
 }

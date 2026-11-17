@@ -88,6 +88,7 @@ const (
 // Finding — один сработавший признак. Evidence содержит проверяемые
 // факты (что именно прочитано и откуда), а не выводы.
 type Finding struct {
+	FindingContext
 	VerifyCommands []string   `json:"verifyCommands,omitempty"`
 	ID             string     `json:"id"`
 	Title          i18n.Msg   `json:"title"`
@@ -247,6 +248,7 @@ type Stats struct {
 
 // Snapshot — результат одного сканирования.
 type Snapshot struct {
+	Inventory *FileInventory      `json:"inventory,omitempty"`
 	Auth      *AuthReport         `json:"auth,omitempty"`
 	Recent    *RecentReport       `json:"recent,omitempty"`
 	Time      time.Time           `json:"time"`
@@ -351,6 +353,7 @@ type FirewallInfo struct {
 
 // ExposureReport — внешняя поверхность атаки по данным одного сканирования.
 type ExposureReport struct {
+	Incomplete        bool            `json:"incomplete,omitempty"`
 	ContainerFindings []SystemFinding `json:"containerFindings,omitempty"`
 	Entries           []Exposure      `json:"entries"`
 	Addrs             []IfaceAddr     `json:"addrs"`
@@ -582,12 +585,17 @@ const (
 	AuditGroupAccounts = "accounts"
 	AuditGroupSudo     = "sudo"
 	AuditGroupKernel   = "kernel"
+	AuditGroupFS       = "filesystem"
+	AuditGroupUpdates  = "updates"
+	AuditGroupFirewall = "firewall"
 )
 
 // AuditCheck — результат одной проверки конфигурации. Severity —
 // важность проверки при провале (для pass — та же важность, чтобы было
 // видно, что именно проверено).
 type AuditCheck struct {
+	FindingContext
+	VerifyCommands []string   `json:"verifyCommands,omitempty"`
 	ID             string     `json:"id"`
 	Group          string     `json:"group"`
 	Title          i18n.Msg   `json:"title"`
@@ -641,7 +649,7 @@ type Event struct {
 // Incomplete показывает, что отсутствие находок нельзя считать результатом полной проверки.
 func (f SystemFinding) Incomplete() bool {
 	switch f.ID {
-	case "self_check_unavailable", "persistence_unavailable", "container_unavailable", "package_ownership_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
+	case "ports_baseline_unavailable", "fs_inventory_pending", "fs_inventory_unavailable", "self_check_unavailable", "persistence_unavailable", "container_unavailable", "package_ownership_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
 		return true
 	}
 	return false

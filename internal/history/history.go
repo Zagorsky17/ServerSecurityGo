@@ -344,7 +344,11 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 		present[k] = true
 		seen := s.systemSet[k]
 		if (seen == nil || sf.Risk > seen.risk) && sf.Risk >= model.RiskLow {
-			evs = append(evs, model.Event{Time: now, Type: model.EvSystem, Exe: sf.Path, Risk: sf.Risk, Details: i18n.T("hist.system", sf.Title, sf.Path)})
+			typ := model.EvSystem
+			if sf.ID == "new_public_listener" {
+				typ = model.EvListen
+			}
+			evs = append(evs, model.Event{Time: now, Type: typ, Exe: sf.Path, Risk: sf.Risk, Details: i18n.T("hist.system", sf.Title, sf.Path)})
 		}
 		if seen == nil {
 			seen = &sysSeen{}

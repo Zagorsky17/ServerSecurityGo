@@ -49,6 +49,7 @@
   <button role="tab" data-tab="fail2ban" id="tabbtn-fail2ban" class="hidden"><span data-i18n="web.tab.fail2ban">fail2ban</span> <span class="badge" id="cnt-fail2ban">0</span></button>
   <button role="tab" data-tab="ufw"><span data-i18n="tui.panel.ufw">UFW</span></button>
   <button role="tab" data-tab="logins" data-i18n="web.tab.logins">Входы</button>
+<button role="tab" data-tab="changes" data-i18n="web.tab.changes">Изменения</button>
 <button role="tab" data-tab="timeline" data-i18n="web.tab.timeline">Хронология</button>
 <button role="tab" data-tab="history" data-i18n="web.tab.history">История</button>
   <button role="tab" data-tab="system"><span data-i18n="web.tab.system">Система</span> <span class="badge" id="cnt-system">0</span></button>
@@ -151,6 +152,9 @@
         <option value="accounts" data-i18n="audit.group.accounts">Учётные записи</option>
         <option value="sudo" data-i18n="audit.group.sudo">sudo</option>
         <option value="kernel" data-i18n="audit.group.kernel">Ядро</option>
+ <option value="filesystem" data-i18n="audit.group.filesystem">Файловая система</option>
+ <option value="updates" data-i18n="audit.group.updates">Обновления</option>
+ <option value="firewall" data-i18n="audit.group.firewall">Межсетевой экран</option>
       </select>
       <button type="reset" class="secondary" data-i18n="web.btn.reset">Сбросить</button>
     </form>
@@ -207,6 +211,7 @@
   </section>
 
   <section id="tab-logins" class="tab"><div id="auth-notes"></div><table id="t-logins"></table><h3 data-i18n="web.auth.summary"></h3><table id="t-auth-ips"></table><table id="t-auth-users"></table><table id="t-auth-hours"></table><table id="t-auth-keys"></table></section>
+<section id="tab-changes" class="tab"><div id="changes-content"></div></section>
 <section id="tab-timeline" class="tab"><div id="timeline-notes"></div><table id="t-timeline"></table></section>
 <section id="tab-history" class="tab">
     <form class="filters" id="hist-filters" autocomplete="off">

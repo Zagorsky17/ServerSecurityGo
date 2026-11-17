@@ -77,6 +77,17 @@ chmod 600 "$APP_DIR/.env"
 install_unit
 install_link
 write_self_baseline
+# Старые теги могут ещё не поддерживать baseline; проверяем сам установленный бинарник.
+if "$APP_DIR/bin/serversecuritygo" help 2>&1 | grep -q 'baseline save'; then
+  log "Сохранение снимка установки (обход файлов может занять несколько минут)…"
+  baseline_code=0
+  "$APP_DIR/bin/serversecuritygo" baseline save --env-file "$APP_DIR/.env" --name installation >/dev/null || baseline_code=$?
+  if [ "$baseline_code" -eq 3 ]; then
+    log "Снимок установки содержит неполные разделы; подробности доступны в baselines/installation.json"
+  elif [ "$baseline_code" -ne 0 ]; then
+    die "не удалось сохранить снимок установки (код $baseline_code)"
+  fi
+fi
 systemctl enable --now "$APP_NAME" >/dev/null 2>&1 || systemctl enable --now "$APP_NAME"
 
 log "Проверка запуска…"

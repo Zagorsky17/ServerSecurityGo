@@ -35,3 +35,15 @@ func TestOwnersCompleteAndUnknown(t *testing.T) {
 		t.Fatal("missing list treated as unowned")
 	}
 }
+
+func TestOwnersForIncludesRequestedBinaryAndUsrMerge(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "var/lib/dpkg/info"), 0700)
+	os.WriteFile(filepath.Join(root, "var/lib/dpkg/status"), []byte("Package: test\nStatus: install ok installed\nVersion: 1\nArchitecture: amd64\n"), 0600)
+	os.WriteFile(filepath.Join(root, "var/lib/dpkg/info/test.list"), []byte("/bin/ping\n/usr/bin/other\n/usr/lib/test.so\n"), 0600)
+	os.Symlink("usr/bin", filepath.Join(root, "bin"))
+	got, e := OwnersFor(root, map[string]bool{"/usr/bin/ping": true})
+	if e != nil || !got["/usr/bin/ping"] || got["/usr/bin/other"] || got["/usr/lib/test.so"] {
+		t.Fatal(got, e)
+	}
+}

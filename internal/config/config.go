@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -26,31 +27,34 @@ import (
 
 // Config — все настройки приложения.
 type Config struct {
-	AuthLogEnabled     bool
-	CollectMaxMB       int
-	CollectMaxBinaryMB int
-	ListenAddr         string // адрес веб-панели; "" — панель выключена (SSG_LISTEN_ADDR=off)
-	SocketPath         string // локальный Unix-сокет для терминального интерфейса; "" — выключен
-	ScanInterval       time.Duration
-	DataDir            string
-	ProcRoot           string
-	HostRoot           string
-	AuthPasswordHash   string
-	SessionTTL         time.Duration
-	TLSCert            string
-	TLSKey             string
-	TrustProxyTLS      bool
-	AllowedHosts       []string
-	LocalUIDs          []int // кому разрешена панель без пароля по loopback
-	Retention          time.Duration
-	EventsMaxMB        int
-	CPUThreshold       float64
-	CPUSustainScans    int
-	MemThreshold       float64
-	RecentDays         int
-	AllowlistFile      string
-	MaxFiles           int
-	LogLevel           string
+	FSScanInterval              time.Duration
+	FSScanRate                  int
+	FSScanExclude, FSScanMounts []string
+	AuthLogEnabled              bool
+	CollectMaxMB                int
+	CollectMaxBinaryMB          int
+	ListenAddr                  string // адрес веб-панели; "" — панель выключена (SSG_LISTEN_ADDR=off)
+	SocketPath                  string // локальный Unix-сокет для терминального интерфейса; "" — выключен
+	ScanInterval                time.Duration
+	DataDir                     string
+	ProcRoot                    string
+	HostRoot                    string
+	AuthPasswordHash            string
+	SessionTTL                  time.Duration
+	TLSCert                     string
+	TLSKey                      string
+	TrustProxyTLS               bool
+	AllowedHosts                []string
+	LocalUIDs                   []int // кому разрешена панель без пароля по loopback
+	Retention                   time.Duration
+	EventsMaxMB                 int
+	CPUThreshold                float64
+	CPUSustainScans             int
+	MemThreshold                float64
+	RecentDays                  int
+	AllowlistFile               string
+	MaxFiles                    int
+	LogLevel                    string
 	// RootkitInterval и IntegrityInterval задают паузу между фоновыми проверками.
 	RootkitInterval   time.Duration
 	IntegrityInterval time.Duration
@@ -99,7 +103,7 @@ const DefaultSocketPath = "/run/serversecuritygo/api.sock"
 
 // Default возвращает значения по умолчанию.
 func Default() Config {
-	return Config{AuthLogEnabled: true, CollectMaxMB: 500, CollectMaxBinaryMB: 50,
+	return Config{FSScanInterval: 6 * time.Hour, FSScanRate: 2000, AuthLogEnabled: true, CollectMaxMB: 500, CollectMaxBinaryMB: 50,
 		ListenAddr:      "127.0.0.1:8090",
 		SocketPath:      DefaultSocketPath,
 		ScanInterval:    30 * time.Second,
@@ -217,6 +221,23 @@ func FromEnv() (Config, error) {
 		c.SocketPath = ""
 	}
 	dur("SSG_SCAN_INTERVAL", &c.ScanInterval)
+	dur("SSG_FS_SCAN_INTERVAL", &c.FSScanInterval)
+	num("SSG_FS_SCAN_RATE", &c.FSScanRate)
+	for key, target := range map[string]*[]string{"SSG_FS_SCAN_EXCLUDE": &c.FSScanExclude, "SSG_FS_SCAN_MOUNTS": &c.FSScanMounts} {
+		if value := os.Getenv(key); value != "" {
+			for _, p := range strings.Split(value, ",") {
+				p = strings.TrimSpace(p)
+				if !strings.HasPrefix(p, "/") || path.Clean(p) != p || p == "/" || strings.ContainsAny(p, "\x00\r\n") {
+					errs = append(errs, i18n.Errorf("err.fs_config", key))
+					continue
+				}
+				*target = append(*target, p)
+			}
+		}
+	}
+	if c.FSScanInterval < time.Minute || c.FSScanRate < 1 || c.FSScanRate > 100000 {
+		errs = append(errs, i18n.Errorf("err.fs_config", "interval/rate"))
+	}
 	dur("SSG_ROOTKIT_INTERVAL", &c.RootkitInterval)
 	dur("SSG_INTEGRITY_INTERVAL", &c.IntegrityInterval)
 	str("SSG_DATA_DIR", &c.DataDir)

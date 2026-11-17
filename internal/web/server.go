@@ -219,6 +219,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/ufw", s.api(s.handleUFW))
 	s.mux.HandleFunc("GET /api/logins", s.api(s.handleLogins))
 	s.mux.HandleFunc("GET /api/timeline", s.api(s.handleTimeline))
+	s.mux.HandleFunc("GET /api/changes", s.api(func(w http.ResponseWriter, r *http.Request, _ session) { writeJSON(w, 200, s.opt.Scanner.Changes()) }))
 	s.mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	s.mux.HandleFunc("GET /api/system", s.api(s.handleSystem))
 	s.mux.HandleFunc("GET /api/metrics", s.api(s.handleMetrics))

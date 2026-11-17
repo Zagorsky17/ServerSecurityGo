@@ -437,6 +437,12 @@ func (a *App) row(p panelID, i, w int) []seg {
 	case pAuth:
 		e := a.logins[i]
 		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.User + " " + e.IP + " " + e.Kind, riskStyle(e.Risk.String())}}
+	case pChanges:
+		title := a.tr("web.changes.installation")
+		if i == 1 {
+			title = a.tr("web.changes.week")
+		}
+		return []seg{{title, stNormal}}
 	case pTimeline:
 		e := a.timeline[i]
 		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.Kind + " " + a.txt(e.Detail), riskStyle(e.Risk.String())}}
@@ -760,6 +766,30 @@ func (a *App) mainContent(w int) (string, []line) {
 			}
 		}
 		return a.tr("web.tab.logins"), b.lines
+	case pChanges:
+		if a.data.Changes == nil {
+			b.para(a.tr("warn.baseline_missing"), stDim, 0)
+		} else {
+			r := a.data.Changes
+			for _, w := range r.Warnings {
+				b.para(a.txt(w), stWarn, 0)
+			}
+			d := r.Installation
+			if a.lists[pChanges].cursor == 1 {
+				d = r.Week
+			}
+			if d != nil {
+				b.para(a.tr("web.changes.period", fmtTime(d.From), fmtTime(d.To)), stDim, 0)
+				for _, w := range d.Warnings {
+					b.para(a.txt(w), stWarn, 0)
+				}
+				for _, c := range d.Changes {
+					b.para(c.Section+" "+c.Kind+" "+c.Key, stBold, 0)
+					b.para(c.Before+" → "+c.After, stNormal, 2)
+				}
+			}
+		}
+		return a.tr("web.tab.changes"), b.lines
 	case pTimeline:
 		i := a.lists[pTimeline].cursor
 		if i >= 0 && i < len(a.timeline) {
@@ -997,6 +1027,7 @@ func findingBlock(b *lb, f model.Finding) {
 	}
 	tags += "]"
 	b.add(seg{"  " + mark + " ", st}, seg{sanitize(f.Title.In(b.lang)), st}, seg{tags, stDim})
+	b.findingContext(f.FindingContext)
 	for _, e := range f.Evidence {
 		b.para("· "+e.In(b.lang), Style{FG: 250, BG: -1}, 6)
 	}
@@ -1099,6 +1130,10 @@ func (a *App) auditHeader(b *lb) {
 
 // auditDetail — подробности проверки: факты, рекомендация, команда.
 func (a *App) auditDetail(b *lb, c model.AuditCheck) {
+	b.findingContext(c.FindingContext)
+	for _, cmd := range c.VerifyCommands {
+		b.para(cmd, stNormal, 2)
+	}
 	b.add(seg{" " + auditShort(c.Status) + " ", Style{FG: 16, BG: auditStyle(c.Status).FG, Bold: true}}, seg{"  " + sanitize(a.txt(c.Title)), stBold})
 	b.kv(a.tr("web.col.status"), a.statusName(c.Status))
 	b.kv(a.tr("web.col.severity"), c.Severity.String())
@@ -1398,6 +1433,7 @@ func fmtDur(a *App, sec int64) string {
 }
 
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
+	b.findingContext(f.FindingContext)
 	rs := f.Risk.String()
 	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
 	for _, cmd := range f.VerifyCommands {
@@ -1865,6 +1901,29 @@ func (a *App) ufwDetail(b *lb) {
 		}
 		for _, line := range strings.Split(f.Content, "\n") {
 			b.para(line, stNormal, 0)
+		}
+	}
+}
+
+func (b *lb) findingContext(c model.FindingContext) {
+	if !c.Why.IsZero() {
+		b.header(b.tr("card.why"))
+		b.para(c.Why.In(b.lang), stNormal, 2)
+	}
+	if !c.Legitimate.IsZero() {
+		b.header(b.tr("card.legitimate"))
+		b.para(c.Legitimate.In(b.lang), stDim, 2)
+	}
+	if len(c.Attack) > 0 {
+		b.header(b.tr("card.attack"))
+		for _, id := range c.Attack {
+			b.para(id+" https://attack.mitre.org/techniques/"+strings.ReplaceAll(id, ".", "/")+"/", stDim, 2)
+		}
+	}
+	if len(c.RelatedEvents) > 0 {
+		b.header(b.tr("card.related"))
+		for _, e := range c.RelatedEvents {
+			b.para(fmtTime(e.Time)+" · "+e.Details.In(b.lang), stDim, 2)
 		}
 	}
 }

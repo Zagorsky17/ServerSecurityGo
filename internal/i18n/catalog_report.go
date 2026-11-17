@@ -13,7 +13,7 @@ func init() {
 		"report.h.checks":         {"Проверки", "Checks"},
 		"report.no_public_ports":  {"Публичных портов нет.", "No public ports."},
 		"report.no_problems":      {"Проблем не найдено.", "No problems found."},
-		"report.audit_incomplete": {"Проверка неполная: {0} проверок не выполнено — нет прав на чтение. Запустите от root.", "The check is incomplete: {0} checks could not run — no permission to read. Run as root."},
+		"report.audit_incomplete": {"Проверка неполная: {0} проверок не завершено. Проверьте права, доступность источников и ограничения в фактах.", "The check is incomplete: {0} checks could not be completed. Review permissions, source availability and limitations in the evidence."},
 
 		"cli.flag.output":     {"записать отчёт в файл (права 0600) вместо вывода на экран", "write the report to a file (mode 0600) instead of the screen"},
 		"cli.flag.fail_on":    {"код выхода 1, если есть находки этого уровня и выше: LOW, MEDIUM, HIGH, CRITICAL; none — не зависеть от находок (код 3 при неполной проверке остаётся)", "exit code 1 if there are findings of this level or higher: LOW, MEDIUM, HIGH, CRITICAL; none — do not depend on findings (code 3 for an incomplete check remains)"},

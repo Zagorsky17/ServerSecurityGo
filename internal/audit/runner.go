@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/investigate"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
@@ -25,6 +26,8 @@ const maxBaselineFile = 16 << 20
 
 // RunnerOptions — параметры фонового аудита службы.
 type RunnerOptions struct {
+	Events   func(int) []model.Event
+	Snapshot func() *model.Snapshot
 	HostRoot string
 	// ProcRoot — корень /proc для параметров ядра (audit.Options.ProcRoot).
 	ProcRoot string
@@ -128,7 +131,14 @@ func (r *Runner) RunOnce() *model.AuditReport {
 
 	start := time.Now()
 	base := r.base
-	checks, next := Run(Options{HostRoot: r.opt.HostRoot, ProcRoot: r.opt.ProcRoot, RootUID: r.opt.RootUID, Baseline: &base})
+	opt := Options{HostRoot: r.opt.HostRoot, ProcRoot: r.opt.ProcRoot, RootUID: r.opt.RootUID, Baseline: &base}
+	if r.opt.Snapshot != nil {
+		if snap := r.opt.Snapshot(); snap != nil {
+			opt.Inventory = snap.Inventory
+			opt.Exposure = snap.Exposure
+		}
+	}
+	checks, next := Run(opt)
 	r.base = next
 	r.saveBaseline()
 	rep := &model.AuditReport{Time: start, Duration: time.Since(start), Checks: checks}
@@ -138,6 +148,9 @@ func (r *Runner) RunOnce() *model.AuditReport {
 				r.opt.Logger.Warn(i18n.S("log.audit_failed"), "check", e.Name, "risk", e.Risk.String())
 			}
 		}
+	}
+	if r.opt.Events != nil {
+		investigate.AttachAudit(checks, r.opt.Events(2000))
 	}
 	pass, total := Summary(checks)
 	r.opt.Logger.Debug(i18n.S("log.audit_done"), "pass", pass, "total", total, "duration", rep.Duration.Round(time.Millisecond).String())

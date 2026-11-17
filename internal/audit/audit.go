@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/investigate"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
@@ -35,6 +36,8 @@ const maxLine = 200
 
 // Options — параметры одного запуска аудита.
 type Options struct {
+	Inventory *model.FileInventory
+	Exposure  *model.ExposureReport
 	// HostRoot — корень хоста (SSG_HOST_ROOT); все пути читаются
 	// относительно него.
 	HostRoot string
@@ -103,6 +106,10 @@ func Run(opt Options) ([]model.AuditCheck, Baseline) {
 	out = append(out, a.accountChecks()...)
 	out = append(out, a.sudoChecks()...)
 	out = append(out, a.kernelChecks()...)
+	out = append(out, a.hardeningKernel()...)
+	out = append(out, a.filesystemChecks()...)
+	out = append(out, a.updateChecks()...)
+	out = append(out, a.firewallChecks()...)
 	// Источник не прочитался (нет прав, файл заменяют прямо сейчас) —
 	// его раздел базовой линии остаётся прежним. Иначе следующий запуск
 	// счёл бы всех пользователей и все файлы sudoers новыми.
@@ -120,6 +127,7 @@ func Run(opt Options) ([]model.AuditCheck, Baseline) {
 	if n := len(a.next.Recent); n > maxRecent {
 		a.next.Recent = a.next.Recent[n-maxRecent:]
 	}
+	investigate.AttachAudit(out, nil)
 	return out, a.next
 }
 

@@ -108,7 +108,7 @@ func (s *Scan) renderJSON(w io.Writer, l i18n.Lang) error {
 		"schema_version": SchemaVersion, "kind": "scan", "tool": "serversecuritygo", "version": s.Version,
 		"time": s.Snap.Time, "host": s.Snap.Host, "stats": s.Snap.Stats, "warnings": s.Snap.Warnings,
 		"minRisk": s.MinRisk, "verdict": v, "found": found, "incomplete": s.Incomplete(),
-		"auth": s.Snap.Auth, "processes": nonNil(s.procs), "system": nonNil(s.system), "exposure": s.exposure,
+		"inventory": s.Snap.Inventory, "auth": s.Snap.Auth, "processes": nonNil(s.procs), "system": nonNil(s.system), "exposure": s.exposure,
 	}, l)
 	if err != nil {
 		return err
