@@ -2,33 +2,56 @@ package advanced
 
 import (
 	"context"
+	"fmt"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
-	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"syscall"
 	"testing"
 	"time"
 )
 
+func TestAdvancedHelperProcess(t *testing.T) {
+	if os.Getenv("SSG_ADVANCED_HELPER") != "1" {
+		return
+	}
+	fmt.Println("ready")
+	time.Sleep(time.Minute)
+	os.Exit(0)
+}
+
 func TestRealDeletedELF(t *testing.T) {
-	// Запускается копия системного sleep, только в приватном каталоге теста.
-	data, e := os.ReadFile("/bin/sleep")
+	// Собственный helper подтверждает готовность; системный sleep может быть обёрткой.
+	self, e := os.Executable()
 	if e != nil {
 		t.Fatal(e)
 	}
-	path := filepath.Join(t.TempDir(), "sleep")
+	data, e := os.ReadFile(self)
+	if e != nil {
+		t.Fatal(e)
+	}
+	path := filepath.Join(t.TempDir(), "helper")
 	if e = os.WriteFile(path, data, 0700); e != nil {
 		t.Fatal(e)
 	}
-	cmd := exec.Command(path, "60")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "-test.run=^TestAdvancedHelperProcess$")
+	cmd.Env = append(os.Environ(), "SSG_ADVANCED_HELPER=1")
+	stdout, e := cmd.StdoutPipe()
+	if e != nil {
+		t.Fatal(e)
+	}
 	if e = cmd.Start(); e != nil {
 		t.Fatal(e)
 	}
 	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	ready := make([]byte, 6)
+	if _, e = io.ReadFull(stdout, ready); e != nil || string(ready) != "ready\n" {
+		t.Fatalf("helper readiness: %q %v", ready, e)
+	}
 	if e = os.Remove(path); e != nil {
 		t.Fatal(e)
 	}
@@ -41,21 +64,8 @@ func TestRealDeletedELF(t *testing.T) {
 		t.Fatal("fixture executable still present")
 	}
 	r := New(Options{HostRoot: "/", ProcRoot: "/proc"})
-	r.Scan(context.Background(), &model.Snapshot{Processes: []*model.Process{raw.Proc}})
+	r.Scan(ctx, &model.Snapshot{Processes: []*model.Process{raw.Proc}})
 	if missing := r.Apply([]*model.Process{raw.Proc}); missing != 0 || raw.Proc.Executable == nil || !raw.Proc.Executable.ELF || raw.Proc.Executable.Incomplete {
-		t.Logf("process=%+v cached=%+v findings=%+v", raw.Proc.ExeInfo, r.executables[raw.Proc.Key], r.Findings())
-		statPath := filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "stat")
-		b, _, se := safefile.ReadRegular(statPath, 8192, false)
-		st, pe := procfs.ParseStat(string(b))
-		file, info, oe := safefile.Open(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "exe"), true)
-		if file != nil {
-			file.Close()
-		}
-		fd, directErr := syscall.Open(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "exe"), syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
-		if directErr == nil {
-			syscall.Close(fd)
-		}
-		t.Logf("reader uid/euid=%d/%d process uid/euid=%d/%d direct open=%v", os.Getuid(), os.Geteuid(), raw.Proc.UID, raw.Proc.EUID, directErr)
-		t.Fatalf("missing=%d stat=%v parse=%v start=%d/%d open=%v info=%+v target=%q", missing, se, pe, st.StartTicks, raw.Proc.StartTicks, oe, info, raw.Proc.Exe)
+		t.Fatalf("missing=%d metadata=%+v cached=%+v findings=%+v", missing, raw.Proc.ExeInfo, r.executables[raw.Proc.Key], r.Findings())
 	}
 }
