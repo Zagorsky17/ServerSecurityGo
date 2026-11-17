@@ -4,9 +4,11 @@ import (
 	"context"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -40,6 +42,14 @@ func TestRealDeletedELF(t *testing.T) {
 	r := New(Options{HostRoot: "/", ProcRoot: "/proc"})
 	r.Scan(context.Background(), &model.Snapshot{Processes: []*model.Process{raw.Proc}})
 	if missing := r.Apply([]*model.Process{raw.Proc}); missing != 0 || raw.Proc.Executable == nil || !raw.Proc.Executable.ELF || raw.Proc.Executable.Incomplete {
-		t.Fatal(missing, raw.Proc.Executable)
+		t.Logf("process=%+v cached=%+v findings=%+v", raw.Proc.ExeInfo, r.executables[raw.Proc.Key], r.Findings())
+		statPath := filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "stat")
+		b, _, se := safefile.ReadRegular(statPath, 8192, false)
+		st, pe := procfs.ParseStat(string(b))
+		file, info, oe := safefile.Open(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "exe"), true)
+		if file != nil {
+			file.Close()
+		}
+		t.Fatalf("missing=%d stat=%v parse=%v start=%d/%d open=%v info=%+v target=%q", missing, se, pe, st.StartTicks, raw.Proc.StartTicks, oe, info, raw.Proc.Exe)
 	}
 }
