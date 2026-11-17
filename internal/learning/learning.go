@@ -1,4 +1,4 @@
-// Package learning records review candidates without changing detection or allowlists.
+// Пакет learning собирает кандидатов на проверку, не меняя оценку и allowlist.
 package learning
 
 import (

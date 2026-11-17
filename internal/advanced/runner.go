@@ -1,4 +1,4 @@
-// Package advanced performs bounded executable and optional web-content inspections off the scan loop.
+// Пакет advanced проверяет ELF и веб-файлы отдельно от цикла процессов, с ограничением объёма.
 package advanced
 
 import (
@@ -60,7 +60,7 @@ func (r *Runner) Apply(procs []*model.Process) int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, p := range procs {
-		if x := r.executables[p.Key]; x != nil && x.Path == p.Exe && time.Since(x.Time) < 2*time.Hour && p.ExeInfo != nil && x.Size == p.ExeInfo.Size && x.ModTime.Equal(p.ExeInfo.ModTime) {
+		if x := r.executables[p.Key]; x != nil && x.Path == p.Exe && time.Since(x.Time) < 2*time.Hour && p.ExeInfo != nil && x.Identity != "" && x.Identity == p.ExeInfo.Identity && x.Size == p.ExeInfo.Size && x.ModTime.Equal(p.ExeInfo.ModTime) {
 			p.Executable = x
 		} else if !p.Kernel && p.Exe != "" {
 			missing++
@@ -136,7 +136,7 @@ func (r *Runner) Scan(ctx context.Context, snap *model.Snapshot) {
 		var x model.ExecutableInspection
 		hit := false
 		for _, c := range cache {
-			if os.SameFile(fi, c.info) && fi.Size() == c.info.Size() && fi.ModTime().Equal(c.info.ModTime()) {
+			if os.SameFile(fi, c.info) && procfs.FileIdentity(fi) == procfs.FileIdentity(c.info) && fi.Size() == c.info.Size() && fi.ModTime().Equal(c.info.ModTime()) {
 				x = c.inspection
 				hit = true
 				break
@@ -162,7 +162,7 @@ func (r *Runner) Scan(ctx context.Context, snap *model.Snapshot) {
 				incomplete = true
 			}
 			after, e := file.Stat()
-			if e != nil || !os.SameFile(fi, after) || fi.Size() != after.Size() || !fi.ModTime().Equal(after.ModTime()) {
+			if e != nil || !os.SameFile(fi, after) || procfs.FileIdentity(fi) != procfs.FileIdentity(after) || fi.Size() != after.Size() || !fi.ModTime().Equal(after.ModTime()) {
 				x.Incomplete = true
 				incomplete = true
 			}
@@ -172,13 +172,14 @@ func (r *Runner) Scan(ctx context.Context, snap *model.Snapshot) {
 			data, _, e := safefile.ReadRegular(filepath.Join(r.opt.ProcRoot, strconv.Itoa(p.PID), "stat"), 8192, false)
 			st, pe := procfs.ParseStat(string(data))
 			target, te := os.Readlink(filepath.Join(r.opt.ProcRoot, strconv.Itoa(p.PID), "exe"))
-			if e != nil || pe != nil || st.StartTicks != p.StartTicks || te != nil || target != p.Exe {
+			if e != nil || pe != nil || st.StartTicks != p.StartTicks || te != nil || strings.TrimSuffix(target, " (deleted)") != p.Exe || strings.HasSuffix(target, " (deleted)") != p.ExeDeleted {
 				file.Close()
 				incomplete = true
 				continue
 			}
 		}
 		file.Close()
+		x.Identity = procfs.FileIdentity(fi)
 		x.Time = time.Now()
 		x.Path = p.Exe
 		x.Size = fi.Size()

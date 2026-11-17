@@ -323,6 +323,7 @@ func (f *FS) statExe(pidStr string) *model.FileInfo {
 		return nil
 	}
 	info := &model.FileInfo{
+		Identity:      FileIdentity(fi),
 		Mode:          fi.Mode().String(),
 		Size:          fi.Size(),
 		ModTime:       fi.ModTime(),
@@ -345,7 +346,7 @@ func (f *FS) readFDs(pidStr string, raw *Raw, maxFiles, bpfLimit int) {
 	dir := f.path(pidStr, "fd")
 	entries, err := safefile.ReadDir(dir, 65536)
 	if err != nil {
-		if isPerm(err) {
+		if !os.IsNotExist(err) {
 			p.Access = append(p.Access, "fd")
 		}
 		return

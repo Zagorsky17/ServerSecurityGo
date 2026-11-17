@@ -145,6 +145,7 @@ type OpenFile struct {
 
 // FileInfo — сведения об исполняемом файле (stat через /proc/PID/exe).
 type FileInfo struct {
+	Identity      string    `json:"-"`
 	Mode          string    `json:"mode"`
 	UID           int       `json:"uid"`
 	Size          int64     `json:"size"`

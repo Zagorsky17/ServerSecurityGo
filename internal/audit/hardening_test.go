@@ -195,3 +195,17 @@ func TestFirewallSavedPolicyAndUnknownTables(t *testing.T) {
 		t.Fatal(c)
 	}
 }
+
+func FuzzKernelVersion(f *testing.F) {
+	f.Add("6.8.0-101-generic", "6.8.0-99-generic")
+	f.Fuzz(func(t *testing.T, a, b string) {
+		if len(a) > 4096 || len(b) > 4096 {
+			t.Skip()
+		}
+		ab, ok1 := KernelNewer(a, b)
+		ba, ok2 := KernelNewer(b, a)
+		if ok1 != ok2 || (ab && ba) {
+			t.Fatalf("inconsistent ordering: %q %q", a, b)
+		}
+	})
+}

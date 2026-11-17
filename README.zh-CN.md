@@ -791,7 +791,7 @@ serversecuritygo baseline accept --ports
 
 新增 ID：`bpf_unexpected`、`raw_packet_socket`、`iface_promisc`、`exe_packed`、`exe_static_in_temp` 和可选的 `webshell_pattern`。eBPF 仅从可见进程描述符及 `fdinfo` 读取，不能枚举所有内核程序或确认挂载状态。AF_PACKET 表按 inode 关联可见描述符所有者；本程序不捕获数据包。已知软件包工具、root 所有且组和其他用户不可写的可执行文件会降低相关评分，但软件包归属不能证明完整性。混杂模式也用于网桥和虚拟化。现有独立类别评分继续生效；单个强类别不能独自使进程达到 HIGH。
 
-ELF 检查在启动时和每小时独立运行：最多 256 个不同可执行文件，每文件 32 MiB、总计 64 MiB、一分钟工作预算。缓存要求相同进程代次、路径、大小和 mtime，且不超过两小时。尚未检查的新进程或已变化进程会明确标记为覆盖不完整。UPX 标记需要核实来源；仅高熵属于 INFO。文件不会被执行或解包。eBPF 每进程最多读取 128 个描述符、每扫描 2048 个；AF_PACKET 每扫描最多 128 个命名空间和 10000 行。缺失覆盖使用 `advanced_pending`、`advanced_process_pending`、`advanced_unavailable`、`packet_inventory_unavailable`、`promisc_unavailable` 表示。
+ELF 检查在启动时和每小时独立运行：最多 256 个不同可执行文件，每文件 32 MiB、总计 64 MiB、一分钟工作预算。缓存要求相同进程代次、路径、设备/inode、ctime、大小和 mtime，且不超过两小时。尚未检查的新进程或已变化进程会明确标记为覆盖不完整。UPX 标记需要核实来源；仅高熵属于 INFO。文件不会被执行或解包。eBPF 每进程最多读取 128 个描述符、每扫描 2048 个；AF_PACKET 每扫描最多 128 个命名空间和 10000 行。缺失覆盖使用 `advanced_pending`、`advanced_process_pending`、`advanced_unavailable`、`packet_inventory_unavailable`、`promisc_unavailable` 表示。
 
 网页木马检查默认关闭：`SSG_WEBSHELL_ENABLED=false`。开启后，仅在观察到 nginx、Apache/httpd 或 PHP-FPM 时运行。读取本地配置中的静态 `root`/`DocumentRoot` 路径及 `/var/www`，检查 `SSG_WEBSHELL_DAYS` 天内修改的 `.php`、`.jsp`、`.aspx`；默认 7 天，范围 1–365。限制为 32 个根路径、100000 个路径、每内容文件 1 MiB、内容总量 16 MiB、1000 条发现；配置查找最多 256 个文件，每个 256 KiB。不跟随符号链接；变量路径不受支持并会报告不完整；容器内部路径可能不可见。发现仅包含模式 ID，不包含源代码或提取的秘密。INFO/MEDIUM 匹配需要人工审核，合法管理代码也可能匹配。与 `web_spawns_shell` 的关联只提供上下文，不证明该文件触发执行。
 

@@ -11,7 +11,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
 
-// InspectELF bounds tables before debug/elf sees attacker-controlled counts and offsets.
+// InspectELF ограничивает таблицы до передачи недоверенных размеров и смещений в debug/elf.
 func InspectELF(data []byte) (model.ExecutableInspection, error) {
 	var out model.ExecutableInspection
 	if len(data) < 4 || !bytes.Equal(data[:4], []byte{0x7f, 'E', 'L', 'F'}) {
@@ -72,7 +72,7 @@ func InspectELF(data []byte) (model.ExecutableInspection, error) {
 	if shnum > 0 && shsize != required {
 		return out, os.ErrInvalid
 	}
-	// debug/elf loads the section-name table eagerly; refuse compressed or oversized names.
+	// debug/elf сразу загружает имена секций: сжатую или чрезмерную таблицу не принимаем.
 	if strIndex > 0 {
 		h := data[shoff+uint64(strIndex)*uint64(shsize):]
 		var flags, off, size uint64

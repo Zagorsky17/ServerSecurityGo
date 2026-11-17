@@ -10,6 +10,7 @@ type BPFDescriptor struct {
 	Tag  string `json:"tag,omitempty"`
 }
 type ExecutableInspection struct {
+	Identity   string    `json:"-"`
 	Time       time.Time `json:"time"`
 	Path       string    `json:"path"`
 	Size       int64     `json:"size"`

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,7 +142,7 @@ func TestRunnerGenerationAndCancellation(t *testing.T) {
 	copy(b[1000:], "UPX!")
 	writeFixture(t, root, "opt/app", b)
 	fi, _ := os.Stat(filepath.Join(root, "opt/app"))
-	p := &model.Process{Key: "12-1", PID: 12, Exe: "/opt/app", ExeInfo: &model.FileInfo{Size: fi.Size(), ModTime: fi.ModTime()}}
+	p := &model.Process{Key: "12-1", PID: 12, Exe: "/opt/app", ExeInfo: &model.FileInfo{Identity: procfs.FileIdentity(fi), Size: fi.Size(), ModTime: fi.ModTime()}}
 	r := New(Options{HostRoot: root, ProcRoot: filepath.Join(root, "proc")})
 	if len(r.Findings()) != 1 {
 		t.Fatal("missing pending")
@@ -152,6 +153,12 @@ func TestRunnerGenerationAndCancellation(t *testing.T) {
 		t.Fatal(p.Executable)
 	}
 	previous := p.Executable
+	p.ExeInfo.Identity = "changed-inode-or-ctime"
+	p.Executable = nil
+	if missing := r.Apply([]*model.Process{p}); missing != 1 || p.Executable != nil {
+		t.Fatal("metadata substitution reused cache")
+	}
+	p.ExeInfo.Identity = procfs.FileIdentity(fi)
 	p.Key = "12-2"
 	p.Executable = nil
 	r.Apply([]*model.Process{p})
@@ -173,5 +180,20 @@ func FuzzELF(f *testing.F) {
 			t.Skip()
 		}
 		InspectELF(b)
+	})
+}
+
+func FuzzWebInputs(f *testing.F) {
+	f.Add("root /var/www;\nDocumentRoot \"/srv/site\"", []byte("<?php eval(base64_decode('x'));"))
+	f.Fuzz(func(t *testing.T, config string, content []byte) {
+		if len(config) > 1<<18 || len(content) > 1<<20 {
+			t.Skip()
+		}
+		for _, root := range WebRoots(config) {
+			if root == "" || strings.HasPrefix(root, "/") || strings.Contains(root, "\x00") {
+				t.Fatal(root)
+			}
+		}
+		WebshellSignals(content)
 	})
 }

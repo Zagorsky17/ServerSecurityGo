@@ -232,3 +232,13 @@ func TestExcludedMountDoesNotInvalidateInventoryScope(t *testing.T) {
 		t.Fatal("excluded Docker mount changed inventory scope")
 	}
 }
+
+func FuzzMountInfo(f *testing.F) {
+	f.Add("1 0 1:1 / / rw - ext4 /dev/test rw\n")
+	f.Fuzz(func(t *testing.T, data string) {
+		if len(data) > 1<<20 {
+			t.Skip()
+		}
+		ParseMountInfo(data)
+	})
+}

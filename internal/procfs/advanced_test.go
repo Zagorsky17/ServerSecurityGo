@@ -65,3 +65,26 @@ func FuzzAdvancedProc(f *testing.F) {
 		ParsePacketTable(s, "")
 	})
 }
+
+func TestBPFDescriptorBudgetAndFDReadErrors(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "42/fd"), 0700)
+	os.MkdirAll(filepath.Join(root, "42/fdinfo"), 0700)
+	for _, fd := range []string{"3", "4"} {
+		os.Symlink("anon_inode:bpf-prog", filepath.Join(root, "42/fd", fd))
+		os.WriteFile(filepath.Join(root, "42/fdinfo", fd), []byte(bpfFixture), 0600)
+	}
+	fs := New(root, root)
+	raw := &Raw{Proc: &model.Process{}, SocketInodes: map[uint64][]int{}}
+	fs.readFDs("42", raw, 10, 1)
+	if raw.BPFReads != 1 || len(raw.Proc.BPF) != 1 || len(raw.Proc.Access) != 1 || raw.Proc.Access[0] != "bpf:limit" {
+		t.Fatal(raw)
+	}
+	os.RemoveAll(filepath.Join(root, "42/fd"))
+	os.WriteFile(filepath.Join(root, "42/fd"), []byte("not a directory"), 0600)
+	raw = &Raw{Proc: &model.Process{}}
+	fs.readFDs("42", raw, 10, 1)
+	if len(raw.Proc.Access) == 0 {
+		t.Fatal("non-permission FD error hidden")
+	}
+}
