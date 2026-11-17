@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -50,6 +51,11 @@ func TestRealDeletedELF(t *testing.T) {
 		if file != nil {
 			file.Close()
 		}
+		fd, directErr := syscall.Open(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "exe"), syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+		if directErr == nil {
+			syscall.Close(fd)
+		}
+		t.Logf("reader uid/euid=%d/%d process uid/euid=%d/%d direct open=%v", os.Getuid(), os.Geteuid(), raw.Proc.UID, raw.Proc.EUID, directErr)
 		t.Fatalf("missing=%d stat=%v parse=%v start=%d/%d open=%v info=%+v target=%q", missing, se, pe, st.StartTicks, raw.Proc.StartTicks, oe, info, raw.Proc.Exe)
 	}
 }
