@@ -50,6 +50,9 @@ func runInvestigation(kind string, args []string) (int, error) {
 	if e != nil {
 		return 0, e
 	}
+	if f == report.SARIF && kind != "triage" {
+		return 0, i18n.Errorf("err.sarif_scope")
+	}
 	fail, e := report.ParseFailOn(*failOn)
 	if e != nil {
 		return 0, e
@@ -94,6 +97,7 @@ func runInvestigation(kind string, args []string) (int, error) {
 			rk := rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval})
 			ir := integrityRunner(cfg, det, true)
 			fi := fileInventory(cfg, true)
+			advancedCheck := advancedRunner(cfg)
 			if *full {
 				fi.RunOnce(ctx)
 				if e = rk.Sweep(ctx); e != nil {
@@ -103,11 +107,18 @@ func runInvestigation(kind string, args []string) (int, error) {
 					return 0, e
 				}
 			}
-			sc := scanner.New(scanner.Options{FS: pfs, Detect: det, History: h, Interval: cfg.ScanInterval, Logger: newLogger("error"), Auth: authCollector(cfg, true), LogDays: cfg.LogDays, Inventory: fi, Rootkit: rk, Integrity: ir})
+			sc := scanner.New(scanner.Options{FS: pfs, Detect: det, History: h, Interval: cfg.ScanInterval, Logger: newLogger("error"), Advanced: advancedCheck, Auth: authCollector(cfg, true), LogDays: cfg.LogDays, Inventory: fi, Rootkit: rk, Integrity: ir})
 			attachSelfCheck(sc, cfg, "", newLogger("error"), false)
 			rep.Snapshot, e = sc.ScanOnce()
 			if e != nil {
 				return 0, e
+			}
+			if *full {
+				advancedCheck.Scan(ctx, rep.Snapshot)
+				rep.Snapshot, e = sc.ScanOnce()
+				if e != nil {
+					return 0, e
+				}
 			}
 		}
 		investigate.Attach(rep.Snapshot)

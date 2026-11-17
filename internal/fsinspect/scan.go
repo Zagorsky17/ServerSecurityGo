@@ -89,7 +89,20 @@ func Scan(ctx context.Context, opt Options) *model.FileInventory {
 		mounts, e := ParseMountInfo(string(mountData))
 		mountErr = e
 		for _, m := range mounts {
-			scopeText += "\n" + m.Point + " " + m.Type
+			skip := false
+			for _, d := range excludes {
+				if under(m.Point, d) {
+					skip = true
+				}
+			}
+			for _, explicit := range roots {
+				if explicit != "/" && under(m.Point, explicit) {
+					skip = false
+				}
+			}
+			if !skip {
+				scopeText += "\n" + m.Point + " " + m.Type
+			}
 			if NetworkFS(m.Type) {
 				network = append(network, m.Point)
 			}

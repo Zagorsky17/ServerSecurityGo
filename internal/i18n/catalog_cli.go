@@ -58,7 +58,7 @@ Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
 		"cli.flag.local":           {"не подключаться к службе, сканировать самостоятельно", "do not connect to the service, scan locally"},
 		"cli.flag.interval_local":  {"период сканирования в локальном режиме", "scan interval in local mode"},
 		"cli.flag.refresh":         {"период обновления экрана", "screen refresh interval"},
-		"cli.flag.format":          {"формат отчёта: text, json, html или md", "report format: text, json, html or md"},
+		"cli.flag.format":          {"формат отчёта: text, json, html, md или sarif", "report format: text, json, html, md or sarif"},
 		"cli.flag.all_checks":      {"показывать и пройденные проверки", "show passed checks too"},
 		"cli.audit.header":         {"Результаты аудита: пройдено {0} из {1} · опасно {2} · требует внимания {3} · советов {4}", "Audit results: {0} of {1} passed · fail {2} · warning {3} · tips {4}"},
 		"cli.audit.footer":         {"Изменения (новые пользователи, правка sudoers) отслеживает служба. Команды исправления только предлагаются — выполните их сами, проверив вход по ключу в отдельной сессии.", "The service tracks changes (new users, sudoers edits). Fix commands are only suggestions — run them yourself after checking key login in a separate session."},

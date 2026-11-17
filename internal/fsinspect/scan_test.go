@@ -222,3 +222,13 @@ func TestNetworkScopeAndChangingMetadata(t *testing.T) {
 		t.Fatal("network root traversed", r)
 	}
 }
+
+func TestExcludedMountDoesNotInvalidateInventoryScope(t *testing.T) {
+	o, _ := fixture(t)
+	first := Scan(context.Background(), o)
+	os.WriteFile(filepath.Join(o.ProcRoot, "self/mountinfo"), []byte("1 0 1:1 / / rw - ext4 /dev/test rw\n2 1 1:2 / /var/lib/docker/overlay2/new/merged rw - overlay overlay rw\n"), 0600)
+	next := Scan(context.Background(), o)
+	if first.Scope != next.Scope {
+		t.Fatal("excluded Docker mount changed inventory scope")
+	}
+}

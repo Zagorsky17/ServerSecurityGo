@@ -27,6 +27,9 @@ import (
 
 // Config — все настройки приложения.
 type Config struct {
+	WebshellEnabled             bool
+	WebshellDays                int
+	LearningHours               int
 	FSScanInterval              time.Duration
 	FSScanRate                  int
 	FSScanExclude, FSScanMounts []string
@@ -103,7 +106,7 @@ const DefaultSocketPath = "/run/serversecuritygo/api.sock"
 
 // Default возвращает значения по умолчанию.
 func Default() Config {
-	return Config{FSScanInterval: 6 * time.Hour, FSScanRate: 2000, AuthLogEnabled: true, CollectMaxMB: 500, CollectMaxBinaryMB: 50,
+	return Config{WebshellDays: 7, FSScanInterval: 6 * time.Hour, FSScanRate: 2000, AuthLogEnabled: true, CollectMaxMB: 500, CollectMaxBinaryMB: 50,
 		ListenAddr:      "127.0.0.1:8090",
 		SocketPath:      DefaultSocketPath,
 		ScanInterval:    30 * time.Second,
@@ -223,6 +226,22 @@ func FromEnv() (Config, error) {
 	dur("SSG_SCAN_INTERVAL", &c.ScanInterval)
 	dur("SSG_FS_SCAN_INTERVAL", &c.FSScanInterval)
 	num("SSG_FS_SCAN_RATE", &c.FSScanRate)
+	if v := os.Getenv("SSG_WEBSHELL_ENABLED"); v != "" {
+		b, e := strconv.ParseBool(v)
+		if e != nil {
+			errs = append(errs, i18n.Errorf("err.env_bool", "SSG_WEBSHELL_ENABLED"))
+		} else {
+			c.WebshellEnabled = b
+		}
+	}
+	num("SSG_WEBSHELL_DAYS", &c.WebshellDays)
+	if c.WebshellDays < 1 || c.WebshellDays > 365 {
+		errs = append(errs, i18n.Errorf("err.webshell_days"))
+	}
+	num("SSG_LEARNING_HOURS", &c.LearningHours)
+	if c.LearningHours < 0 || c.LearningHours > 168 {
+		errs = append(errs, i18n.Errorf("err.learning_hours"))
+	}
 	for key, target := range map[string]*[]string{"SSG_FS_SCAN_EXCLUDE": &c.FSScanExclude, "SSG_FS_SCAN_MOUNTS": &c.FSScanMounts} {
 		if value := os.Getenv(key); value != "" {
 			for _, p := range strings.Split(value, ",") {

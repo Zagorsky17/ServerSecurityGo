@@ -25,6 +25,7 @@ import (
 
 // Data — всё, что нужно интерфейсу для одного кадра.
 type Data struct {
+	Learning *model.LearningReport
 	Changes  *model.ChangesReport
 	Auth     *model.AuthReport
 	Timeline []model.TimelineEvent
@@ -148,7 +149,7 @@ func (l *LocalSource) Fetch() (*Data, error) {
 	if l.met != nil {
 		st.Metrics = l.met.Brief()
 	}
-	d := &Data{Changes: l.sc.Changes(), Auth: snap.Auth, Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap),
+	d := &Data{Learning: snap.Learning, Changes: l.sc.Changes(), Auth: snap.Auth, Status: st, Procs: view.SummarizeAll(snap), Sockets: snap.Sockets, Events: ev, System: view.SortedSystem(snap),
 		UFW: snap.UFW, Exposure: view.Exposure(snap), Audit: &av, Metrics: l.metricsView()}
 	if snap.Auth != nil || snap.Recent != nil {
 		d.Timeline = investigate.Timeline(snap, ev, snap.Recent, time.Now().Add(-48*time.Hour))
@@ -342,6 +343,9 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 		return nil, err
 	}
 	d.Timeline = timeline.Events
+	if err := r.get("/api/learning", &d.Learning); err != nil && !errors.Is(err, errNotFound) {
+		return nil, err
+	}
 	if err := r.get("/api/changes", &d.Changes); err != nil && !errors.Is(err, errNotFound) {
 		return nil, err
 	}

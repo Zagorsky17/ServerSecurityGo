@@ -22,6 +22,8 @@ jobs:
         run: make vet
       - name: Тесты
         run: go test -race -v ./...
+      - name: Проверки веб-интерфейса
+        run: node --test internal/web/static_test.cjs
       - name: Тест настоящего /proc от root
         # Тестовый бинарник собираем от пользователя (чтобы не испортить
         # права на кеш сборки), а запускаем от root.

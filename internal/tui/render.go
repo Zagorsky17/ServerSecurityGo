@@ -437,6 +437,12 @@ func (a *App) row(p panelID, i, w int) []seg {
 	case pAuth:
 		e := a.logins[i]
 		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.User + " " + e.IP + " " + e.Kind, riskStyle(e.Risk.String())}}
+	case pLearning:
+		if i == 0 {
+			return []seg{{a.tr("web.tab.learning"), stNormal}}
+		}
+		c := a.data.Learning.Candidates[i-1]
+		return []seg{{c.Exe + " " + c.Rule, stNormal}}
 	case pChanges:
 		title := a.tr("web.changes.installation")
 		if i == 1 {
@@ -766,6 +772,26 @@ func (a *App) mainContent(w int) (string, []line) {
 			}
 		}
 		return a.tr("web.tab.logins"), b.lines
+	case pLearning:
+		if r := a.data.Learning; r != nil {
+			b.para(a.tr("web.allow.review"), stDim, 0)
+			if r.Enabled {
+				b.para(a.tr("web.learning.until", fmtTime(r.Until)), stNormal, 0)
+			} else {
+				b.para(a.tr("web.learning.disabled"), stDim, 0)
+			}
+			for _, w := range r.Warnings {
+				b.para(a.txt(w), stWarn, 0)
+			}
+			i := a.lists[pLearning].cursor - 1
+			if i >= 0 && i < len(r.Candidates) {
+				c := r.Candidates[i]
+				b.para(c.Exe+" "+c.User+" "+c.Rule, stBold, 0)
+				b.para(a.tr("web.learning.count", c.Count, fmtTime(c.First), fmtTime(c.Last)), stDim, 0)
+				b.para(c.Proposal, stNormal, 0)
+			}
+		}
+		return a.tr("web.tab.learning"), b.lines
 	case pChanges:
 		if a.data.Changes == nil {
 			b.para(a.tr("warn.baseline_missing"), stDim, 0)
@@ -924,6 +950,16 @@ func (a *App) processDetail(b *lb, key string) {
 	}
 	b.kv("CPU", cpu)
 	b.kv(a.tr("tui.k.memory"), a.tr("tui.memory", fmtBytes(p.RSSBytes), fmt.Sprintf("%.1f", p.MemPercent), p.Threads, p.FDCount))
+	if len(p.BPF) > 0 {
+		b.header(a.tr("tui.h.bpf"))
+		for _, f := range p.BPF {
+			b.para(fmt.Sprintf("fd=%d %s type=%d id=%d tag=%s", f.FD, f.Kind, f.Type, f.ID, f.Tag), stNormal, 2)
+		}
+	}
+	if x := p.Executable; x != nil {
+		b.header(a.tr("tui.h.elf"))
+		b.para(fmtTime(x.Time)+" "+x.Packing+fmt.Sprintf(" entropy=%.3f static=%t incomplete=%t", x.Entropy, x.Static, x.Incomplete), stNormal, 2)
+	}
 	if s := p.Security; s != nil {
 		b.kv("TracerPid", strconv.Itoa(s.TracerPID))
 		for _, v := range []struct {
@@ -1028,6 +1064,11 @@ func findingBlock(b *lb, f model.Finding) {
 	tags += "]"
 	b.add(seg{"  " + mark + " ", st}, seg{sanitize(f.Title.In(b.lang)), st}, seg{tags, stDim})
 	b.findingContext(f.FindingContext)
+	if f.AllowlistProposal != "" {
+		b.header(b.tr("web.allow.legitimate"))
+		b.para(b.tr("web.allow.review"), stDim, 2)
+		b.para(f.AllowlistProposal, stNormal, 2)
+	}
 	for _, e := range f.Evidence {
 		b.para("· "+e.In(b.lang), Style{FG: 250, BG: -1}, 6)
 	}

@@ -782,3 +782,30 @@ serversecuritygo baseline accept --ports
 完整的初始公网端口清单确定预期的协议、地址、端口和进程文件组合。新组合触发 HIGH `new_public_listener` 与 `listen` 事件。审核后执行 `baseline accept --ports` 仅更新预期清单，服务一分钟内加载；必须拥有完整套接字表和已知进程文件。无法确定所有者的 Docker 发布端口等情况会阻止接受。此操作不修改防火墙，也不抑制其他发现。
 
 离线支持表于 2026-11-18 根据 [Ubuntu](https://ubuntu.com/project/docs/release-team/list-of-releases/) 和 [Debian](https://www.debian.org/releases/) 核对，区分 Ubuntu 标准支持、Debian LTS 与需管理员确认的 Pro/ESM/ELTS。文件 capabilities 遵循 [Linux 格式](https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h)，支持版本 1–3。
+
+### 允许列表审核、学习模式和新增检测
+
+进程发现卡片中的 **This is legitimate** 提供限定可执行文件、用户和规则 ID 的 JSON 片段。`"exact": true` 防止文件名中的 `*`、`?`、`[` 被解释为通配符。请审核后自行将规则合并到现有允许列表；复制不会更改任何配置。CRITICAL 进程、强信号、信息性发现和已抑制发现不会生成建议。系统发现与审计没有自动允许列表操作。
+
+`SSG_LEARNING_HOURS=0` 默认关闭学习；1–168 小时用于收集待审核候选。候选要求至少三次观察、跨度至少五分钟、进程风险不高于 LOW，且发现权重不超过 10。当前扫描仍须满足条件；升至 HIGH/CRITICAL 或出现强信号会移除候选。首次学习窗口和计数保存在 `learning.json`，重启后继续；修改设置不会重新开始窗口。学习不会降低评分、接受基线或编辑允许列表。**Learning** 面板、`/api/learning` 和 TUI 显示候选及范围过宽规则的警告。30 个日历日没有匹配到观察结果的规则会提示审核；停机时间也计入，因此不能据此认定规则过时。状态最多包含 1000 个候选和 1000 条规则使用记录；损坏状态会保留并提示错误。
+
+新增 ID：`bpf_unexpected`、`raw_packet_socket`、`iface_promisc`、`exe_packed`、`exe_static_in_temp` 和可选的 `webshell_pattern`。eBPF 仅从可见进程描述符及 `fdinfo` 读取，不能枚举所有内核程序或确认挂载状态。AF_PACKET 表按 inode 关联可见描述符所有者；本程序不捕获数据包。已知软件包工具、root 所有且组和其他用户不可写的可执行文件会降低相关评分，但软件包归属不能证明完整性。混杂模式也用于网桥和虚拟化。现有独立类别评分继续生效；单个强类别不能独自使进程达到 HIGH。
+
+ELF 检查在启动时和每小时独立运行：最多 256 个不同可执行文件，每文件 32 MiB、总计 64 MiB、一分钟工作预算。缓存要求相同进程代次、路径、大小和 mtime，且不超过两小时。尚未检查的新进程或已变化进程会明确标记为覆盖不完整。UPX 标记需要核实来源；仅高熵属于 INFO。文件不会被执行或解包。eBPF 每进程最多读取 128 个描述符、每扫描 2048 个；AF_PACKET 每扫描最多 128 个命名空间和 10000 行。缺失覆盖使用 `advanced_pending`、`advanced_process_pending`、`advanced_unavailable`、`packet_inventory_unavailable`、`promisc_unavailable` 表示。
+
+网页木马检查默认关闭：`SSG_WEBSHELL_ENABLED=false`。开启后，仅在观察到 nginx、Apache/httpd 或 PHP-FPM 时运行。读取本地配置中的静态 `root`/`DocumentRoot` 路径及 `/var/www`，检查 `SSG_WEBSHELL_DAYS` 天内修改的 `.php`、`.jsp`、`.aspx`；默认 7 天，范围 1–365。限制为 32 个根路径、100000 个路径、每内容文件 1 MiB、内容总量 16 MiB、1000 条发现；配置查找最多 256 个文件，每个 256 KiB。不跟随符号链接；变量路径不受支持并会报告不完整；容器内部路径可能不可见。发现仅包含模式 ID，不包含源代码或提取的秘密。INFO/MEDIUM 匹配需要人工审核，合法管理代码也可能匹配。与 `web_spawns_shell` 的关联只提供上下文，不证明该文件触发执行。
+
+### SARIF 与安装诊断
+
+```sh
+serversecuritygo scan --full --format sarif --output /root/scan.sarif --min-risk INFO
+serversecuritygo audit --full --format sarif --output /root/audit.sarif
+serversecuritygo triage --full --format sarif --output /root/triage.sarif
+serversecuritygo explain exe_memfd
+serversecuritygo explain kern_aslr --format json
+serversecuritygo doctor --format json --output /root/doctor.json
+```
+
+SARIF 2.1.0 是 `scan`、`audit`、`triage` 的本地导出，包含规则 ID、级别、转义文件 URI、`properties.attack` 中的 ATT&CK ID、明确的允许列表抑制和运行不完整状态。审计通过、信息性、未知和不适用结果分别表示。原有退出码和风险过滤仍然有效。程序不会上传报告或连接外部集成；报告文件权限为 600。
+
+`explain` 只读取内置规则和检查目录，不扫描主机；参考文本中的 `{N}` 由具体发现提供数值。`doctor` 只读取安装路径及权限、systemd 主单元文件、最多 32 个其他进程的样本、auth.log 可用性、内核版本和 dpkg 元数据，不执行命令或修改权限。它不能证明服务就绪、已加载单元及 drop-in 正确、可访问全部 PID 或已修复 CVE；建议文本说明后续核查。通过 `SSG_HOST_ROOT` 检查磁盘映像时，不会默默使用工作站默认的 `/proc`。网页和 TUI 进程搜索包含规则 ID、用户、容器及本地/远程端口。

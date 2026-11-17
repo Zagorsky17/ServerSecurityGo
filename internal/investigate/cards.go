@@ -34,6 +34,31 @@ func contextFor(id, category, path string) model.FindingContext {
 		c.Why = i18n.T("card.why.info")
 	}
 	switch id {
+	case "kern_core_pattern":
+		c.Attack = []string{"T1546"}
+	case "acct_uid0_extra", "acct_new":
+		c.Attack = []string{"T1136.001"}
+	case "acct_empty_password":
+		c.Attack = []string{"T1078"}
+	case "acct_priv_groups":
+		c.Attack = []string{"T1098"}
+	case "fw_ssh_ratelimit", "ssh_root_login", "ssh_password_auth", "ssh_empty_passwords", "ssh_kbd_interactive":
+		c.Attack = []string{"T1110"}
+	case "ssh_authkeys_file":
+		c.Attack = []string{"T1098.004"}
+	case "sudo_nopasswd_all", "sudo_no_auth", "sudo_gtfobins", "sudo_writable_cmd", "sudo_changed":
+		c.Attack = []string{"T1548.003"}
+	case "sudo_env_keep":
+		c.Attack = []string{"T1574.006"}
+
+	case "bpf_unexpected":
+		c.Attack = []string{"T1014"}
+	case "raw_packet_socket", "iface_promisc":
+		c.Attack = []string{"T1040"}
+	case "webshell_pattern":
+		c.Attack = []string{"T1505.003"}
+	case "exe_packed":
+		c.Attack = []string{"T1027.002"}
 	case "exe_in_temp":
 		c.Attack = []string{"T1036.005"}
 	case "exe_hidden_path":

@@ -37,6 +37,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/advanced"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/authlog"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/baseline"
@@ -47,6 +48,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/learning"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
@@ -66,6 +68,7 @@ var version = "dev"
 func usage() {
 	fmt.Fprint(os.Stderr, i18n.S("cli.usage", version))
 	fmt.Fprintln(os.Stderr, i18n.S("err.baseline_usage"))
+	fmt.Fprintln(os.Stderr, i18n.S("cli.diagnostics_usage"))
 }
 
 func main() {
@@ -97,6 +100,8 @@ func main() {
 		err = cmdInvestigation(os.Args[1], os.Args[2:])
 	case "baseline", "diff":
 		err = cmdBaseline(os.Args[1], os.Args[2:])
+	case "explain", "doctor":
+		err = cmdDiagnostics(os.Args[1], os.Args[2:])
 	case "audit":
 		err = cmdAudit(os.Args[2:])
 	case "demo":
@@ -207,7 +212,7 @@ func cmdServe(args []string) error {
 	mc := metricsCollector(cfg, cfg.DataDir, log)
 	nl := netMonitor(cfg, detCfg, mc)
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log,
-		LogDays: cfg.LogDays, Auth: authCollector(cfg, false), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, Interval: cfg.RootkitInterval}), Inventory: fileInventory(cfg, false), Integrity: integrityRunner(cfg, detCfg, false)})
+		Learning: learning.New(cfg.DataDir, cfg.LearningHours, detCfg.Allow), Advanced: advancedRunner(cfg), LogDays: cfg.LogDays, Auth: authCollector(cfg, false), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, Interval: cfg.RootkitInterval}), Inventory: fileInventory(cfg, false), Integrity: integrityRunner(cfg, detCfg, false)})
 	if mc != nil {
 		sc.SetMetrics(mc) // признаки метрик попадают в системные находки
 	}
@@ -535,7 +540,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	nl := netMonitor(cfg, detCfg, mc)
 	pfs.MaxSockets = cfg.NetMaxSockets
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet,
-		LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval}), Inventory: fileInventory(cfg, true), Integrity: integrityRunner(cfg, detCfg, true)})
+		Learning: learning.New("", cfg.LearningHours, detCfg.Allow), Advanced: advancedRunner(cfg), LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval}), Inventory: fileInventory(cfg, true), Integrity: integrityRunner(cfg, detCfg, true)})
 	if mc != nil {
 		sc.SetMetrics(mc)
 	}
@@ -598,6 +603,7 @@ func runScan(args []string) (int, error) {
 	rk := rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval})
 	ir := integrityRunner(cfg, detCfg, true)
 	fi := fileInventory(cfg, true)
+	advancedCheck := advancedRunner(cfg)
 	if *full {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
@@ -608,7 +614,7 @@ func runScan(args []string) (int, error) {
 		}
 		wg.Wait()
 	}
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Inventory: fi, Rootkit: rk, Integrity: ir})
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), Advanced: advancedCheck, LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Inventory: fi, Rootkit: rk, Integrity: ir})
 	attachSelfCheck(sc, cfg, "", newLogger("error"), false)
 	// Метрики разового запуска: один замер без истории. Признаки с
 	// удержанием (steal_high, load_high) так не сработают — для них нужна
@@ -621,6 +627,14 @@ func runScan(args []string) (int, error) {
 	snap, err := sc.ScanOnce()
 	if err != nil {
 		return 0, err
+	}
+	if *full {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		advancedCheck.Scan(ctx, snap)
+		cancel()
+		if snap, err = sc.ScanOnce(); err != nil {
+			return 0, err
+		}
 	}
 	if *sample > 0 {
 		time.Sleep(*sample)
@@ -832,4 +846,8 @@ func authCollector(cfg config.Config, readOnly bool) *authlog.Collector {
 
 func fileInventory(cfg config.Config, readOnly bool) *fsinspect.Runner {
 	return fsinspect.New(fsinspect.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, StateDir: cfg.DataDir, Interval: cfg.FSScanInterval, Rate: cfg.FSScanRate, Exclude: cfg.FSScanExclude, Mounts: cfg.FSScanMounts, ReadOnly: readOnly})
+}
+
+func advancedRunner(cfg config.Config) *advanced.Runner {
+	return advanced.New(advanced.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Webshell: cfg.WebshellEnabled, Days: cfg.WebshellDays})
 }

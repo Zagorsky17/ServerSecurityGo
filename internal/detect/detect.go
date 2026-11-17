@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
@@ -69,6 +70,7 @@ type Rule func(p *model.Process, c *Context) []model.Finding
 
 // Rules — все процессные правила в порядке применения.
 var Rules = []Rule{
+	ruleAdvanced,
 	ruleProcessSecurity,
 	ruleExeLocation,
 	ruleHiddenPath,
@@ -285,6 +287,7 @@ func recommendations(p *model.Process, findings []model.Finding) []i18n.Msg {
 // процессов. Пустое поле означает «любое значение». Exe и Name
 // поддерживают шаблоны filepath.Match (например, /opt/app/bin/*).
 type AllowRule struct {
+	Exact   bool     `json:"exact,omitempty"`
 	Exe     string   `json:"exe"`
 	Name    string   `json:"name"`
 	User    string   `json:"user"`
@@ -302,7 +305,7 @@ func (cfg Config) allowed(p *model.Process, ruleID string) bool {
 		if a.Exe == "" && a.Name == "" && a.User == "" {
 			continue // правило без условий подавляло бы всё — игнорируем
 		}
-		if a.Exe != "" && !globMatch(a.Exe, p.Exe) {
+		if a.Exe != "" && ((a.Exact && a.Exe != p.Exe) || (!a.Exact && !globMatch(a.Exe, p.Exe))) {
 			continue
 		}
 		if a.Name != "" && !globMatch(a.Name, p.Name) {
@@ -340,15 +343,26 @@ func nameMatchesExe(pattern, exe string) bool {
 // пишет их в журнал при запуске.
 func WeakAllowRules(rules []AllowRule) []string {
 	var out []string
+	for _, m := range WeakAllowMessages(rules) {
+		out = append(out, m.String())
+	}
+	return out
+}
+
+func WeakAllowMessages(rules []AllowRule) []i18n.Msg {
+	var out []i18n.Msg
 	for i, a := range rules {
+		if a.Exe != "" && ((!a.Exact && strings.ContainsAny(a.Exe, "*?[")) || len(a.Rules) == 0) {
+			out = append(out, i18n.T("allow.weak_scope", i+1, a.Exe))
+		}
 		if a.Exe != "" || (a.Name == "" && a.User == "") {
 			continue
 		}
 		what := fmt.Sprintf("(name=%q user=%q)", a.Name, a.User)
 		if a.Name == "" {
-			out = append(out, i18n.S("allow.weak_user_only", i+1, what))
+			out = append(out, i18n.T("allow.weak_user_only", i+1, what))
 		} else {
-			out = append(out, i18n.S("allow.weak_no_exe", i+1, what))
+			out = append(out, i18n.T("allow.weak_no_exe", i+1, what))
 		}
 	}
 	return out

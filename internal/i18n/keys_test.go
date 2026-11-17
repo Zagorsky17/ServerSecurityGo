@@ -18,7 +18,7 @@ var keyLike = regexp.MustCompile(`^(card|cat|score|rec|allow|rule|ev|event|hist|
 
 // dynamicPrefixes — ключи, которые код собирает из префикса и значения
 // (категория признака, тип события); они проверяются отдельно.
-var dynamicPrefixes = []string{"cat.", "event.", "tui.event."}
+var dynamicPrefixes = []string{"cat.", "event.", "tui.event.", "cli.doctor."}
 
 // usedKeys собирает ключи из исходников: строковые литералы Go, похожие
 // на ключ, вызовы tr('…') в JavaScript и атрибуты data-i18n* в HTML.

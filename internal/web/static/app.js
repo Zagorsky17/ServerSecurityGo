@@ -206,7 +206,7 @@ function procFilter() {
     if (path && !(p.exe || '').toLowerCase().includes(path)) return false;
     if (risk && riskNum(p.risk) < riskNum(risk)) return false;
     if (q) {
-      const hay = [p.pid, p.name, p.user, p.exe, p.cmdline, p.container, ...p.findings.map((f) => tx(f.title))].join(' ').toLowerCase();
+      const hay = [p.pid, p.name, p.user, p.exe, p.cmdline, p.container, ...(p.ports || []), ...p.findings.flatMap((f) => [f.id, tx(f.title)])].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -933,6 +933,8 @@ function renderCard(data) {
       ...(p.containerName ? kv('Docker', `${p.containerName} (${p.containerImage || ''})`) : []),
       ...Object.entries(p.namespaces || {}).flatMap(([k, v]) => kv('ns/' + k, v)),
     )),
+    (p.bpf || []).length ? section(tr('tui.h.bpf'),h('pre',null,JSON.stringify(p.bpf,null,2))) : '',
+ p.executableInspection ? section(tr('tui.h.elf'),h('pre',null,JSON.stringify(p.executableInspection,null,2))) : '',
     section(tr('web.card.connections'), socketsTable(p.sockets || [])),
     section(tr('tui.h.files', (p.files || []).length, p.fdCount), filesTable(p.files || [])),
     info.length ? section(tr('tui.h.info'), info.map(findingBlock)) : '',
@@ -957,7 +959,7 @@ function findingBlock(f) {
       f.strong ? h('span', { class: 'tag strong' }, tr('web.card.strong')) : '',
       f.suppressed ? h('span', { class: 'tag' }, tr('tui.suppressed')) : ''),
     h('ul', { class: 'ev' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))),
-    findingContext(f),
+    findingContext(f), allowlistProposal(f.allowlistProposal),
     tx(f.recommendation) ? h('div', { class: 'rec' }, '→ ' + tx(f.recommendation)) : '');
 }
 
@@ -1055,6 +1057,7 @@ function renderAll() {
     case 'fail2ban': renderFail2ban(); break;
     case 'ufw': renderUFW(); break;
     case 'logins': renderLogins(); break;
+case 'learning': renderLearning(); break;
 case 'changes': renderChanges(); break;
 case 'timeline': renderTimeline(); break;
 case 'history': renderHistory(); break;
@@ -1073,6 +1076,7 @@ async function loadTabData() {
     case 'fail2ban': state.fail2ban = await api('/api/fail2ban'); break;
     case 'ufw': state.ufw = await api('/api/ufw'); break;
     case 'logins': state.auth = await api('/api/logins'); break;
+case 'learning': state.learning = await api('/api/learning'); break;
 case 'changes': state.changes = await api('/api/changes'); break;
 case 'timeline': state.timeline = await api('/api/timeline?since=48h'); break;
 case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
@@ -1268,4 +1272,18 @@ function renderChanges() {
   box.append(h('table',null,h('thead',null,h('tr',null,[tr('web.col.group'),tr('tui.k.file'),tr('web.changes.kind'),tr('web.changes.before'),tr('web.changes.after')].map(x=>h('th',null,x)))),
    h('tbody',null,(d.changes || []).map(c=>h('tr',null,[c.section,c.key,c.kind,c.before || '',c.after || ''].map(x=>h('td',{class:'mono wrap'},x)))))));
  }
+}
+
+function allowlistProposal(json) {
+ if (!json) return '';
+ return h('details',null,h('summary',null,tr('web.allow.legitimate')),h('p',null,tr('web.allow.review')),
+ h('pre',null,json),h('button',{type:'button',class:'small secondary',onclick:()=>copyText(json)},tr('tui.hint.copy')));
+}
+function renderLearning() {
+ const r=state.learning, box=$('learning-content');
+ box.replaceChildren(h('p',null,tr('web.allow.review')));
+ if (!r) {box.append(h('p',null,tr('web.learning.disabled')));return;}
+ box.append(h('p',null,r.enabled ? tr('web.learning.until',fmtTime(r.until)) : tr('web.learning.disabled')));
+ for (const w of r.warnings || []) box.append(h('p',null,tx(w)));
+ for (const c of r.candidates || []) box.append(h('div',{class:'card'},h('b',null,c.exe+' · '+c.user+' · '+c.rule),h('p',null,tr('web.learning.count',c.count,fmtTime(c.first),fmtTime(c.last))),allowlistProposal(c.proposal)));
 }

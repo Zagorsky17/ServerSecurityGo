@@ -21,6 +21,6 @@ func init() {
 		"err.bad_fail_on":     {"неверный порог --fail-on {0}: допустимы LOW, MEDIUM, HIGH, CRITICAL или none", "invalid --fail-on threshold {0}: allowed are LOW, MEDIUM, HIGH, CRITICAL or none"},
 		"err.output_symlink":  {"--output {0}: это символическая ссылка — укажите сам файл (по ссылкам отчёт не пишется)", "--output {0}: this is a symbolic link — give the file itself (reports are not written through links)"},
 		"err.output_not_file": {"--output {0}: это не обычный файл", "--output {0}: not a regular file"},
-		"err.unknown_format":  {"неизвестный формат {0}: допустимы text, json, html, md", "unknown format {0}: allowed are text, json, html, md"},
+		"err.unknown_format":  {"неизвестный формат {0}: допустимы text, json, html, md, sarif", "unknown format {0}: allowed are text, json, html, md, sarif"},
 	})
 }

@@ -90,6 +90,8 @@ func (s *Scan) ExitCode(f FailOn) int {
 // Render выводит отчёт в нужном формате на языке l.
 func (s *Scan) Render(w io.Writer, f Format, l i18n.Lang) error {
 	switch f {
+	case SARIF:
+		return renderSARIF(w, s.Version, "scan", s.Incomplete(), s.sarifResults(l))
 	case JSON:
 		return s.renderJSON(w, l)
 	case HTML:

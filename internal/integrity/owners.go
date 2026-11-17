@@ -13,15 +13,20 @@ import (
 // Owners — локальная принадлежность файлам dpkg, не доказательство подлинности.
 // nil означает неизвестную/неполную базу; отрицательные выводы запрещены.
 func Owners(hostRoot string) (map[string]bool, error) {
-	return owners(hostRoot, nil)
+	return owners(hostRoot, nil, true)
 }
 
 // OwnersFor возвращает принадлежность только запрошенных путей; nil при неполной базе.
 func OwnersFor(hostRoot string, paths map[string]bool) (map[string]bool, error) {
-	return owners(hostRoot, paths)
+	return owners(hostRoot, paths, false)
 }
 
-func owners(hostRoot string, paths map[string]bool) (map[string]bool, error) {
+// OwnersIncluding добавляет исполняемые файлы к обычной выборке за один проход базы.
+func OwnersIncluding(hostRoot string, paths map[string]bool) (map[string]bool, error) {
+	return owners(hostRoot, paths, true)
+}
+
+func owners(hostRoot string, paths map[string]bool, standard bool) (map[string]bool, error) {
 	root, err := os.OpenRoot(hostRoot)
 	if err != nil {
 		return nil, err
@@ -74,10 +79,10 @@ func owners(hostRoot string, paths map[string]bool) (map[string]bool, error) {
 					wanted = true
 				}
 			}
-			if paths != nil && !wanted {
-				continue
+			if standard && (strings.Contains(line, ".so") || strings.Contains(line, "/systemd/") || strings.Contains(line, "/init.d/") || strings.Contains(line, "/rc")) {
+				wanted = true
 			}
-			if paths == nil && !strings.Contains(line, ".so") && !strings.Contains(line, "/systemd/") && !strings.Contains(line, "/init.d/") && !strings.Contains(line, "/rc") {
+			if !wanted {
 				continue
 			}
 			owned[line] = true

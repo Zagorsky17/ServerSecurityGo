@@ -365,7 +365,7 @@ func TestAllowlistNameOnly(t *testing.T) {
 		t.Error("обрезанный comm не совпал с exe")
 	}
 	weak := WeakAllowRules([]AllowRule{{Name: "node"}, {User: "deploy"}, {Exe: "/opt/a"}, {}})
-	if len(weak) != 2 || !strings.Contains(weak[0], "без exe") || !strings.Contains(weak[1], "только пользователь") {
+	if len(weak) != 3 || !strings.Contains(weak[0], "без exe") || !strings.Contains(weak[1], "только пользователь") {
 		t.Errorf("WeakAllowRules: %q", weak)
 	}
 }

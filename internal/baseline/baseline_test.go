@@ -236,3 +236,19 @@ func TestCaptureRootsSecretsAndCompleteness(t *testing.T) {
 		t.Fatal("missing data complete")
 	}
 }
+
+func TestCaptureMalformedIdentityAndDirectoryBudget(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "etc"), 0700)
+	os.WriteFile(filepath.Join(root, "etc/machine-id"), []byte(strings.Repeat("z", 32)), 0600)
+	dir := filepath.Join(root, "etc/systemd/system")
+	os.MkdirAll(dir, 0700)
+	for i := 0; i < 34; i++ {
+		dir = filepath.Join(dir, "nested")
+		os.Mkdir(dir, 0700)
+	}
+	b := Capture(context.Background(), root, t.TempDir(), nil, nil)
+	if b.Host != "" || b.Sections["units"].Complete {
+		t.Fatal("invalid identity/depth accepted", b)
+	}
+}

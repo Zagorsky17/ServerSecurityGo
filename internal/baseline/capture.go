@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -39,7 +38,10 @@ func Capture(ctx context.Context, hostRoot, procRoot string, snap *model.Snapsho
 		return v, e
 	}
 	if id, e := read("/etc/machine-id", 4096); e == nil && len(strings.TrimSpace(string(id))) == 32 {
-		b.Host = hash([]byte(strings.TrimSpace(string(id))))
+		normalized := strings.TrimSpace(string(id))
+		if _, e := hex.DecodeString(normalized); e == nil {
+			b.Host = hash([]byte(normalized))
+		}
 	}
 	for _, name := range []string{"users", "groups"} {
 		s := section("local-files-v1")
@@ -76,8 +78,55 @@ func Capture(ctx context.Context, hostRoot, procRoot string, snap *model.Snapsho
 	units := section("saved-systemd-units-v1")
 	services := section("saved-systemd-services-v1")
 	count := 0
-	for _, dir := range []string{"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system", "/run/systemd/system"} {
-		n, e := safefile.ResolveRooted(root, strings.TrimPrefix(dir, "/"))
+	budget := int64(32 << 20)
+	visited := map[string]bool{}
+	var walk func(string, int)
+	walk = func(dir string, depth int) {
+		if visited[dir] {
+			return
+		}
+		visited[dir] = true
+		if ctx.Err() != nil || depth > 32 || count >= 20000 {
+			units.Complete = false
+			return
+		}
+		entries, e := safefile.ReadDirRooted(root, dir, 20000-count)
+		if e != nil {
+			units.Complete = false
+			return
+		}
+		for _, entry := range entries {
+			if ctx.Err() != nil || count >= 20000 {
+				units.Complete = false
+				return
+			}
+			count++
+			p := dir + "/" + entry.Name()
+			if entry.IsDir() {
+				walk(p, depth+1)
+				continue
+			}
+			if entry.Type() != 0 && entry.Type()&os.ModeSymlink == 0 {
+				continue
+			}
+			if budget <= 0 {
+				units.Complete = false
+				return
+			}
+			data, e := read("/"+p, min(1<<20, budget))
+			budget -= int64(len(data))
+			if e != nil {
+				units.Complete = false
+				continue
+			}
+			units.Items["/"+p] = hash(data)
+			if strings.HasSuffix(p, ".service") {
+				services.Items["/"+p] = units.Items["/"+p]
+			}
+		}
+	}
+	for _, dir := range []string{"etc/systemd/system", "usr/lib/systemd/system", "lib/systemd/system", "run/systemd/system"} {
+		n, e := safefile.ResolveRooted(root, dir)
 		if os.IsNotExist(e) {
 			continue
 		}
@@ -85,39 +134,7 @@ func Capture(ctx context.Context, hostRoot, procRoot string, snap *model.Snapsho
 			units.Complete = false
 			continue
 		}
-		e = fs.WalkDir(root.FS(), strings.TrimPrefix(n, "/"), func(p string, d fs.DirEntry, err error) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			count++
-			if count > 20000 {
-				return fs.SkipAll
-			}
-			if err != nil {
-				units.Complete = false
-				return nil
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if d.Type() != 0 && d.Type()&os.ModeSymlink == 0 {
-				return nil
-			}
-			key := "/" + p
-			data, e := read(key, 1<<20)
-			if e != nil {
-				units.Complete = false
-				return nil
-			}
-			units.Items[key] = hash(data)
-			if strings.HasSuffix(p, ".service") {
-				services.Items[key] = units.Items[key]
-			}
-			return nil
-		})
-		if e != nil || count > 20000 {
-			units.Complete = false
-		}
+		walk(n, 0)
 	}
 	services.Complete = units.Complete
 	b.Sections["units"] = units

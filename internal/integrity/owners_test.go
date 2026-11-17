@@ -42,6 +42,10 @@ func TestOwnersForIncludesRequestedBinaryAndUsrMerge(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "var/lib/dpkg/status"), []byte("Package: test\nStatus: install ok installed\nVersion: 1\nArchitecture: amd64\n"), 0600)
 	os.WriteFile(filepath.Join(root, "var/lib/dpkg/info/test.list"), []byte("/bin/ping\n/usr/bin/other\n/usr/lib/test.so\n"), 0600)
 	os.Symlink("usr/bin", filepath.Join(root, "bin"))
+	combined, err := OwnersIncluding(root, map[string]bool{"/usr/bin/ping": true})
+	if err != nil || !combined["/usr/bin/ping"] || !combined["/usr/lib/test.so"] || combined["/usr/bin/other"] {
+		t.Fatal(combined, err)
+	}
 	got, e := OwnersFor(root, map[string]bool{"/usr/bin/ping": true})
 	if e != nil || !got["/usr/bin/ping"] || got["/usr/bin/other"] || got["/usr/lib/test.so"] {
 		t.Fatal(got, e)

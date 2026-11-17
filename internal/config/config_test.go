@@ -263,3 +263,40 @@ func TestFilesystemScanSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestLearningHoursValidation(t *testing.T) {
+	for _, value := range []string{"-1", "169", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("SSG_LEARNING_HOURS", value)
+			if _, e := FromEnv(); e == nil {
+				t.Fatal(value)
+			}
+		})
+	}
+	t.Setenv("SSG_LEARNING_HOURS", "24")
+	c, e := FromEnv()
+	if e != nil || c.LearningHours != 24 {
+		t.Fatal(c.LearningHours, e)
+	}
+}
+
+func TestWebshellConfigValidation(t *testing.T) {
+	for _, value := range []string{"0", "366", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("SSG_WEBSHELL_DAYS", value)
+			if _, e := FromEnv(); e == nil {
+				t.Fatal(value)
+			}
+		})
+	}
+	t.Setenv("SSG_WEBSHELL_ENABLED", "invalid")
+	if _, e := FromEnv(); e == nil {
+		t.Fatal("invalid boolean")
+	}
+	t.Setenv("SSG_WEBSHELL_ENABLED", "true")
+	t.Setenv("SSG_WEBSHELL_DAYS", "14")
+	cfg, e := FromEnv()
+	if e != nil || !cfg.WebshellEnabled || cfg.WebshellDays != 14 {
+		t.Fatal(cfg.WebshellEnabled, cfg.WebshellDays, e)
+	}
+}
