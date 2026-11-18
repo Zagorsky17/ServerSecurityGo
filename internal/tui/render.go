@@ -152,7 +152,13 @@ func (a *App) drawStatus(r rect) {
 		host += " · " + a.tr("tui.demo")
 	}
 	s.Text(x, r.y+1, iw, fmt.Sprintf("%s · %s · %s", host, h.OS, h.Kernel), stBold)
-	s.Text(x, r.y+2, iw, a.tr("tui.scan_line", st.Time.Local().Format("15:04:05"), st.DurationMs, secs(st.Interval), a.txt(a.src.Describe())), stDim)
+	scanLine := a.tr("tui.scan_line", st.Time.Local().Format("15:04:05"), st.DurationMs, secs(st.Interval), a.txt(a.src.Describe()))
+	scanStyle := stDim
+	if st.Stale {
+		scanLine = a.tr("tui.data_stale") + " · " + scanLine
+		scanStyle = stErr
+	}
+	s.Text(x, r.y+2, iw, scanLine, scanStyle)
 	cx := x
 	for _, rk := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
 		n := st.Stats.ByRisk[rk]
@@ -1874,6 +1880,8 @@ func (a *App) drawBottom() {
 		}
 	case a.err != nil:
 		right, rst = a.tr("tui.error_lower", a.err.Error()), stErr
+	case a.data != nil && a.data.Status.Stale:
+		right, rst = a.tr("tui.data_stale"), stErr
 	case a.paused:
 		right, rst = "⏸ "+a.tr("tui.paused_key"), stWarn
 	case a.mouseOff:
