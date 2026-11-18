@@ -78,6 +78,9 @@ func runDiagnostics(kind string, args []string) (int, error) {
 					return e
 				}
 			}
+			if _, e = fmt.Fprintf(w, "%s\n%s\n%s\n", i18n.T("card.confidence").In(lang), explanation.Confidence.In(lang), i18n.T("card.verify").In(lang)); e != nil {
+				return e
+			}
 			for _, c := range explanation.VerifyCommands {
 				if _, e = fmt.Fprintln(w, view.Printable(c)); e != nil {
 					return e

@@ -76,3 +76,24 @@ test('system group buttons open members, survive refresh and return safely', () 
   nodes['sys-group-nav'].children[0].events.click();assert.equal(state.systemGroup,'');assert.equal(table.rows.length,1);
   state.systemGroup='group';state.system.groups=[];ctx.renderSystem();assert.equal(state.systemGroup,'');assert.equal(table.rows.length,2);
 });
+
+test('finding cards separate evidence, confidence and safe verification text', () => {
+  class Node {
+    constructor(tag,text=''){this.tag=tag;this.text=text;this.children=[];this.attrs={};}
+    append(...children){this.children.push(...children);}
+    addEventListener(){}
+    setAttribute(k,v){this.attrs[k]=v;}
+    get textContent(){return this.text+this.children.map(c=>c.textContent).join('');}
+  }
+  const ctx=vm.createContext({Node,document:{createElement:t=>new Node(t),createTextNode:t=>new Node('#text',t)},vis:String,tr:k=>k,tx:m=>m || '',fmtTime:String,categoryName:String,allowlistProposal:()=>''});
+  vm.runInContext(functions(['h','findingContext','findingBlock']),ctx);
+  const f={title:'change',category:'network',reviewFirst:true,evidence:['OBSERVED <img src=x>'],why:'RISK',confidence:'LIMITS',legitimate:'maintenance',verifyCommands:['stat -- \'/tmp/<script>\''],attack:['javascript:evil','T1098.004']};
+  const card=ctx.findingBlock(f);const text=card.textContent;
+  let last=-1;for(const s of ['tui.h.facts','OBSERVED','card.why','RISK','card.confidence','LIMITS','card.verify','stat --']){const i=text.indexOf(s);assert.ok(i>last,s);last=i;}
+  const nodes=[];function walk(n){nodes.push(n);n.children.forEach(walk);}walk(card);
+  assert.equal(nodes.some(n=>n.tag==='img'||n.tag==='script'),false);
+  assert.ok(nodes.find(n=>n.tag==='details').attrs.hasOwnProperty('open'));
+  assert.equal(nodes.filter(n=>n.tag==='a').length,1);
+  const suppressed=ctx.findingContext({...f,suppressed:true});assert.equal(Object.hasOwn(suppressed.attrs,'open'),false);
+  const legacy=ctx.findingContext({why:'old',verifyCommands:[]});assert.ok(legacy.textContent.includes('old'));
+});

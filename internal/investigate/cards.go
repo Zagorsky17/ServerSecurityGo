@@ -7,7 +7,7 @@ import (
 )
 
 func contextFor(id, category, path string) model.FindingContext {
-	c := model.FindingContext{Why: i18n.T("card.why.general"), Legitimate: i18n.T("card.legitimate.general")}
+	c := model.FindingContext{Why: i18n.T("card.why.general"), Legitimate: i18n.T("card.legitimate.general"), Confidence: i18n.T("card.confidence.general")}
 	switch category {
 	case model.CatLocation, model.CatIntegrity:
 		c.Why = i18n.T("card.why.file")
@@ -34,6 +34,14 @@ func contextFor(id, category, path string) model.FindingContext {
 		c.Why = i18n.T("card.why.info")
 	}
 	switch id {
+	case "new_public_listener":
+		c.ReviewFirst = true
+		c.Why = i18n.T("card.why.new_listener")
+		c.Confidence = i18n.T("card.confidence.new_listener")
+	case "fs_privilege_new":
+		c.ReviewFirst = true
+		c.Why = i18n.T("card.why.new_privilege")
+		c.Confidence = i18n.T("card.confidence.new_privilege")
 	case "kern_core_pattern":
 		c.Attack = []string{"T1546"}
 	case "acct_uid0_extra", "acct_new":
@@ -81,6 +89,11 @@ func contextFor(id, category, path string) model.FindingContext {
 		c.Attack = []string{"T1574.006"}
 	case "ssh_key_command", "ssh_keys_recent":
 		c.Attack = []string{"T1098.004"}
+		if id == "ssh_keys_recent" {
+			c.ReviewFirst = true
+			c.Why = i18n.T("card.why.recent_keys")
+			c.Confidence = i18n.T("card.confidence.recent_keys")
+		}
 	case "exe_setuid_nonstd", "fs_suid_unusual":
 		c.Attack = []string{"T1548.001"}
 	case "unicode_control":
@@ -124,7 +137,7 @@ func AttachAudit(checks []model.AuditCheck, events []model.Event) {
 	idx := indexEvents(events)
 	for i := range checks {
 		c := &checks[i]
-		c.FindingContext = model.FindingContext{Why: i18n.T("card.why.audit"), Legitimate: i18n.T("card.legitimate.audit"), RelatedEvents: idx["audit:"+c.ID]}
+		c.FindingContext = model.FindingContext{Why: i18n.T("card.why.audit"), Legitimate: i18n.T("card.legitimate.audit"), Confidence: i18n.T("card.confidence.audit"), RelatedEvents: idx["audit:"+c.ID]}
 		for _, ref := range c.References {
 			if validTechnique(ref) {
 				c.Attack = append(c.Attack, ref)

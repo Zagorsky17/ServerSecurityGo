@@ -787,6 +787,14 @@ serversecuritygo baseline accept --ports
 
 离线支持表于 2026-11-18 根据 [Ubuntu](https://ubuntu.com/project/docs/release-team/list-of-releases/) 和 [Debian](https://www.debian.org/releases/) 核对，区分 Ubuntu 标准支持、Debian LTS 与需管理员确认的 Pro/ESM/ELTS。文件 capabilities 遵循 [Linux 格式](https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h)，支持版本 1–3。
 
+### 变化优先级与判断依据
+
+系统列表先显示 CRITICAL，再显示未被抑制的 `new_public_listener`、`fs_privilege_new` 和 `ssh_keys_recent`，其余发现按风险排列。**Change — review first** 只决定审核顺序，不提高风险等级，也不证明攻击。快照比较优先显示端口、SSH 密钥、SUID/SGID 和 capabilities 的变化；不完整或范围不兼容的部分不会生成这些差异。
+
+Web 和 TUI 卡片分别显示观察事实、风险与后果、可信依据与限制、验证命令。`fs_privilege_new` 显示变化前后的权限；基线特权文件列表中没有记录，不代表文件本身以前不存在。软件包归属不会消除警告。`ssh_keys_recent` 仅依据 mtime，不能确认密钥变化：应将指纹与批准的密钥和完整且兼容的快照核对。新的公网监听也不能证明外部可达。
+
+可信说明描述依据与限制，不给出攻击概率百分比。命令仅展示，路径经过 shell 引号转义。`explain` 也输出这些说明。JSON 在发现上下文中增加 `reviewFirst` 和 `confidence`，在快照变化中增加 `reviewFirst`。旧服务的数据不包含新增说明和标记。
+
 ### 允许列表审核、学习模式和新增检测
 
 进程发现卡片中的 **This is legitimate** 提供限定可执行文件、用户和规则 ID 的 JSON 片段。`"exact": true` 防止文件名中的 `*`、`?`、`[` 被解释为通配符。请审核后自行将规则合并到现有允许列表；复制不会更改任何配置。CRITICAL 进程、强信号、信息性发现和已抑制发现不会生成建议。系统发现与审计没有自动允许列表操作。

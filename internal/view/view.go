@@ -295,10 +295,19 @@ func Fail2ban(snap *model.Snapshot) *model.Fail2banReport {
 	return &r
 }
 
-// SortedSystem возвращает системные находки по убыванию риска.
+// Критические находки идут первыми, затем важные изменения, затем остальные по риску.
 func SortedSystem(snap *model.Snapshot) []model.SystemFinding {
 	sys := append([]model.SystemFinding(nil), snap.System...)
-	sort.SliceStable(sys, func(i, j int) bool { return sys[i].Risk > sys[j].Risk })
+	sort.SliceStable(sys, func(i, j int) bool {
+		x, y := sys[i], sys[j]
+		if (x.Risk == model.RiskCritical) != (y.Risk == model.RiskCritical) {
+			return x.Risk == model.RiskCritical
+		}
+		if (x.ReviewFirst && !x.Suppressed) != (y.ReviewFirst && !y.Suppressed) {
+			return x.ReviewFirst && !x.Suppressed
+		}
+		return x.Risk > y.Risk
+	})
 	return sys
 }
 
