@@ -41,6 +41,8 @@ import (
 
 // Options — параметры сканера.
 type Options struct {
+	// Quick оставляет тяжёлые обходы неполными, сохраняя их предупреждения.
+	Quick     bool
 	Advanced  *advanced.Runner
 	Learning  *learning.Tracker
 	Inventory *fsinspect.Runner
@@ -195,25 +197,27 @@ func (s *Scanner) Run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
-	if s.opt.Advanced != nil {
-		workers.Add(1)
-		go func() { defer workers.Done(); s.opt.Advanced.Run(ctx, s.Snapshot) }()
-	}
-	if s.opt.Inventory != nil {
-		workers.Add(1)
-		go func() { defer workers.Done(); s.opt.Inventory.Run(ctx) }()
-	}
-	if s.opt.Rootkit != nil {
-		workers.Add(1)
-		go func() { defer workers.Done(); s.opt.Rootkit.Run(ctx) }()
-	}
-	if s.opt.Integrity != nil {
-		workers.Add(1)
-		go func() { defer workers.Done(); s.opt.Integrity.Run(ctx) }()
-	}
-	if s.opt.Recent {
-		workers.Add(1)
-		go func() { defer workers.Done(); s.runRecent(ctx) }()
+	if !s.opt.Quick {
+		if s.opt.Advanced != nil {
+			workers.Add(1)
+			go func() { defer workers.Done(); s.opt.Advanced.Run(ctx, s.Snapshot) }()
+		}
+		if s.opt.Inventory != nil {
+			workers.Add(1)
+			go func() { defer workers.Done(); s.opt.Inventory.Run(ctx) }()
+		}
+		if s.opt.Rootkit != nil {
+			workers.Add(1)
+			go func() { defer workers.Done(); s.opt.Rootkit.Run(ctx) }()
+		}
+		if s.opt.Integrity != nil {
+			workers.Add(1)
+			go func() { defer workers.Done(); s.opt.Integrity.Run(ctx) }()
+		}
+		if s.opt.Recent {
+			workers.Add(1)
+			go func() { defer workers.Done(); s.runRecent(ctx) }()
+		}
 	}
 	if s.self != nil {
 		workers.Add(1)
@@ -222,6 +226,9 @@ func (s *Scanner) Run(ctx context.Context) {
 	t := time.NewTicker(s.opt.Interval)
 	defer t.Stop()
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		if _, err := s.ScanOnce(); err != nil {
 			s.opt.Logger.Error(i18n.S("log.scan_error"), "err", err)
 		}

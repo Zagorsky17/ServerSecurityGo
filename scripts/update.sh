@@ -62,6 +62,9 @@ else
   fi
 fi
 
+was_active=false
+if systemctl is-active --quiet "$APP_NAME"; then was_active=true; fi
+
 obtain_binary bin/serversecuritygo.new "$TAG"
 
 # Сохраняем предыдущую версию для отката.
@@ -74,7 +77,7 @@ systemctl stop "$APP_NAME"
 if mv -f bin/serversecuritygo.new bin/serversecuritygo &&
    { [ ! -f .env ] || chmod 600 .env; } &&
    install_unit && install_link && write_self_baseline &&
-   systemctl restart "$APP_NAME" && health_check; then
+   restart_if_active "$was_active"; then
   log "Обновлено: $(bin/serversecuritygo version)"
   exit 0
 fi
@@ -86,8 +89,7 @@ if [ -f bin/serversecuritygo.prev ]; then
   cp -f bin/serversecuritygo.prev bin/serversecuritygo
   git -c advice.detachedHead=false checkout -q "$PREV_REF" || true
   restore_self_baseline
-  systemctl restart "$APP_NAME"
-  if health_check; then
+  if restart_if_active "$was_active"; then
     warn "Предыдущая версия восстановлена"
   else
     warn "Предыдущая версия тоже не отвечает — смотрите scripts/logs.sh"

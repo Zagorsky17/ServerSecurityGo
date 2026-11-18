@@ -462,14 +462,13 @@ func listenSocket(path string) (net.Listener, error) {
 	return ln, nil
 }
 
-// cmdTUI запускает терминальный интерфейс. По умолчанию он берёт данные
-// у запущенной службы через Unix-сокет (полная история); если служба не
-// запущена — сканирует сам, и история хранится только в памяти.
+// cmdTUI по умолчанию сканирует локально; служба подключается только явным --socket.
 func cmdTUI(args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ExitOnError)
 	envFile := fs.String("env-file", "", i18n.S("cli.flag.env_file_tui"))
 	socket := fs.String("socket", "", i18n.S("cli.flag.socket", config.DefaultSocketPath))
 	local := fs.Bool("local", false, i18n.S("cli.flag.local"))
+	full := fs.Bool("full", false, i18n.S("cli.flag.full_tui"))
 	interval := fs.Duration("interval", 5*time.Second, i18n.S("cli.flag.interval_local"))
 	refresh := fs.Duration("refresh", 5*time.Second, i18n.S("cli.flag.refresh"))
 	_ = fs.Parse(args)
@@ -497,21 +496,20 @@ func cmdTUI(args []string) error {
 	if cfg.Lang != "" {
 		i18n.SetDefault(cfg.Lang)
 	}
-	if *socket == "" {
-		*socket = cfg.SocketPath
-	}
-
 	var src tui.Source
 	note := i18n.T("tui.source_local")
+	if !*full {
+		note = i18n.T("tui.source_quick")
+	}
 	if !*local && *socket != "" {
-		if rs, err := tui.DialSocket(*socket); err == nil {
-			src = rs
-		} else {
-			note = i18n.T("tui.source_nosvc")
+		rs, err := tui.DialSocket(*socket)
+		if err != nil {
+			return err
 		}
+		src = rs
 	}
 	if src == nil {
-		ls, err := newLocalTUISource(cfg, *interval, note)
+		ls, err := newLocalTUISource(cfg, *interval, *full, note)
 		if err != nil {
 			return err
 		}
@@ -524,7 +522,7 @@ func cmdTUI(args []string) error {
 // newLocalTUISource создаёт локальный сканер для интерфейса. Журнал
 // отключён (он испортил бы экран), история — только в памяти, чтобы не
 // мешать файлам истории службы.
-func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg) (*tui.LocalSource, error) {
+func newLocalTUISource(cfg config.Config, interval time.Duration, full bool, note i18n.Msg) (*tui.LocalSource, error) {
 	detCfg, err := cfg.DetectConfig()
 	if err != nil {
 		return nil, err
@@ -539,7 +537,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	mc := metricsCollector(cfg, "", quiet)
 	nl := netMonitor(cfg, detCfg, mc)
 	pfs.MaxSockets = cfg.NetMaxSockets
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet,
+	sc := scanner.New(scanner.Options{Quick: !full, FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet,
 		Learning: learning.New("", cfg.LearningHours, detCfg.Allow), Advanced: advancedRunner(cfg), LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval}), Inventory: fileInventory(cfg, true), Integrity: integrityRunner(cfg, detCfg, true)})
 	if mc != nil {
 		sc.SetMetrics(mc)

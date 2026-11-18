@@ -126,6 +126,13 @@ health_check() {
   return 1
 }
 
+# Остановленная служба после обновления/отката остаётся остановленной.
+restart_if_active() {
+  if [ "$1" = true ]; then
+    systemctl restart "$APP_NAME" && health_check
+  fi
+}
+
 # backup_state сохраняет историю и настройки в /var/backups/serversecuritygo
 # и оставляет 5 последних архивов.
 backup_state() {

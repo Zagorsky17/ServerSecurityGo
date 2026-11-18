@@ -11,7 +11,7 @@
 #   2. собирает бинарник, если установлен Go 1.27.4+, иначе скачивает готовый
 #      из GitHub Releases и проверяет SHA256;
 #   3. создаёт /opt/serversecuritygo/.env (права 600) из .env.example;
-#   4. ставит systemd-юнит, включает и запускает службу, проверяет /healthz;
+#   4. ставит необязательный systemd-юнит без включения и запуска службы;
 #   5. создаёт ссылку /usr/local/bin/serversecuritygo для запуска
 #      терминального интерфейса одной командой.
 # Скрипт ничего не удаляет и не трогает другие проекты в /opt.
@@ -77,44 +77,24 @@ chmod 600 "$APP_DIR/.env"
 install_unit
 install_link
 write_self_baseline
-# Старые теги могут ещё не поддерживать baseline; проверяем сам установленный бинарник.
-if "$APP_DIR/bin/serversecuritygo" help 2>&1 | grep -q 'baseline save'; then
-  log "Сохранение снимка установки (обход файлов может занять несколько минут)…"
-  baseline_code=0
-  "$APP_DIR/bin/serversecuritygo" baseline save --env-file "$APP_DIR/.env" --name installation >/dev/null || baseline_code=$?
-  if [ "$baseline_code" -eq 3 ]; then
-    log "Снимок установки содержит неполные разделы; подробности доступны в baselines/installation.json"
-  elif [ "$baseline_code" -ne 0 ]; then
-    die "не удалось сохранить снимок установки (код $baseline_code)"
-  fi
-fi
-systemctl enable --now "$APP_NAME" >/dev/null 2>&1 || systemctl enable --now "$APP_NAME"
-
-log "Проверка запуска…"
-if health_check; then
-  log "Готово. Версия: $("$APP_DIR/bin/serversecuritygo" version)"
-else
-  journalctl -u "$APP_NAME" -n 30 --no-pager || true
-  die "служба не запустилась — см. журнал выше"
-fi
-
-if [ "$(listen_addr)" = "off" ]; then
-  PANEL_INFO="Веб-панель: выключена (SSG_LISTEN_ADDR=off в .env)"
-else
-  PANEL_INFO="Веб-панель: http://$(listen_addr)/  (только с самого сервера), со своего компьютера через SSH-туннель:
-  ssh -L 8090:127.0.0.1:8090 root@<IP-сервера>   →   http://127.0.0.1:8090
-  Не нужна постоянно — выключается: SSG_LISTEN_ADDR=off в .env (терминальный интерфейс продолжит работать)."
-fi
+log "Готово. Версия: $("$APP_DIR/bin/serversecuritygo" version)"
 
 cat <<INFO
 
-Терминальный интерфейс (на сервере):  serversecuritygo
-$PANEL_INFO
+Диагностика по требованию: serversecuritygo
+Полный обход:             serversecuritygo tui --full
+Ctrl+C или q завершает локальную диагностику. Автозапуск не включён.
 
-Разовая проверка в консоли:  $APP_DIR/bin/serversecuritygo scan --env-file $APP_DIR/.env
-Журнал:      $APP_DIR/scripts/logs.sh
-Обновление:  $APP_DIR/scripts/update.sh
-Откат:       $APP_DIR/scripts/rollback.sh
-Удаление:    $APP_DIR/scripts/uninstall.sh  (полная очистка: --full)
-Настройки:   $APP_DIR/.env (после правки: systemctl restart $APP_NAME)
+Для старой установки с работающей службой:
+  systemctl disable --now serversecuritygo
+
+Постоянный мониторинг — только по явному выбору:
+  systemctl enable --now serversecuritygo
+  serversecuritygo tui --socket /run/serversecuritygo/api.sock
+Выход из клиента службы не останавливает саму службу.
+
+Разовая проверка: $APP_DIR/bin/serversecuritygo scan --env-file $APP_DIR/.env
+Снимок установки (полный обход): $APP_DIR/bin/serversecuritygo baseline save --env-file $APP_DIR/.env --name installation
+Обновление: $APP_DIR/scripts/update.sh
+Настройки:  $APP_DIR/.env
 INFO

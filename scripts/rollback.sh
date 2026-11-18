@@ -12,14 +12,15 @@ require_root
 
 log "Текущая: $(bin/serversecuritygo version 2>/dev/null || echo '?'); откат к: $(bin/serversecuritygo.prev version)"
 cp -f bin/serversecuritygo bin/serversecuritygo.failed 2>/dev/null || true
+was_active=false
+if systemctl is-active --quiet "$APP_NAME"; then was_active=true; fi
 systemctl stop "$APP_NAME"
 cp -f bin/serversecuritygo.prev bin/serversecuritygo
 if [ -f bin/.prev-ref ]; then
   git -c advice.detachedHead=false checkout -q "$(cat bin/.prev-ref)" || warn "не удалось вернуть исходники к $(cat bin/.prev-ref)"
 fi
 restore_self_baseline
-systemctl restart "$APP_NAME"
-if health_check; then
+if restart_if_active "$was_active"; then
   log "Откат выполнен: $(bin/serversecuritygo version)"
 else
   die "служба не отвечает после отката — см. scripts/logs.sh"

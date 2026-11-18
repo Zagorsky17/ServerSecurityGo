@@ -84,8 +84,8 @@ func init() {
 		"tui.filter_prompt":  {"Фильтр ({0}): ", "Filter ({0}): "},
 		"tui.filter_hint":    {"Enter — применить, Esc — сбросить", "Enter — apply, Esc — clear"},
 		"tui.source_service": {"служба · {0}", "service · {0}"},
-		"tui.source_local":   {"локально (--local), история только за сеанс", "local (--local), history for this session only"},
-		"tui.source_nosvc":   {"локально: служба не найдена, история только за сеанс", "local: service not found, history for this session only"},
+		"tui.source_local":   {"локально, история только за сеанс", "local, history for this session only"},
+		"tui.source_quick":   {"локальная быстрая проверка; тяжёлые обходы не выполнены — tui --full", "local quick check; full sweeps not run — tui --full"},
 		"tui.source_demo":    {"демо-данные", "demo data"},
 
 		"tui.title.details":     {"Подробности", "Details"},
