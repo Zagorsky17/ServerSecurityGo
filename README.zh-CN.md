@@ -769,6 +769,10 @@ serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
 
 独立文件扫描默认每六小时执行一次，每秒 2,000 个路径。配置项为 `SSG_FS_SCAN_INTERVAL`、`SSG_FS_SCAN_RATE`，以及逗号分隔的 `SSG_FS_SCAN_EXCLUDE` 和额外挂载根目录 `SSG_FS_SCAN_MOUNTS`。默认覆盖根文件系统与 `/dev/shm`，不跨越其他文件系统、不跟随符号链接；排除 `/proc`、`/sys`、`/dev`（`/dev/shm` 除外）、`/run`、Docker/容器存储以及网络/FUSE 挂载。限制为 200 万路径、10,000 个特权文件/发现、128 层和 30 分钟。超限、取消或读取失败均明确标记不完整。首个完整清单保存在 `baseline.json`，新增权限生成 `fs_privilege_new`。软件包归属不是可信签名。新增 ID：`fs_suid_inventory`、`fs_capabilities`、`fs_world_writable_system`、`fs_unowned`、`fs_privilege_new`、`fs_inventory_pending`、`fs_inventory_unavailable`、`new_public_listener`、`ports_baseline_unavailable`。
 
+每次文件扫描完成后，服务自动刷新四项相关检查：`fs_world_writable_system`、`fs_unowned`、`fs_suid_inventory` 和 `fs_capabilities`。本地 TUI 同样适用。刷新复用已收集的清单，不重新扫描文件，也不重读其他配置。定时及手动完整审计保持可用。执行串行化，通知合并，同一报告不会重复处理。清单不完整且没有已确认的危险发现时保持 `unknown`；已发现的 HIGH/CRITICAL 问题仍为 `fail`。
+
+Web 和 TUI 分别显示完整审计时间、所用文件清单的采集开始时间及其在配置范围内的完整性，以便判断数据年龄；完整审计时间不代表文件数据同样新。在服务 API 中，`inventorySource` 包含 `ready`、`time` 和 `incomplete`；审计及摘要中的 `updatedAt` 在部分刷新后也会改变，触发 TUI 更新缓存。不含这些字段的旧服务仍然兼容，但无法单独显示数据源时间。此机制不新增外部请求或配置项。
+
 ```sh
 serversecuritygo audit --full --format json --output /root/audit.json
 serversecuritygo baseline save --name before-upgrade

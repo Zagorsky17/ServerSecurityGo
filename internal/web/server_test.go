@@ -610,7 +610,7 @@ func TestAuditAPI(t *testing.T) {
 		t.Errorf("запуск выключенного аудита: %d", w.Code)
 	}
 
-	fa := &fakeAudit{rep: &model.AuditReport{Time: time.Now(), Checks: []model.AuditCheck{
+	fa := &fakeAudit{rep: &model.AuditReport{Time: time.Now(), UpdatedAt: time.Now().Add(time.Minute), InventorySource: &model.AuditInventorySource{Ready: true, Time: time.Now().Add(-time.Hour), Incomplete: true}, Checks: []model.AuditCheck{
 		{ID: "ssh_password_auth", Group: "ssh", Title: i18n.L("x"), Status: model.AuditFail, Severity: model.RiskHigh},
 		{ID: "ssh_port", Group: "ssh", Title: i18n.L("y"), Status: model.AuditInfo},
 		{ID: "ssh_root_login", Group: "ssh", Title: i18n.L("z"), Status: model.AuditPass, Severity: model.RiskHigh},
@@ -620,10 +620,13 @@ func TestAuditAPI(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || !v.Enabled || !v.Ready || v.Passed != 1 || v.Total != 2 || v.Checks[0].Status != model.AuditFail {
 		t.Fatalf("аудит: %v %+v", err, v)
 	}
+	if v.InventorySource == nil || !v.InventorySource.Ready || !v.InventorySource.Incomplete || !v.UpdatedAt.Equal(fa.rep.UpdatedAt) {
+		t.Fatal("inventory freshness missing from API", v)
+	}
 	// Счётчики в /api/status.
 	var st view.Status
 	_ = json.Unmarshal(do(s, "GET", "/api/status", "127.0.0.1:8090", "", nil).Body.Bytes(), &st)
-	if !st.Audit.Ready || st.Audit.Fail != 1 || st.Audit.Warn != 0 {
+	if !st.Audit.Ready || st.Audit.Fail != 1 || st.Audit.Warn != 0 || !st.Audit.UpdatedAt.Equal(v.UpdatedAt) {
 		t.Errorf("статус: %+v", st.Audit)
 	}
 	// Запуск требует CSRF.
