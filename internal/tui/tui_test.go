@@ -1210,7 +1210,7 @@ func TestUFWPanelAndPIDTiming(t *testing.T) {
 	}
 	for i, f := range a.ufwFiles {
 		if f.Path == "/etc/ufw/user.rules" {
-			a.lists[pUFW].cursor = i
+			a.lists[pUFW].cursor = i + 1
 			break
 		}
 	}
