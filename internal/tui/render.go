@@ -289,6 +289,9 @@ func (a *App) columnsHeader(p panelID, w int) string {
 	case pHist:
 		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
+		if a.systemGroup != "" {
+			return fit(a.tr("tui.system.members", len(a.systemRows)), w)
+		}
 		return fit(a.tr("tui.cols.sys"), w)
 	case pMetrics:
 		return fit(a.tr("tui.cols.metrics"), w)
@@ -474,7 +477,11 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{a.txt(e.Details), stDim},
 		}
 	case pSys:
-		f := a.system[i]
+		index := a.systemRows[i]
+		f := a.system[index]
+		if g, ok := a.systemGroups[index]; ok && a.systemGroup == "" {
+			return []seg{{riskShort(f.Risk.String()) + " ", riskStyle(f.Risk.String())}, {a.tr("web.system.group", len(g.Indices)) + " · " + g.Directory + " · " + g.Owner, stBold}}
+		}
 		return []seg{
 			{riskShort(f.Risk.String()) + " ", riskStyle(f.Risk.String())},
 			{a.txt(f.Title) + " ", stNormal},
@@ -712,6 +719,10 @@ func (a *App) mainContent(w int) (string, []line) {
 		a.f2bOverview(b)
 		return title, b.lines
 	case pSys:
+		if g, ok := a.selSystemGroup(); ok {
+			a.systemGroupDetail(b, g)
+			return a.tr("web.system.group", len(g.Indices)), b.lines
+		}
 		f, ok := a.selSystem()
 		if !ok {
 			b.para(a.tr("tui.no_system"), stDim, 0)

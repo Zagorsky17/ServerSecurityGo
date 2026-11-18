@@ -813,3 +813,11 @@ serversecuritygo doctor --format json --output /root/doctor.json
 SARIF 2.1.0 是 `scan`、`audit`、`triage` 的本地导出，包含规则 ID、级别、转义文件 URI、`properties.attack` 中的 ATT&CK ID、明确的允许列表抑制和运行不完整状态。审计通过、信息性、未知和不适用结果分别表示。原有退出码和风险过滤仍然有效。程序不会上传报告或连接外部集成；报告文件权限为 600。
 
 `explain` 只读取内置规则和检查目录，不扫描主机；参考文本中的 `{N}` 由具体发现提供数值。`doctor` 只读取安装路径及权限、systemd 主单元文件、最多 32 个其他进程的样本、auth.log 可用性、内核版本和 dpkg 元数据，不执行命令或修改权限。它不能证明服务就绪、已加载单元及 drop-in 正确、可访问全部 PID 或已修复 CVE；建议文本说明后续核查。通过 `SSG_HOST_ROOT` 检查磁盘映像时，不会默默使用工作站默认的 `/proc`。网页和 TUI 进程搜索包含规则 ID、用户、容器及本地/远程端口。
+
+### 文件发现分组
+
+“System”部分按目录和 UID/GID 将重复的 `fs_unowned` 发现分组。此标识表示 UID 或 GID 未出现在本地 `/etc/passwd` 和 `/etc/group` 中，不表示文件没有软件包归属，也不能单独证明系统已被入侵。分组目录最多取父路径的前三层，例如 `/usr/local/include/node/a.h` 归入 `/usr/local/include`。不同风险级别和抑制状态分别显示；单条记录、无法识别的证据格式及其他发现类型仍保留独立行。
+
+在网页中点击组标题查看原始发现，通过表格上方的按钮返回分组。在 TUI 中按 Enter 打开文件列表，再按 Enter 查看所选文件详情；在文件列表按左箭头或 Esc 返回分组。`/` 搜索所有原始路径、发现 ID、风险级别和证据，包括 UID/GID。`y` 复制分组目录或所选文件路径，`Y` 复制该组或单条发现的 JSON；可复制的数据量受终端剪贴板容量限制。数据刷新时，只要该组仍存在，就保留当前打开的组。
+
+分组仅改变显示方式，原始发现、历史、风险评级和 CLI 报告均保留。`GET /api/system` 的 `findings` 数组仍包含全部发现；新增 `groups` 数组包含 `key`（不透明标识）、`directory`、`owner` 和 `indices`，其中索引从零开始，指向同一响应中的 `findings`。TUI 连接旧服务时也能生成分组；网页在缺少 `groups` 时显示原有列表。

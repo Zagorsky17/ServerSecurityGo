@@ -626,7 +626,8 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request, _ session)
 	if snap == nil {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"findings": view.SortedSystem(snap), "host": snap.Host, "warnings": snap.Warnings})
+	findings := view.SortedSystem(snap)
+	writeJSON(w, http.StatusOK, map[string]any{"findings": findings, "groups": view.GroupSystem(findings), "host": snap.Host, "warnings": snap.Warnings})
 }
 
 // auditView — текущее состояние аудита конфигурации.
