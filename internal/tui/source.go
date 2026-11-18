@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -76,6 +77,7 @@ type Source interface {
 // и живёт, пока открыт интерфейс: файлы истории службы не трогаются,
 // чтобы не мешать ей.
 type LocalSource struct {
+	workers   sync.WaitGroup
 	sc        *scanner.Scanner
 	netOn     bool               // наблюдение за сетевой нагрузкой включено
 	audit     *audit.Runner      // nil — аудит выключен
@@ -98,14 +100,18 @@ func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector
 		ar.RunOnce()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	l := &LocalSource{sc: sc, audit: ar, met: mc, netOn: netOn, cancel: cancel, version: version, demo: demo, note: note}
 	if mc != nil {
 		// Первый замер — сразу, чтобы в «Сводке» были значения; дальше
 		// метрики снимает своя горутина: ряды нужны чаще, чем идёт
 		// сканирование процессов.
 		_, _ = mc.Collect(time.Now())
-		go mc.Run(ctx)
+		l.workers.Add(1)
+		go func() { defer l.workers.Done(); mc.Run(ctx) }()
 	}
+	l.workers.Add(1)
 	go func() {
+		defer l.workers.Done()
 		// Первый снимок уже есть: ждём интервал, затем Run сканирует сразу
 		// и дальше по таймеру.
 		select {
@@ -115,7 +121,6 @@ func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector
 		}
 		sc.Run(ctx)
 	}()
-	l := &LocalSource{sc: sc, audit: ar, met: mc, netOn: netOn, cancel: cancel, version: version, demo: demo, note: note}
 	if ar != nil {
 		l.auditDone = make(chan struct{})
 		go func() { defer close(l.auditDone); ar.Run(ctx) }()
@@ -197,6 +202,7 @@ func (l *LocalSource) Describe() i18n.Msg { return l.note }
 
 func (l *LocalSource) Close() {
 	l.cancel()
+	l.workers.Wait()
 	if l.auditDone != nil {
 		<-l.auditDone
 	}

@@ -239,7 +239,7 @@ func (a *App) Run() error {
 		}
 	}()
 	sigs := make(chan os.Signal, 4)
-	signal.Notify(sigs, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)
 	tick := time.NewTicker(a.refresh)
 	defer tick.Stop()

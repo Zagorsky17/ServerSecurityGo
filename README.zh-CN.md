@@ -59,7 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/Zagorsky17/ServerSecurityGo/main/sc
 1. 将仓库克隆到 `/opt/serversecuritygo`。仓库是公开的，不需要 deploy key。
 2. 如果已安装 Go 1.27.4 或更高版本，则从源码构建二进制文件；否则从 [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) 下载预编译的二进制文件并校验其 SHA256。服务器上不需要安装 Go。
 3. 根据 `.env.example` 创建 `/opt/serversecuritygo/.env`，权限为 `600`。
-4. 安装 `serversecuritygo.service`，设置开机启动并启动服务，然后检查 `/healthz`。
+4. 安装可选的 `serversecuritygo.service`，但不启用或启动服务。
 5. 创建链接 `/usr/local/bin/serversecuritygo`，这样一条命令即可打开界面。
 
 如果缺少 `git` 或 `curl`，安装脚本会用 `apt-get` 安装它们。除此之外，它不会对系统做任何修改，也不会触碰 `/opt` 中的其他目录。
@@ -86,7 +86,8 @@ cd /opt/serversecuritygo
 make build          # 或者把发布版二进制文件下载到 bin/serversecuritygo
 install -m 600 .env.example .env
 install -m 644 deploy/serversecuritygo.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now serversecuritygo
+systemctl daemon-reload
+./bin/serversecuritygo
 ```
 
 ## 终端界面
@@ -138,10 +139,12 @@ serversecuritygo
 
 也可以使用鼠标：单击选择面板和行，滚轮滚动。界面占用鼠标时，终端无法同时选取文本：按 `m` 把鼠标交还给终端（或在 iTerm2 中按住 `Option`，在大多数 Linux 终端和 Windows Terminal 中按住 `Shift`），也可以用 `v` 打开纯文本模式。
 
-**数据来源。** 如果服务正在运行，界面会通过 Unix 套接字 `/run/serversecuritygo/api.sock` 连接到服务。只有 root 能访问该套接字，因此不需要密码或隧道，并且可以看到已收集的完整历史。如果服务没有运行，或者安装的是没有套接字的旧版本，界面会自己扫描进程，此时历史只在本次会话中保留。数据来源显示在“概要”面板中。
+**数据来源。** 默认情况下，`serversecuritygo` 启动本地诊断会话。Ctrl+C 或 `q` 会停止扫描、审计和指标任务；历史仅在本次会话的内存中保留。快速模式检查正在运行的进程、套接字和配置，不执行开销较大的 PID 空间、文件系统、软件包完整性、近期文件和 ELF 扫描。跳过的检查仍明确标为不完整；快速结果不代表完整安全检查。使用 `tui --full` 可在会话期间执行这些扫描，但会增加 CPU 和内存用量。数据来源显示在“概要”面板中。
+
+已有安装应先执行一次 `systemctl disable --now serversecuritygo`，关闭原来的后台服务。配置和已保存的历史会保留。持续监控需单独启用：`systemctl enable --now serversecuritygo`，然后显式连接 `serversecuritygo tui --socket /run/serversecuritygo/api.sock`。只有 root 能访问套接字；客户端显示服务保存的历史。退出此客户端不会停止单独启动的服务。
 
 ```bash
-serversecuritygo tui --local            # 始终自行扫描
+serversecuritygo tui --full             # 本次会话执行完整检查
 serversecuritygo tui --refresh 2s       # 更频繁地刷新屏幕
 ```
 
@@ -152,6 +155,8 @@ serversecuritygo tui --refresh 2s       # 更频繁地刷新屏幕
 ## 可选的 Web 面板
 
 Web 面板在浏览器中展示相同的数据。它只监听 `127.0.0.1:8090`。要从自己的电脑打开，请使用 SSH 隧道：
+
+使用网页面板前，请启用可选后台服务：`systemctl enable --now serversecuritygo`。
 
 ```bash
 ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
@@ -558,6 +563,8 @@ server {
 你还可以用防火墙按 IP 限制访问，例如 `ufw allow from <你的 IP> to any port 443`。
 
 ## 更新与卸载
+
+更新和回滚仅在操作前服务正在运行时才重启服务并检查健康状态。已停止的服务保持停止。安装不会自动创建完整主机基线；需要时执行 `serversecuritygo baseline save --name installation`。
 
 ```bash
 /opt/serversecuritygo/scripts/update.sh            # 更新到最新发布版

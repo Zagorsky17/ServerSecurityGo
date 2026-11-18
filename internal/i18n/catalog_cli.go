@@ -8,7 +8,7 @@ func init() {
 
 Использование:
   serversecuritygo                                  терминальный интерфейс (то же, что tui)
-  serversecuritygo tui [--local] [--socket PATH]    терминальный интерфейс
+  serversecuritygo tui [--full] [--socket PATH]    терминальный интерфейс
   serversecuritygo serve [--env-file PATH]          запустить сканер и веб-панель
   serversecuritygo scan [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--min-risk LOW] [--env-file PATH]
   serversecuritygo audit [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--all] [--env-file PATH]
@@ -30,7 +30,7 @@ func init() {
 
 Usage:
   serversecuritygo                                  terminal interface (same as tui)
-  serversecuritygo tui [--local] [--socket PATH]    terminal interface
+  serversecuritygo tui [--full] [--socket PATH]    terminal interface
   serversecuritygo serve [--env-file PATH]          run the scanner and the web panel
   serversecuritygo scan [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--min-risk LOW] [--env-file PATH]
   serversecuritygo audit [--format text|json|html|md] [--output FILE] [--fail-on HIGH] [--all] [--env-file PATH]
@@ -54,7 +54,8 @@ Language: SSG_LANG=ru or SSG_LANG=en (default: from the terminal locale).
 		"cli.flag.env_file":        {"файл с переменными SSG_*", "file with SSG_* variables"},
 		"cli.flag.env_file_manual": {"файл с переменными SSG_* (для ручного запуска)", "file with SSG_* variables (for manual runs)"},
 		"cli.flag.env_file_tui":    {"файл с переменными SSG_* (по умолчанию /opt/serversecuritygo/.env, если он есть)", "file with SSG_* variables (default /opt/serversecuritygo/.env, if it exists)"},
-		"cli.flag.socket":          {"Unix-сокет службы (по умолчанию из SSG_SOCKET_PATH или {0})", "service Unix socket (default from SSG_SOCKET_PATH or {0})"},
+		"cli.flag.socket":          {"явно подключиться к службе по Unix-сокету (обычно {0})", "explicitly connect to a service Unix socket (usually {0})"},
+		"cli.flag.full_tui":        {"выполнять тяжёлые обходы PID, файлов и ELF во время сеанса; повышает нагрузку", "run full PID, filesystem and ELF checks during the session; increases resource use"},
 		"cli.flag.local":           {"не подключаться к службе, сканировать самостоятельно", "do not connect to the service, scan locally"},
 		"cli.flag.interval_local":  {"период сканирования в локальном режиме", "scan interval in local mode"},
 		"cli.flag.refresh":         {"период обновления экрана", "screen refresh interval"},

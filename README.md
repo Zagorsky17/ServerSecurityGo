@@ -59,7 +59,7 @@ What the installer does:
 1. Clones the repository into `/opt/serversecuritygo`. The repository is public, so no deploy key is needed.
 2. Builds the binary from source if Go 1.27.4+ is installed. Otherwise it downloads a prebuilt binary from [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) and verifies its SHA256. Go is not required on the server.
 3. Creates `/opt/serversecuritygo/.env` from `.env.example` with permissions `600`.
-4. Installs `serversecuritygo.service`, enables and starts it, then checks `/healthz`.
+4. Installs the optional `serversecuritygo.service` without enabling or starting it.
 5. Creates the link `/usr/local/bin/serversecuritygo`, so the interface opens with a single command.
 
 If `git` or `curl` is missing, the installer installs it with `apt-get`. It makes no other changes to the system and does not touch other directories in `/opt`.
@@ -86,7 +86,8 @@ cd /opt/serversecuritygo
 make build          # or download a release binary into bin/serversecuritygo
 install -m 600 .env.example .env
 install -m 644 deploy/serversecuritygo.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now serversecuritygo
+systemctl daemon-reload
+./bin/serversecuritygo
 ```
 
 ## Terminal UI
@@ -138,10 +139,12 @@ On the left are ten panels: summary, suspicious processes, all processes (as a l
 
 The mouse works too: a click selects a panel and row, and the wheel scrolls. Because the interface takes the mouse, the terminal cannot select text at the same time: press `m` to hand the mouse back to the terminal (or hold `Option` in iTerm2, `Shift` in most Linux terminals and Windows Terminal), or use `v` for plain text.
 
-**Where the data comes from.** If the service is running, the interface connects to it through the Unix socket `/run/serversecuritygo/api.sock`. Only root can access the socket, so no password or tunnel is needed, and the full collected history is visible. If the service is not running, or an older version without the socket is installed, the interface scans processes itself, and the history then lasts only for the session. The source is shown in the Summary panel.
+**Where the data comes from.** By default, `serversecuritygo` runs a local diagnostic session. Ctrl+C or `q` stops its scanner, audit and metrics workers; history stays in memory for this session. The default quick mode checks running processes, sockets and configuration without the heavy PID-space, filesystem, package-integrity, recent-file and ELF sweeps. Skipped checks remain visibly incomplete; a quick result is not a full security assessment. Use `tui --full` to run those sweeps during the session, with higher CPU and memory use. The source is shown in Summary.
+
+For an existing installation, disable the old background service once: `systemctl disable --now serversecuritygo`. Configuration and saved history are preserved. Persistent monitoring is optional: `systemctl enable --now serversecuritygo`, then explicitly connect with `serversecuritygo tui --socket /run/serversecuritygo/api.sock`. Only root can access this socket; the client shows saved service history. Closing that client leaves the separately started service running.
 
 ```bash
-serversecuritygo tui --local            # always scan on its own
+serversecuritygo tui --full             # full checks during this session
 serversecuritygo tui --refresh 2s       # refresh the screen more often
 ```
 
@@ -152,6 +155,8 @@ If copying with `y` or `c` does not work: OSC 52 is supported by iTerm2, kitty, 
 ## Web dashboard (optional)
 
 The web dashboard shows the same data in a browser. It listens only on `127.0.0.1:8090`. To open it from your own computer, use an SSH tunnel:
+
+Start the optional background service with `systemctl enable --now serversecuritygo` before using the dashboard.
 
 ```bash
 ssh -L 8090:127.0.0.1:8090 root@<server-IP>
@@ -558,6 +563,8 @@ The password is stored only as a PBKDF2-SHA256 hash (600,000 iterations). After 
 You can also restrict access by IP with a firewall, for example `ufw allow from <your IP> to any port 443`.
 
 ## Updating, rollback, removal, logs
+
+Update and rollback restart and health-check the service only if it was active beforehand. A stopped service stays stopped. Installation does not capture a full host baseline automatically; create one when needed with `serversecuritygo baseline save --name installation`.
 
 ```bash
 /opt/serversecuritygo/scripts/update.sh            # to the latest release

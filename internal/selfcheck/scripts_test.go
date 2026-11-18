@@ -76,32 +76,36 @@ func TestInstallerBaselineAtomicAndCompatible(t *testing.T) {
 }
 
 func TestUpdateAndRollbackLifecycle(t *testing.T) {
-	for _, failure := range []string{"", "restart", "baseline", "checkout"} {
-		t.Run("failure="+failure, func(t *testing.T) {
-			f := setup(t)
-			app := filepath.Join(f.root, "app")
-			scripts := filepath.Join(app, "scripts")
-			os.MkdirAll(filepath.Join(app, ".git"), 0700)
-			old := "#!/bin/sh\necho old\n"
-			newBin := "#!/bin/sh\necho new\n"
-			write(t, filepath.Join(app, "bin/serversecuritygo"), old)
-			os.Chmod(filepath.Join(app, "bin/serversecuritygo"), 0700)
-			write(t, filepath.Join(f.root, "new-binary"), newBin)
-			os.Chmod(filepath.Join(f.root, "new-binary"), 0700)
-			write(t, filepath.Join(app, "deploy/serversecuritygo.service"), "new unit")
-			write(t, filepath.Join(f.root, "old-unit"), "old unit")
-			write(t, f.unit, "old unit")
-			f.binary = filepath.Join(app, "bin/serversecuritygo")
-			f.baselineNow(t)
-			original, _ := os.ReadFile(f.baseline)
-			lib, err := os.ReadFile("../../scripts/lib.sh")
-			if err != nil {
-				t.Fatal(err)
+	for _, active := range []string{"true", "false"} {
+		for _, failure := range []string{"", "restart", "baseline", "checkout"} {
+			if active == "false" && (failure == "restart" || failure == "checkout") {
+				continue
 			}
-			// Используем реальные функции работы с эталоном и реальные update/rollback;
-			// заменяем только границы системы: systemctl, git и получение бинарника.
-			lib = []byte(strings.Replace(string(lib), "write_self_baseline() (", "real_write_self_baseline() (", 1))
-			lib = append(lib, []byte(`
+			t.Run("active="+active+"/failure="+failure, func(t *testing.T) {
+				f := setup(t)
+				app := filepath.Join(f.root, "app")
+				scripts := filepath.Join(app, "scripts")
+				os.MkdirAll(filepath.Join(app, ".git"), 0700)
+				old := "#!/bin/sh\necho old\n"
+				newBin := "#!/bin/sh\necho new\n"
+				write(t, filepath.Join(app, "bin/serversecuritygo"), old)
+				os.Chmod(filepath.Join(app, "bin/serversecuritygo"), 0700)
+				write(t, filepath.Join(f.root, "new-binary"), newBin)
+				os.Chmod(filepath.Join(f.root, "new-binary"), 0700)
+				write(t, filepath.Join(app, "deploy/serversecuritygo.service"), "new unit")
+				write(t, filepath.Join(f.root, "old-unit"), "old unit")
+				write(t, f.unit, "old unit")
+				f.binary = filepath.Join(app, "bin/serversecuritygo")
+				f.baselineNow(t)
+				original, _ := os.ReadFile(f.baseline)
+				lib, err := os.ReadFile("../../scripts/lib.sh")
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Используем реальные функции работы с эталоном и реальные update/rollback;
+				// заменяем только границы системы: systemctl, git и получение бинарника.
+				lib = []byte(strings.Replace(string(lib), "write_self_baseline() (", "real_write_self_baseline() (", 1))
+				lib = append(lib, []byte(`
 APP_DIR="$TEST_ROOT/app"
 DATA_DIR="$TEST_ROOT/var/lib/serversecuritygo"
 UNIT_PATH="$TEST_ROOT/etc/systemd/system/serversecuritygo.service"
@@ -114,6 +118,7 @@ health_check() { :; }
 journalctl() { :; }
 systemctl() {
   echo "$*" >> "$TEST_ROOT/calls"
+  if [ "$1" = is-active ]; then [ "$TEST_ACTIVE" = true ]; return $?; fi
   if [ "$1" = restart ] && { [ "$TEST_FAILURE" = restart ] || [ "$TEST_FAILURE" = checkout ]; } && [ ! -e "$TEST_ROOT/failed-once" ]; then
     touch "$TEST_ROOT/failed-once"; return 1
   fi
@@ -124,60 +129,64 @@ write_self_baseline() {
   real_write_self_baseline "$TEST_ROOT"
 }
 `)...)
-			write(t, filepath.Join(scripts, "lib.sh"), string(lib))
-			for _, name := range []string{"update.sh", "rollback.sh"} {
-				data, err := os.ReadFile("../../scripts/" + name)
-				if err != nil {
-					t.Fatal(err)
+				write(t, filepath.Join(scripts, "lib.sh"), string(lib))
+				for _, name := range []string{"update.sh", "rollback.sh"} {
+					data, err := os.ReadFile("../../scripts/" + name)
+					if err != nil {
+						t.Fatal(err)
+					}
+					write(t, filepath.Join(scripts, name), string(data))
 				}
-				write(t, filepath.Join(scripts, name), string(data))
-			}
-			run := func(name string, args ...string) error {
-				cmd := exec.Command("bash", append([]string{filepath.Join(scripts, name)}, args...)...)
-				cmd.Env = append(os.Environ(), "TEST_ROOT="+f.root, "TEST_FAILURE="+failure, "PATH="+shellEnv(t))
-				out, err := cmd.CombinedOutput()
-				if err != nil {
-					t.Log(string(out))
+				run := func(name string, args ...string) error {
+					cmd := exec.Command("bash", append([]string{filepath.Join(scripts, name)}, args...)...)
+					cmd.Env = append(os.Environ(), "TEST_ROOT="+f.root, "TEST_FAILURE="+failure, "TEST_ACTIVE="+active, "PATH="+shellEnv(t))
+					out, err := cmd.CombinedOutput()
+					if err != nil {
+						t.Log(string(out))
+					}
+					return err
 				}
-				return err
-			}
-			err = run("update.sh", "--apply", "", "old-ref")
-			if (err != nil) != (failure != "") {
-				t.Fatalf("update error %v", err)
-			}
-			if failure == "" {
+				err = run("update.sh", "--apply", "", "old-ref")
+				if (err != nil) != (failure != "") {
+					t.Fatalf("update error %v", err)
+				}
+				if failure == "" {
+					got, _ := os.ReadFile(f.binary)
+					if string(got) != newBin {
+						t.Fatal("update did not install binary")
+					}
+					f.opt.Executable = f.binary
+					if got := ids(New(f.opt)); len(got) != 0 {
+						t.Fatal("updated baseline", got)
+					}
+					if err := run("rollback.sh"); err != nil {
+						t.Fatal(err)
+					}
+				}
 				got, _ := os.ReadFile(f.binary)
-				if string(got) != newBin {
-					t.Fatal("update did not install binary")
+				if string(got) != old {
+					t.Fatal("old binary not restored")
 				}
-				f.opt.Executable = f.binary
-				if got := ids(New(f.opt)); len(got) != 0 {
-					t.Fatal("updated baseline", got)
+				unit, _ := os.ReadFile(f.unit)
+				if string(unit) != "old unit" {
+					t.Fatal("old unit not restored")
 				}
-				if err := run("rollback.sh"); err != nil {
-					t.Fatal(err)
+				restored, _ := os.ReadFile(f.baseline)
+				if string(restored) != string(original) {
+					t.Fatal("old baseline not restored")
 				}
-			}
-			got, _ := os.ReadFile(f.binary)
-			if string(got) != old {
-				t.Fatal("old binary not restored")
-			}
-			unit, _ := os.ReadFile(f.unit)
-			if string(unit) != "old unit" {
-				t.Fatal("old unit not restored")
-			}
-			restored, _ := os.ReadFile(f.baseline)
-			if string(restored) != string(original) {
-				t.Fatal("old baseline not restored")
-			}
-			calls, _ := os.ReadFile(filepath.Join(f.root, "calls"))
-			if !strings.HasPrefix(string(calls), "stop serversecuritygo\n") {
-				t.Fatal("changed files while service running", string(calls))
-			}
-			if !strings.HasSuffix(string(calls), "restart serversecuritygo\n") {
-				t.Fatal("service left stopped", string(calls))
-			}
-		})
+				calls, _ := os.ReadFile(filepath.Join(f.root, "calls"))
+				if !strings.HasPrefix(string(calls), "is-active --quiet serversecuritygo\nstop serversecuritygo\n") {
+					t.Fatal("changed files while service running", string(calls))
+				}
+				if active == "true" && !strings.HasSuffix(string(calls), "restart serversecuritygo\n") {
+					t.Fatal("service left stopped", string(calls))
+				}
+				if active == "false" && strings.Contains(string(calls), "restart serversecuritygo") {
+					t.Fatal("stopped service was started", string(calls))
+				}
+			})
+		}
 	}
 }
 
@@ -198,5 +207,57 @@ func TestInstallerGoVersion(t *testing.T) {
 				t.Fatalf("%v %s", err, out)
 			}
 		})
+	}
+}
+
+func TestInstallerDoesNotStartBackgroundWork(t *testing.T) {
+	dir := t.TempDir()
+	app := filepath.Join(dir, "app")
+	source, err := os.ReadFile("../../scripts/install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Пути установки и описания ОС изолированы; системные операции перехватывает стенд.
+	script := strings.Replace(string(source), `APP_DIR="/opt/serversecuritygo"`, `APP_DIR="$TEST_APP"`, 1)
+	script = strings.Replace(script, ". /etc/os-release", `. "$TEST_OS"`, 1)
+	setup := `id(){ echo 0; }
+git(){
+ mkdir -p "$TEST_APP/scripts"
+ cp "$TEST_LIB" "$TEST_APP/scripts/lib.sh"
+ echo SSG_LISTEN_ADDR=off > "$TEST_APP/.env.example"
+}
+systemctl(){ echo "unexpected systemctl: $*" >&2; exit 9; }
+`
+	lib := `require_systemd(){ :; }
+install_unit(){ echo unit >> "$TEST_CALLS"; }
+install_link(){ echo link >> "$TEST_CALLS"; }
+write_self_baseline(){ echo self >> "$TEST_CALLS"; }
+log(){ :; }
+obtain_binary(){
+ cat > "$1" <<'BIN'
+#!/bin/sh
+[ "$1" = version ] || exit 8
+echo fixture
+BIN
+ chmod 700 "$1"
+}
+`
+	for name, body := range map[string]string{"install.sh": setup + script, "lib.sh": lib, "os-release": "ID=debian\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", filepath.Join(dir, "install.sh"))
+	cmd.Env = append(os.Environ(), "SSG_VERSION=fixture", "TEST_OS="+filepath.Join(dir, "os-release"), "TEST_APP="+app, "TEST_LIB="+filepath.Join(dir, "lib.sh"), "TEST_CALLS="+filepath.Join(dir, "calls"))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	if err != nil || string(calls) != "unit\nlink\nself\n" {
+		t.Fatalf("installation incomplete: %s, %v", calls, err)
+	}
+	st, err := os.Stat(filepath.Join(app, ".env"))
+	if err != nil || st.Mode().Perm() != 0600 {
+		t.Fatalf("configuration permissions: %v, %v", st, err)
 	}
 }
