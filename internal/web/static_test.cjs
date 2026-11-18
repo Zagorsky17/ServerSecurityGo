@@ -42,11 +42,12 @@ test('overview preserves uncertainty, changes and all raw login fields', () => {
  class Node {
   constructor(tag,text=''){this.tag=tag;this.text=text;this.children=[];this.events={};this.dataset={};}
   append(...children){this.children.push(...children);}
+  replaceChildren(...children){this.children=children;}
   addEventListener(name,fn){this.events[name]=fn;}
   setAttribute(){}
   get textContent(){return this.text+this.children.map(c=>c.textContent).join('');}
  }
- const ctx=vm.createContext({Node,document:{createElement:t=>new Node(t),createTextNode:t=>new Node('#text',t)},vis:String,tr:(k,...args)=>k+' '+args.join(' '),fmtTime:String});
+ const ctx=vm.createContext({PAGE:400,Node,document:{createElement:t=>new Node(t),createTextNode:t=>new Node('#text',t)},vis:String,tr:(k,...args)=>k+' '+args.join(' '),fmtTime:String});
  vm.runInContext(functions(['h','kv','auditAttention','loginRows','loginGroupDetails']),ctx);
  for(const status of ['fail','warn','unknown','future']) assert.equal(ctx.auditAttention({status}),true);
  for(const status of ['pass','info','n/a']) {assert.equal(ctx.auditAttention({status}),false);assert.equal(ctx.auditAttention({status,change:true}),true);}
@@ -56,13 +57,20 @@ test('overview preserves uncertainty, changes and all raw login fields', () => {
  const rows=ctx.loginRows(events,groups);
  assert.equal(rows[0].risk,'HIGH');assert.equal(rows[0].time,events[1].time);
  const fallback=ctx.loginRows(events,null);assert.equal(fallback.length,2);assert.equal(fallback[0].detail,'last');
- const node=ctx.loginGroupDetails(rows[0],events,new Set());
+ const node=ctx.loginGroupDetails(rows[0],events,new Map());
  assert.equal(node.textContent.includes('<script>'),false); // закрытые подробности ещё не построены
  node.open=true;node.events.toggle();
  for(const value of ['<script>bad()</script>','first','last','42','pts/7','signal','session-end','key comment']) assert.ok(node.textContent.includes(value),value);
  const content=node.textContent;node.events.toggle();assert.equal(node.textContent,content);
- const reopened=ctx.loginGroupDetails(rows[0],events,new Set([node.dataset.group]));assert.equal(reopened.open,true);assert.equal(reopened.textContent,content);
+ const reopened=ctx.loginGroupDetails(rows[0],events,new Map([[node.dataset.group,false]]));assert.equal(reopened.open,true);assert.equal(reopened.textContent,content);
  function walk(n){assert.notEqual(n.tag,'script');n.children.forEach(walk);}walk(node);
+ ctx.PAGE=1;
+ const limited=ctx.loginGroupDetails(rows[0],events,new Map());limited.open=true;limited.events.toggle();
+ assert.equal(limited.textContent.includes('last'),false);
+ const button=limited.children[1].children.at(-1).children.find(n=>n.tag==='button');assert.ok(button);button.events.click();
+ assert.ok(limited.textContent.includes('last'));assert.equal(limited.dataset.all,'true');
+ const refreshed=ctx.loginGroupDetails(rows[0],events,new Map([[limited.dataset.group,true]]));assert.ok(refreshed.textContent.includes('last'));
+
 });
 
 test('audit default view retains unavailable checks; all results and search reveal routine checks', () => {

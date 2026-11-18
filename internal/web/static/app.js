@@ -1244,11 +1244,14 @@ function loginGroupDetails(row, events, opened) {
  const body = h('div');
  const details = h('details', {}, h('summary', {}, tr('web.overview.group', g.indices.length, fmtTime(g.first), fmtTime(g.last)), ' · ', row.source || ''), body);
  details.dataset.group = key;
+ let all = opened.get(key) === true;
+ details.dataset.all = String(all);
  let loaded = false;
  const load = () => {
   if (!details.open || loaded) return;
   loaded = true;
-  for (const i of g.indices) {
+  const indices = all ? g.indices : g.indices.slice(0, PAGE);
+  for (const i of indices) {
    const e = events[i];
    body.append(h('dl', {class: 'kv'}, ...kv(tr('web.col.time'), fmtTime(e.time)), ...kv(tr('tui.title.event'), e.kind),
     ...kv(tr('tui.k.user'), e.user), ...kv('IP', e.ip), ...kv(tr('web.auth.method'), e.method),
@@ -1256,6 +1259,10 @@ function loginGroupDetails(row, events, opened) {
     ...kv(tr('tui.k.file'), e.source), ...kv(tr('web.col.risk'), e.risk)),
     h('p', {}, e.detail || '', ' ', (e.findings || []).join(', '), e.end ? ' '+fmtTime(e.end) : ''));
   }
+  if (indices.length < g.indices.length) body.append(h('p', {}, tr('web.shown', indices.length, g.indices.length), ' ',
+   h('button', {type: 'button', class: 'small secondary', onclick: () => {
+    all = true; details.dataset.all = 'true'; loaded = false; body.replaceChildren(); load();
+   }}, tr('web.show_all'))));
  };
  details.addEventListener('toggle', load);
  details.open = opened.has(key);
@@ -1271,7 +1278,7 @@ function renderLogins() {
   $('auth-notes').prepend(h('p', {}, tr('web.overview.logins', (a.events || []).length, fmtTime(a.since), fmtTime(a.time))), h('p', {}, tr('web.overview.login_groups')));
   if (a.incomplete) $('auth-notes').append(h('p', {}, tr('web.overview.incomplete')));
  }
- const opened = new Set([...$('t-logins').querySelectorAll('details[open]')].map(e => e.dataset.group));
+ const opened = new Map([...$('t-logins').querySelectorAll('details[open]')].map(e => [e.dataset.group, e.dataset.all === 'true']));
  const rows = loginRows(a?.events || [], state.auth?.groups);
  renderTable('t-logins', [
  {t: tr('web.col.time'), v:e=>e.time, r:e=>fmtTime(e.time)},
