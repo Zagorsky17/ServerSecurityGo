@@ -16,13 +16,13 @@ import (
 )
 
 func TestParse(t *testing.T) {
-	for in, want := range map[string]Format{"": Text, "table": Text, "TEXT": Text, "json": JSON, "html": HTML, "md": Markdown, "markdown": Markdown} {
+	for in, want := range map[string]Format{"": Text, "table": Text, "TEXT": Text, "json": JSON, "sarif": SARIF, "html": HTML, "md": Markdown, "markdown": Markdown} {
 		if got, err := ParseFormat(in); err != nil || got != want {
 			t.Errorf("ParseFormat(%q) = %q, %v", in, got, err)
 		}
 	}
-	if _, err := ParseFormat("sarif"); err == nil {
-		t.Error("sarif принят")
+	if _, err := ParseFormat("unsupported"); err == nil {
+		t.Error("unknown format accepted")
 	}
 	if f, err := ParseFailOn("none"); err != nil || !f.Off {
 		t.Errorf("none: %+v %v", f, err)

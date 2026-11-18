@@ -44,6 +44,7 @@ type Summary struct {
 	Recommendations []i18n.Msg     `json:"recommendations,omitempty"`
 	FirstSeen       time.Time      `json:"firstSeen"`
 	LastSeen        time.Time      `json:"lastSeen"`
+	Ports           []int          `json:"ports,omitempty"`
 	Sockets         int            `json:"sockets"`
 	Restricted      bool           `json:"restricted"`
 }
@@ -69,7 +70,14 @@ func Summarize(p *model.Process) Summary {
 	if p.ContainerRuntime != "" && s.Container == "" {
 		s.Container = p.ContainerRuntime
 	}
+	ports := map[int]bool{}
 	for _, sk := range p.Sockets {
+		for _, port := range []int{sk.LocalPort, sk.RemotePort} {
+			if port > 0 && !ports[port] {
+				ports[port] = true
+				s.Ports = append(s.Ports, port)
+			}
+		}
 		if sk.Proto != "unix" {
 			s.Sockets++
 		}
@@ -489,6 +497,12 @@ func AuditGroupText(g string) i18n.Msg {
 		return i18n.T("audit.group.accounts")
 	case model.AuditGroupSudo:
 		return i18n.T("audit.group.sudo")
+	case model.AuditGroupFS:
+		return i18n.T("audit.group.filesystem")
+	case model.AuditGroupUpdates:
+		return i18n.T("audit.group.updates")
+	case model.AuditGroupFirewall:
+		return i18n.T("audit.group.firewall")
 	case model.AuditGroupKernel:
 		return i18n.T("audit.group.kernel")
 	}

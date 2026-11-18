@@ -106,6 +106,16 @@ func (r *Investigation) Summarize() {
 	r.Warnings = append(r.Warnings, i18n.T("warn.triage_trust"))
 }
 func (r *Investigation) Render(w io.Writer, f Format, l i18n.Lang) error {
+	if f == SARIF {
+		results := []sarifResult{}
+		if r.Snapshot != nil {
+			results = append(results, NewScan(r.Snapshot, model.RiskInfo, r.Version).sarifResults(l)...)
+		}
+		if r.Audit != nil {
+			results = append(results, auditSARIF(r.Audit.Checks, l)...)
+		}
+		return renderSARIF(w, r.Version, r.Kind, r.Incomplete, results)
+	}
 	if f == JSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")

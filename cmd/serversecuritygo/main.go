@@ -37,14 +37,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/advanced"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/audit"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/authlog"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/baseline"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/config"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fakeproc"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/fsinspect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/learning"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/metrics"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
@@ -63,6 +67,8 @@ var version = "dev"
 
 func usage() {
 	fmt.Fprint(os.Stderr, i18n.S("cli.usage", version))
+	fmt.Fprintln(os.Stderr, i18n.S("err.baseline_usage"))
+	fmt.Fprintln(os.Stderr, i18n.S("cli.diagnostics_usage"))
 }
 
 func main() {
@@ -92,6 +98,10 @@ func main() {
 		err = cmdScan(os.Args[2:])
 	case "triage", "timeline", "recent", "collect":
 		err = cmdInvestigation(os.Args[1], os.Args[2:])
+	case "baseline", "diff":
+		err = cmdBaseline(os.Args[1], os.Args[2:])
+	case "explain", "doctor":
+		err = cmdDiagnostics(os.Args[1], os.Args[2:])
 	case "audit":
 		err = cmdAudit(os.Args[2:])
 	case "demo":
@@ -202,7 +212,7 @@ func cmdServe(args []string) error {
 	mc := metricsCollector(cfg, cfg.DataDir, log)
 	nl := netMonitor(cfg, detCfg, mc)
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: log,
-		LogDays: cfg.LogDays, Auth: authCollector(cfg, false), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, Interval: cfg.RootkitInterval}), Integrity: integrityRunner(cfg, detCfg, false)})
+		Learning: learning.New(cfg.DataDir, cfg.LearningHours, detCfg.Allow), Advanced: advancedRunner(cfg), LogDays: cfg.LogDays, Auth: authCollector(cfg, false), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, Interval: cfg.RootkitInterval}), Inventory: fileInventory(cfg, false), Integrity: integrityRunner(cfg, detCfg, false)})
 	if mc != nil {
 		sc.SetMetrics(mc) // признаки метрик попадают в системные находки
 	}
@@ -215,7 +225,7 @@ func cmdServe(args []string) error {
 	opts := web.Options{Scanner: sc, Logger: log, Version: version, ListenAddr: cfg.ListenAddr, PasswordHash: cfg.AuthPasswordHash,
 		SessionTTL: cfg.SessionTTL, SecureCookie: cfg.TLSEnabled() || cfg.TrustProxyTLS, TrustProxy: cfg.TrustProxyTLS, AllowedHosts: cfg.AllowedHosts,
 		CheckPeer: noAuth, LocalUIDs: cfg.LocalUIDs, Lang: cfg.Lang}
-	ar := auditRunner(cfg, hist, log)
+	ar := auditRunner(cfg, hist, log, sc)
 	if ar != nil {
 		opts.Audit = ar // интерфейс: nil-указатель сюда не попадает
 	}
@@ -236,7 +246,21 @@ func cmdServe(args []string) error {
 		"auth", !noAuth, "local_uids", fmt.Sprint(cfg.LocalUIDs), "tls", cfg.TLSEnabled(), "allowlist_rules", len(detCfg.Allow),
 		"audit", cfg.AuditEnabled, "audit_interval", cfg.AuditInterval.String(),
 		"metrics", cfg.MetricsEnabled, "metrics_interval", cfg.MetricsInterval.String())
+
+	bm := baseline.NewMonitor(baseline.New(cfg.DataDir), func(ctx context.Context) *model.BaselineSnapshot {
+		snap := sc.Snapshot()
+		if snap == nil || snap.Inventory == nil {
+			return nil
+		}
+		var rep *model.AuditReport
+		if ar != nil {
+			rep = ar.Report()
+		}
+		return baseline.Capture(ctx, cfg.HostRoot, cfg.ProcRoot, snap, rep)
+	})
+	sc.SetBaselines(bm)
 	var bg []func(context.Context)
+	bg = append(bg, bm.Run)
 	if ar != nil {
 		bg = append(bg, ar.Run)
 	}
@@ -255,12 +279,12 @@ func attachSelfCheck(sc *scanner.Scanner, cfg config.Config, stateDir string, lo
 
 // auditRunner создаёт фоновый аудит настроек службы (nil, если он
 // выключен через SSG_AUDIT_ENABLED=false).
-func auditRunner(cfg config.Config, hist *history.Store, log *slog.Logger) *audit.Runner {
+func auditRunner(cfg config.Config, hist *history.Store, log *slog.Logger, sc *scanner.Scanner) *audit.Runner {
 	if !cfg.AuditEnabled {
 		return nil
 	}
-	return audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, StateDir: cfg.DataDir,
-		Record: hist.RecordAudit, Logger: log})
+	return audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, StateDir: cfg.DataDir,
+		Record: hist.RecordAudit, Events: hist.Events, Logger: log})
 }
 
 // metricsCollector создаёт сборщик метрик сервера (nil, если он
@@ -516,7 +540,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	nl := netMonitor(cfg, detCfg, mc)
 	pfs.MaxSockets = cfg.NetMaxSockets
 	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: interval, Logger: quiet,
-		LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval}), Integrity: integrityRunner(cfg, detCfg, true)})
+		Learning: learning.New("", cfg.LearningHours, detCfg.Allow), Advanced: advancedRunner(cfg), LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Recent: true, NetLoad: nl, Rootkit: rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval}), Inventory: fileInventory(cfg, true), Integrity: integrityRunner(cfg, detCfg, true)})
 	if mc != nil {
 		sc.SetMetrics(mc)
 	}
@@ -525,7 +549,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	// файлы службы не трогаются.
 	var ar *audit.Runner
 	if cfg.AuditEnabled {
-		ar = audit.NewRunner(audit.RunnerOptions{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Logger: quiet})
+		ar = audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Events: hist.Events, Logger: quiet})
 	}
 	return tui.NewLocalSource(sc, ar, mc, nl != nil, version, false, note)
 }
@@ -578,13 +602,19 @@ func runScan(args []string) (int, error) {
 	pfs.MaxFiles = cfg.MaxFiles
 	rk := rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval})
 	ir := integrityRunner(cfg, detCfg, true)
+	fi := fileInventory(cfg, true)
+	advancedCheck := advancedRunner(cfg)
 	if *full {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		_ = rk.Sweep(ctx)
-		_ = ir.Check(ctx)
+		var wg sync.WaitGroup
+		for _, run := range []func(){func() { _ = rk.Sweep(ctx) }, func() { _ = ir.Check(ctx) }, func() { fi.RunOnce(ctx) }} {
+			wg.Add(1)
+			go func(f func()) { defer wg.Done(); f() }(run)
+		}
+		wg.Wait()
 	}
-	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Rootkit: rk, Integrity: ir})
+	sc := scanner.New(scanner.Options{FS: pfs, Detect: detCfg, History: hist, Interval: cfg.ScanInterval, Logger: newLogger("error"), Advanced: advancedCheck, LogDays: cfg.LogDays, Auth: authCollector(cfg, true), Inventory: fi, Rootkit: rk, Integrity: ir})
 	attachSelfCheck(sc, cfg, "", newLogger("error"), false)
 	// Метрики разового запуска: один замер без истории. Признаки с
 	// удержанием (steal_high, load_high) так не сработают — для них нужна
@@ -597,6 +627,14 @@ func runScan(args []string) (int, error) {
 	snap, err := sc.ScanOnce()
 	if err != nil {
 		return 0, err
+	}
+	if *full {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		advancedCheck.Scan(ctx, snap)
+		cancel()
+		if snap, err = sc.ScanOnce(); err != nil {
+			return 0, err
+		}
 	}
 	if *sample > 0 {
 		time.Sleep(*sample)
@@ -629,6 +667,7 @@ func runAudit(args []string) (int, error) {
 	output := fs.String("output", "", i18n.S("cli.flag.output"))
 	failOn := fs.String("fail-on", "HIGH", i18n.S("cli.flag.fail_on"))
 	all := fs.Bool("all", false, i18n.S("cli.flag.all_checks"))
+	full := fs.Bool("full", false, i18n.S("cli.flag.fs_full"))
 	_ = fs.Parse(args)
 	f, err := report.ParseFormat(*format)
 	if err != nil {
@@ -642,7 +681,13 @@ func runAudit(args []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot})
+	fi := fileInventory(cfg, true)
+	if *full {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		fi.RunOnce(ctx)
+	}
+	checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Inventory: fi.Report()})
 	host, _ := os.Hostname()
 	rep := &report.Audit{View: view.BuildAudit(true, false, 0, &model.AuditReport{Time: time.Now(), Checks: checks}), Hostname: host, Version: version, All: *all}
 	if err := report.Write(*output, func(w io.Writer) error { return rep.Render(w, f, i18n.Default()) }); err != nil {
@@ -712,7 +757,7 @@ func cmdDemo(args []string) error {
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
 		Auth: authlog.New(authlog.Options{Root: hostRoot, ReadOnly: true}), Recent: true, BeforeScan: anim.Step, Hostname: "demo-server", Demo: true, Metrics: mc, NetLoad: nl})
 	// Демо-файлы принадлежат текущему пользователю: он и считается root.
-	ar := audit.NewRunner(audit.RunnerOptions{HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Logger: log})
+	ar := audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Events: hist.Events, Logger: log})
 	if *useTUI {
 		if !tui.IsTerminal() {
 			return i18n.Errorf("err.demo_tui_terminal")
@@ -797,4 +842,12 @@ func authCollector(cfg config.Config, readOnly bool) *authlog.Collector {
 		return nil
 	}
 	return authlog.New(authlog.Options{Root: cfg.HostRoot, StateDir: cfg.DataDir, Days: cfg.LogDays, Retention: cfg.Retention, ReadOnly: readOnly})
+}
+
+func fileInventory(cfg config.Config, readOnly bool) *fsinspect.Runner {
+	return fsinspect.New(fsinspect.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, StateDir: cfg.DataDir, Interval: cfg.FSScanInterval, Rate: cfg.FSScanRate, Exclude: cfg.FSScanExclude, Mounts: cfg.FSScanMounts, ReadOnly: readOnly})
+}
+
+func advancedRunner(cfg config.Config) *advanced.Runner {
+	return advanced.New(advanced.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Webshell: cfg.WebshellEnabled, Days: cfg.WebshellDays})
 }

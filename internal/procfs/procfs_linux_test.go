@@ -91,3 +91,20 @@ func TestRealSocketOwner(t *testing.T) {
 		t.Errorf("SocketOwner = %d %v, ожидался %d", uid, ok, os.Getuid())
 	}
 }
+
+// Только чтение таблицы; тест не создаёт пакетные сокеты и не захватывает трафик.
+func TestRealProcPacketTable(t *testing.T) {
+	fs := New("/proc", "/")
+	sockets, e := fs.ReadPacketTable(os.Getpid(), "")
+	if os.IsNotExist(e) {
+		t.Skip("AF_PACKET unavailable in this kernel")
+	}
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, s := range sockets {
+		if s.Proto != "packet" || s.Inode == 0 {
+			t.Fatal(s)
+		}
+	}
+}

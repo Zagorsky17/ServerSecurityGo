@@ -60,7 +60,7 @@ const STATUS_NAMES = {
   pass: () => tr('audit.status.pass'), fail: () => tr('audit.status.fail'), warn: () => tr('audit.status.warn'),
   info: () => tr('audit.status.info'), 'n/a': () => tr('audit.status.na'), unknown: () => tr('audit.status.unknown'),
 };
-const GROUP_NAMES = { ssh: () => tr('audit.group.ssh'), accounts: () => tr('audit.group.accounts'), sudo: () => tr('audit.group.sudo'), kernel: () => tr('audit.group.kernel') };
+const GROUP_NAMES = { ssh: () => tr('audit.group.ssh'), accounts: () => tr('audit.group.accounts'), sudo: () => tr('audit.group.sudo'), kernel: () => tr('audit.group.kernel'), filesystem: () => tr('audit.group.filesystem'), updates: () => tr('audit.group.updates'), firewall: () => tr('audit.group.firewall') };
 const STATUS_CLASS = { pass: 'st-pass', fail: 'st-fail', warn: 'st-warn', info: 'st-info', 'n/a': 'st-na', unknown: 'st-unknown' };
 const STATUS_RANK = { fail: 0, warn: 1, unknown: 2, info: 3, pass: 4, 'n/a': 5 };
 const F2B_ACTIONS = {
@@ -206,7 +206,7 @@ function procFilter() {
     if (path && !(p.exe || '').toLowerCase().includes(path)) return false;
     if (risk && riskNum(p.risk) < riskNum(risk)) return false;
     if (q) {
-      const hay = [p.pid, p.name, p.user, p.exe, p.cmdline, p.container, ...p.findings.map((f) => tx(f.title))].join(' ').toLowerCase();
+      const hay = [p.pid, p.name, p.user, p.exe, p.cmdline, p.container, ...(p.ports || []), ...p.findings.flatMap((f) => [f.id, tx(f.title)])].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -352,7 +352,7 @@ function renderAudit() {
     // Важность показывается только у проблем: у пройденных проверок и советов она сбивала бы с толку.
     { t: tr('web.col.severity'), v: (c) => riskNum(c.severity), r: (c) => (c.status === 'fail' || c.status === 'warn' ? riskBadge(c.severity) : ''), desc: true },
     { t: tr('tui.h.facts'), v: () => 0, r: (c) => h('ul', { class: 'findings' }, (c.evidence || []).map((m) => h('li', { class: 'mono' }, tx(m)))), c: 'wrap' },
-    { t: tr('tui.h.recommendation'), v: () => 0, r: (c) => h('div', null, tx(c.recommendation),
+    { t: tr('tui.h.recommendation'), v: () => 0, r: (c) => h('div', null, tx(c.recommendation), findingContext(c),
       c.fixCommand ? h('div', { class: 'fix' }, h('pre', null, c.fixCommand),
         h('button', { class: 'small secondary', type: 'button', onclick: (e) => { e.stopPropagation(); copyText(c.fixCommand); } }, tr('tui.hint.copy'))) : '',
       c.references && c.references.length ? h('div', { class: 'muted' }, 'MITRE ATT&CK: ' + c.references.join(', ')) : ''), c: 'wrap' },
@@ -799,7 +799,7 @@ function renderSystem() {
     { t: tr('tui.k.file'), v: (f) => f.path, r: (f) => f.path, c: 'mono' },
     { t: tr('tui.k.modified'), v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
     { t: tr('tui.h.facts'), v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))), c: 'wrap' },
-    { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => h('div', {}, tx(f.recommendation), h('pre', {}, (f.verifyCommands || []).join('\n'))), c: 'wrap' },
+    { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => h('div', {}, tx(f.recommendation), findingContext(f)), c: 'wrap' },
   ], s.findings || [], null, tr('web.empty.system'));
 }
 
@@ -933,12 +933,22 @@ function renderCard(data) {
       ...(p.containerName ? kv('Docker', `${p.containerName} (${p.containerImage || ''})`) : []),
       ...Object.entries(p.namespaces || {}).flatMap(([k, v]) => kv('ns/' + k, v)),
     )),
+    (p.bpf || []).length ? section(tr('tui.h.bpf'),h('pre',null,JSON.stringify(p.bpf,null,2))) : '',
+ p.executableInspection ? section(tr('tui.h.elf'),h('pre',null,JSON.stringify(p.executableInspection,null,2))) : '',
     section(tr('web.card.connections'), socketsTable(p.sockets || [])),
     section(tr('tui.h.files', (p.files || []).length, p.fdCount), filesTable(p.files || [])),
     info.length ? section(tr('tui.h.info'), info.map(findingBlock)) : '',
     p.access && p.access.length ? section(tr('web.card.access'), h('p', null, tr('web.card.access_text', p.access.join(', ')))) : '',
     eventsSection(data.events),
   );
+}
+
+function findingContext(f) {
+  return h('details', null, h('summary', null, tr('card.why')),
+    h('p', null, tx(f.why)), h('b', null, tr('card.legitimate')), h('p', null, tx(f.legitimate)),
+    (f.attack || []).length ? h('div', null, tr('card.attack'), ' ', (f.attack || []).filter(id => /^T[0-9]{4}(\.[0-9]{3})?$/.test(id)).map(id => h('a', {href: 'https://attack.mitre.org/techniques/' + id.replace('.', '/') + '/', target: '_blank', rel: 'noopener noreferrer'}, id + ' '))) : '',
+    h('pre', null, (f.verifyCommands || []).join('\n')),
+    (f.relatedEvents || []).length ? h('div', null, tr('card.related'), h('ul', null, f.relatedEvents.map(e => h('li', null, fmtTime(e.time) + ' · ' + tx(e.details))))) : '');
 }
 
 function findingBlock(f) {
@@ -949,7 +959,7 @@ function findingBlock(f) {
       f.strong ? h('span', { class: 'tag strong' }, tr('web.card.strong')) : '',
       f.suppressed ? h('span', { class: 'tag' }, tr('tui.suppressed')) : ''),
     h('ul', { class: 'ev' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))),
-    h('pre', { class: 'mono' }, (f.verifyCommands || []).join('\n')),
+    findingContext(f), allowlistProposal(f.allowlistProposal),
     tx(f.recommendation) ? h('div', { class: 'rec' }, '→ ' + tx(f.recommendation)) : '');
 }
 
@@ -1047,6 +1057,8 @@ function renderAll() {
     case 'fail2ban': renderFail2ban(); break;
     case 'ufw': renderUFW(); break;
     case 'logins': renderLogins(); break;
+case 'learning': renderLearning(); break;
+case 'changes': renderChanges(); break;
 case 'timeline': renderTimeline(); break;
 case 'history': renderHistory(); break;
     case 'system': renderSystem(); break;
@@ -1064,6 +1076,8 @@ async function loadTabData() {
     case 'fail2ban': state.fail2ban = await api('/api/fail2ban'); break;
     case 'ufw': state.ufw = await api('/api/ufw'); break;
     case 'logins': state.auth = await api('/api/logins'); break;
+case 'learning': state.learning = await api('/api/learning'); break;
+case 'changes': state.changes = await api('/api/changes'); break;
 case 'timeline': state.timeline = await api('/api/timeline?since=48h'); break;
 case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
     case 'system': state.system = await api('/api/system'); break;
@@ -1242,4 +1256,35 @@ function renderTimeline() {
  {t:tr('tui.title.details'),v:e=>tx(e.detail),r:e=>h('div',{},tx(e.detail),h('pre',{},(e.verifyCommands || []).join('\n')))},
  {t:tr('web.col.risk'),v:e=>riskNum(e.risk),r:e=>riskBadge(e.risk)}
  ],t.events || [],null,'');
+}
+
+function renderChanges() {
+ const report=state.changes;
+ const box=$('changes-content');
+ box.replaceChildren();
+ if (!report) {box.append(h('p',null,tr('warn.baseline_missing')));return;}
+ for (const w of report.warnings || []) box.append(h('p',null,tx(w)));
+ for (const [key,title] of [['installation',tr('web.changes.installation')],['week',tr('web.changes.week')]]) {
+  const d=report[key];box.append(h('h3',null,title));
+  if (!d) {box.append(h('p',null,tr('warn.baseline_missing')));continue;}
+  box.append(h('p',null,tr('web.changes.period',fmtTime(d.from),fmtTime(d.to))));
+  for (const w of d.warnings || []) box.append(h('p',null,tx(w)));
+  box.append(h('table',null,h('thead',null,h('tr',null,[tr('web.col.group'),tr('tui.k.file'),tr('web.changes.kind'),tr('web.changes.before'),tr('web.changes.after')].map(x=>h('th',null,x)))),
+   h('tbody',null,(d.changes || []).map(c=>h('tr',null,[c.section,c.key,c.kind,c.before || '',c.after || ''].map(x=>h('td',{class:'mono wrap'},x)))))));
+ }
+}
+
+function allowlistProposal(json) {
+ if (!json) return '';
+ return h('details',null,h('summary',null,tr('web.allow.legitimate')),h('p',null,tr('web.allow.review')),
+ h('pre',null,json),h('button',{type:'button',class:'small secondary',onclick:()=>copyText(json)},tr('tui.hint.copy')));
+}
+function renderLearning() {
+ const r=state.learning, box=$('learning-content');
+ box.replaceChildren(h('p',null,tr('web.allow.review')));
+ if (!r) {box.append(h('p',null,tr('web.learning.disabled')));return;}
+ box.append(h('p',null,r.enabled ? tr('web.learning.until',fmtTime(r.until)) : tr('web.learning.disabled')));
+ for (const w of r.warnings || []) box.append(h('p',null,tx(w)));
+ for (const c of r.candidates || []) box.append(h('div',{class:'card'},h('b',null,c.exe+' · '+c.user+' · '+c.rule),h('p',null,tr('web.learning.count',c.count,fmtTime(c.first),fmtTime(c.last))),allowlistProposal(c.proposal)));
+ if (r.baselineCommand) box.append(h('p',null,tr('web.learning.baseline')),h('pre',null,r.baselineCommand),h('button',{type:'button',onclick:()=>copyText(r.baselineCommand)},tr('tui.hint.copy')));
 }

@@ -50,6 +50,9 @@ func runInvestigation(kind string, args []string) (int, error) {
 	if e != nil {
 		return 0, e
 	}
+	if f == report.SARIF && kind != "triage" {
+		return 0, i18n.Errorf("err.sarif_scope")
+	}
 	fail, e := report.ParseFailOn(*failOn)
 	if e != nil {
 		return 0, e
@@ -77,6 +80,11 @@ func runInvestigation(kind string, args []string) (int, error) {
 			rep.Incomplete = true
 			rep.Warnings = append(rep.Warnings, i18n.T("warn.triage_offline"))
 			rep.Snapshot = &model.Snapshot{Time: now, System: detect.SystemChecks(cfg.HostRoot, now, det), Host: model.HostInfo{IsRoot: os.Geteuid() == 0}}
+			if *full {
+				fi := fileInventory(cfg, true)
+				rep.Snapshot.Inventory = fi.RunOnce(ctx)
+				rep.Snapshot.System = append(rep.Snapshot.System, fi.Findings()...)
+			}
 			if ac := authCollector(cfg, true); ac != nil {
 				rep.Snapshot.Auth = ac.Build(now, nil)
 				rep.Snapshot.System = append(rep.Snapshot.System, rep.Snapshot.Auth.Findings...)
@@ -88,7 +96,10 @@ func runInvestigation(kind string, args []string) (int, error) {
 			pfs.MaxFiles = cfg.MaxFiles
 			rk := rootkit.New(rootkit.Options{ProcRoot: cfg.ProcRoot, HostRoot: cfg.HostRoot, StateDir: cfg.DataDir, ReadOnly: true, Interval: cfg.RootkitInterval})
 			ir := integrityRunner(cfg, det, true)
+			fi := fileInventory(cfg, true)
+			advancedCheck := advancedRunner(cfg)
 			if *full {
+				fi.RunOnce(ctx)
 				if e = rk.Sweep(ctx); e != nil {
 					return 0, e
 				}
@@ -96,15 +107,22 @@ func runInvestigation(kind string, args []string) (int, error) {
 					return 0, e
 				}
 			}
-			sc := scanner.New(scanner.Options{FS: pfs, Detect: det, History: h, Interval: cfg.ScanInterval, Logger: newLogger("error"), Auth: authCollector(cfg, true), LogDays: cfg.LogDays, Rootkit: rk, Integrity: ir})
+			sc := scanner.New(scanner.Options{FS: pfs, Detect: det, History: h, Interval: cfg.ScanInterval, Logger: newLogger("error"), Advanced: advancedCheck, Auth: authCollector(cfg, true), LogDays: cfg.LogDays, Inventory: fi, Rootkit: rk, Integrity: ir})
 			attachSelfCheck(sc, cfg, "", newLogger("error"), false)
 			rep.Snapshot, e = sc.ScanOnce()
 			if e != nil {
 				return 0, e
 			}
+			if *full {
+				advancedCheck.Scan(ctx, rep.Snapshot)
+				rep.Snapshot, e = sc.ScanOnce()
+				if e != nil {
+					return 0, e
+				}
+			}
 		}
 		investigate.Attach(rep.Snapshot)
-		checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Now: now})
+		checks, _ := audit.Run(audit.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Now: now, Inventory: rep.Snapshot.Inventory, Exposure: rep.Snapshot.Exposure})
 		rep.Audit = &model.AuditReport{Time: now, Checks: checks}
 		if kind == "collect" {
 			res, e := collect.Create(ctx, collect.Options{HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Output: *output, Version: version, Now: now, MaxBytes: int64(cfg.CollectMaxMB) << 20, MaxBinaryBytes: int64(cfg.CollectMaxBinaryMB) << 20}, rep.Snapshot, rep.Audit)
@@ -125,6 +143,8 @@ func runInvestigation(kind string, args []string) (int, error) {
 			rep.Incomplete = true
 			rep.Warnings = append(rep.Warnings, i18n.T("warn.timeline_history"))
 		}
+		investigate.Attach(rep.Snapshot, events...)
+		investigate.AttachAudit(rep.Audit.Checks, events)
 		rep.Timeline = investigate.Timeline(rep.Snapshot, events, rep.Recent, cutoff)
 	}
 	if e := ctx.Err(); e != nil {

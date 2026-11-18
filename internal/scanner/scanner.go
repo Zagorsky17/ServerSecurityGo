@@ -18,14 +18,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Zagorsky17/ServerSecurityGo/internal/advanced"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/authlog"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/baseline"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/exposure"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/fail2ban"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/fsinspect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/integrity"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/investigate"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/learning"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/netload"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
@@ -37,13 +41,16 @@ import (
 
 // Options — параметры сканера.
 type Options struct {
-	Auth     *authlog.Collector
-	Recent   bool
-	FS       *procfs.FS
-	Detect   detect.Config
-	History  *history.Store
-	Interval time.Duration
-	Logger   *slog.Logger
+	Advanced  *advanced.Runner
+	Learning  *learning.Tracker
+	Inventory *fsinspect.Runner
+	Auth      *authlog.Collector
+	Recent    bool
+	FS        *procfs.FS
+	Detect    detect.Config
+	History   *history.Store
+	Interval  time.Duration
+	Logger    *slog.Logger
 	// BeforeScan вызывается перед каждым сканированием (демо-режим
 	// использует его, чтобы «оживлять» поддельные процессы).
 	BeforeScan func()
@@ -81,13 +88,15 @@ type Scanner struct {
 	snap        *model.Snapshot
 	lastSuccess time.Time
 	self        *selfcheck.Monitor
+	baselines   *baseline.Monitor
 	seq         atomic.Uint64
 	rescan      chan struct{}
 	scanMu      sync.Mutex // сканирования не должны пересекаться
 	f2b         *fail2ban.Collector
 	// sockDropped — сколько сокетов не вошло в предел на этом
 	// сканировании (под scanMu: сканирования не пересекаются).
-	sockDropped int
+	sockDropped      int
+	packetIncomplete bool
 }
 
 // New создаёт сканер.
@@ -170,6 +179,14 @@ func (s *Scanner) Run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
+	if s.opt.Advanced != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.opt.Advanced.Run(ctx, s.Snapshot) }()
+	}
+	if s.opt.Inventory != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); s.opt.Inventory.Run(ctx) }()
+	}
 	if s.opt.Rootkit != nil {
 		workers.Add(1)
 		go func() { defer workers.Done(); s.opt.Rootkit.Run(ctx) }()
@@ -231,6 +248,7 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	}
 	start := time.Now()
 	s.sockDropped = 0
+	s.packetIncomplete = false
 	snap, err := s.collect(start)
 	if err != nil {
 		return nil, err
@@ -243,13 +261,46 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	addrs := s.opt.FS.LocalAddrs()
 	snap.Exposure = exposure.Build(exposure.Input{Procs: snap.Processes, Sockets: snap.Sockets, Addrs: addrs,
 		HostRoot: s.opt.FS.HostRoot, Allowed: s.opt.Detect.Allowed})
+	snap.Exposure.Incomplete = s.sockDropped > 0
 	snap.Warnings = append(snap.Warnings, snap.Exposure.Warnings...)
-	owners, ownerErr := integrity.Owners(s.opt.FS.HostRoot)
+	paths := map[string]bool{}
+	for _, p := range snap.Processes {
+		paths[p.Exe] = true
+	}
+	owners, ownerErr := integrity.OwnersIncluding(s.opt.FS.HostRoot, paths)
 	ctx := &detect.Context{Owners: owners, Cfg: s.opt.Detect, ByPID: pidMap(snap.Processes), Counters: hist.Counters, Now: start, Exposed: exposedByInode(snap.Exposure)}
+	advancedMissing := 0
+	if s.opt.Advanced != nil {
+		advancedMissing = s.opt.Advanced.Apply(snap.Processes)
+	}
 	detect.Analyze(snap.Processes, ctx)
 	snap.System = append(detect.SystemChecksWithContext(s.opt.FS.HostRoot, start, s.opt.Detect, owners, snap.Processes), exposure.SystemFindings(snap.Exposure)...)
 	if ownerErr != nil {
 		snap.System = append(snap.System, model.SystemFinding{Path: "/var/lib/dpkg", Risk: model.RiskInfo, Finding: model.Finding{ID: "package_ownership_unavailable", Title: i18n.T("rule.package_ownership_unavailable.title"), Category: model.CatInfo, Recommendation: i18n.T("rule.package_ownership_unavailable.rec")}})
+	}
+	if s.packetIncomplete {
+		snap.System = append(snap.System, model.SystemFinding{Risk: model.RiskInfo, Finding: model.Finding{ID: "packet_inventory_unavailable", Category: model.CatInfo, Title: i18n.T("warn.packet_incomplete")}})
+	}
+	snap.System = append(snap.System, detect.PromiscuousInterfaces(s.opt.FS.HostRoot, snap.Processes, owners)...)
+	if s.opt.Advanced != nil {
+		af := s.opt.Advanced.Findings()
+		if advancedMissing > 0 {
+			af = append(af, model.SystemFinding{Risk: model.RiskInfo, Finding: model.Finding{ID: "advanced_process_pending", Category: model.CatInfo, Title: i18n.T("warn.advanced_process_pending", advancedMissing)}})
+		}
+		snap.System = append(snap.System, af...)
+		for _, p := range snap.Processes {
+			for i := range p.Findings {
+				if p.Findings[i].ID == "web_spawns_shell" {
+					n := 0
+					for _, f := range af {
+						if f.ID == "webshell_pattern" && n < 5 {
+							p.Findings[i].Evidence = append(p.Findings[i].Evidence, i18n.T("ev.webshell_related", f.Path))
+							n++
+						}
+					}
+				}
+			}
+		}
 	}
 	snap.UFW = ufw.Read(s.opt.FS.HostRoot)
 	// fail2ban: из журнала читаются только новые строки, а сводка
@@ -271,8 +322,15 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 	if s.opt.Rootkit != nil {
 		snap.System = append(snap.System, s.opt.Rootkit.Check(context.Background())...)
 	}
+	if s.opt.Inventory != nil {
+		snap.Inventory = s.opt.Inventory.Report()
+		snap.System = append(snap.System, s.opt.Inventory.Findings()...)
+	}
 	if s.opt.Integrity != nil {
 		snap.System = append(snap.System, s.opt.Integrity.Findings()...)
+	}
+	if s.baselines != nil {
+		snap.System = append(snap.System, s.baselines.PortFindings(snap)...)
 	}
 	for _, f := range snap.System {
 		if f.Incomplete() {
@@ -284,8 +342,11 @@ func (s *Scanner) ScanOnce() (*model.Snapshot, error) {
 		snap.System = append(snap.System, snap.Auth.Findings...)
 		snap.Warnings = append(snap.Warnings, snap.Auth.Warnings...)
 	}
-	investigate.Attach(snap)
 	events := hist.Record(start, snap.Processes, snap.System)
+	investigate.Attach(snap, hist.Events(2000)...)
+	if s.opt.Learning != nil {
+		snap.Learning = s.opt.Learning.Observe(start, snap.Processes)
+	}
 
 	snap.Stats = stats(snap)
 	snap.Duration = time.Since(start)
@@ -363,9 +424,10 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 
 	raws := make([]*procfs.Raw, 0, len(pids))
 	readErrors := 0
+	bpfBudget := 2048
 	cmdBudget, filesBudget, mapsBudget, envBudget := scanCmdlineBudget, scanFilesBudget, scanMapsBudget, scanEnvBudget
 	for _, pid := range pids {
-		lim := procfs.Limits{Cmdline: min(fs.MaxCmdline, max(cmdBudget, minCmdline)), Files: min(fs.MaxFiles, filesBudget), Maps: min(1<<20, max(0, mapsBudget)), Env: min(8<<20, max(0, envBudget))}
+		lim := procfs.Limits{BPF: min(bpfBudget, 128), Cmdline: min(fs.MaxCmdline, max(cmdBudget, minCmdline)), Files: min(fs.MaxFiles, filesBudget), Maps: min(1<<20, max(0, mapsBudget)), Env: min(8<<20, max(0, envBudget))}
 		if fs.MaxCmdline <= 0 {
 			lim.Cmdline = min(procfs.DefaultMaxCmdline, max(cmdBudget, minCmdline))
 		}
@@ -377,6 +439,7 @@ func (s *Scanner) collect(now time.Time) (*model.Snapshot, error) {
 			continue
 		}
 		p := raw.Proc
+		bpfBudget -= raw.BPFReads
 		mapsBudget -= raw.MapsBytes
 		envBudget -= raw.EnvBytes
 		for _, a := range raw.RawArgs {
@@ -464,8 +527,27 @@ func (s *Scanner) attachSockets(raws []*procfs.Raw, byPID map[int]*model.Process
 	// все пространства имён.
 	byInode := map[uint64]model.Socket{}
 	var unowned []model.Socket
+	packetBudget := 10000
+	packetNamespaces := 128
 	readTables := func(pid int, ns string) {
 		socks, dropped := fs.ReadNetTables(pid, ns)
+		var packet []model.Socket
+		if packetBudget <= 0 || packetNamespaces <= 0 {
+			s.packetIncomplete = true
+		} else {
+			packetNamespaces--
+			var err error
+			packet, err = fs.ReadPacketTable(pid, ns)
+			if err != nil {
+				s.packetIncomplete = true
+			}
+			if len(packet) > packetBudget {
+				packet = packet[:packetBudget]
+				s.packetIncomplete = true
+			}
+			packetBudget -= len(packet)
+		}
+		socks = append(socks, packet...)
 		s.sockDropped += dropped
 		for _, sk := range socks {
 			if sk.Inode == 0 {
@@ -600,4 +682,12 @@ func stats(snap *model.Snapshot) model.Stats {
 		st.ByRisk[p.Risk.String()]++
 	}
 	return st
+}
+
+func (s *Scanner) SetBaselines(m *baseline.Monitor) { s.baselines = m }
+func (s *Scanner) Changes() *model.ChangesReport {
+	if s.baselines == nil {
+		return nil
+	}
+	return s.baselines.Report()
 }

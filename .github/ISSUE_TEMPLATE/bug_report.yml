@@ -37,7 +37,7 @@ body:
     attributes:
       label: "Version / Версия"
       description: "Output of `serversecuritygo version`. / Вывод `serversecuritygo version`."
-      placeholder: "serversecuritygo v0.1.1 (go1.24.13, linux/amd64)"
+      placeholder: "serversecuritygo v0.1.1 (go1.27.4, linux/amd64)"
     validations:
       required: true
   - type: input

@@ -30,6 +30,7 @@ import (
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
 
 // ClockTicks — значение USER_HZ (sysconf(_SC_CLK_TCK)). На Linux для
@@ -160,6 +161,7 @@ func (f *FS) Users() map[int]string {
 // Raw — процесс в «сыром» виде: заполненный model.Process плюс
 // служебные данные для сопоставления сокетов.
 type Raw struct {
+	BPFReads  int
 	MapsBytes int
 	EnvBytes  int
 	Proc      *model.Process
@@ -186,6 +188,7 @@ const (
 
 // Limits — лимиты для одного вызова ReadProcessLimits.
 type Limits struct {
+	BPF     int
 	Env     int
 	Maps    int
 	Cmdline int // байт cmdline; 0 — DefaultMaxCmdline
@@ -195,7 +198,7 @@ type Limits struct {
 // ReadProcess собирает сведения о процессе pid. bootTime нужен для
 // вычисления абсолютного времени старта.
 func (f *FS) ReadProcess(pid int, bootTime time.Time) (*Raw, error) {
-	return f.ReadProcessLimits(pid, bootTime, Limits{Cmdline: f.MaxCmdline, Files: f.MaxFiles, Maps: 1 << 20, Env: 8 << 20})
+	return f.ReadProcessLimits(pid, bootTime, Limits{BPF: 128, Cmdline: f.MaxCmdline, Files: f.MaxFiles, Maps: 1 << 20, Env: 8 << 20})
 }
 
 // ReadProcessLimits — ReadProcess с явными лимитами: сканер уменьшает
@@ -289,7 +292,7 @@ func (f *FS) ReadProcessLimits(pid int, bootTime time.Time, lim Limits) (*Raw, e
 		} else if isPerm(err) {
 			p.Access = append(p.Access, "cwd")
 		}
-		f.readFDs(pidStr, raw, lim.Files)
+		f.readFDs(pidStr, raw, lim.Files, lim.BPF)
 		p.EnvFlags, raw.EnvBytes = f.readEnvFlags(pidStr, p, lim.Env)
 		raw.MapsBytes = f.readMaps(pidStr, p, lim.Maps)
 	}
@@ -320,10 +323,12 @@ func (f *FS) statExe(pidStr string) *model.FileInfo {
 		return nil
 	}
 	info := &model.FileInfo{
+		Identity:      FileIdentity(fi),
 		Mode:          fi.Mode().String(),
 		Size:          fi.Size(),
 		ModTime:       fi.ModTime(),
 		WorldWritable: fi.Mode().Perm()&0o002 != 0,
+		GroupWritable: fi.Mode().Perm()&0o020 != 0,
 		SetUID:        fi.Mode()&fs.ModeSetuid != 0,
 		SetGID:        fi.Mode()&fs.ModeSetgid != 0,
 		UID:           -1,
@@ -336,12 +341,12 @@ func (f *FS) statExe(pidStr string) *model.FileInfo {
 
 // readFDs перечисляет /proc/PID/fd, сохраняет первые MaxFiles записей и
 // все inode сокетов.
-func (f *FS) readFDs(pidStr string, raw *Raw, maxFiles int) {
+func (f *FS) readFDs(pidStr string, raw *Raw, maxFiles, bpfLimit int) {
 	p := raw.Proc
 	dir := f.path(pidStr, "fd")
-	entries, err := os.ReadDir(dir)
+	entries, err := safefile.ReadDir(dir, 65536)
 	if err != nil {
-		if isPerm(err) {
+		if !os.IsNotExist(err) {
 			p.Access = append(p.Access, "fd")
 		}
 		return
@@ -358,6 +363,14 @@ func (f *FS) readFDs(pidStr string, raw *Raw, maxFiles int) {
 		target, err := os.Readlink(filepath.Join(dir, strconv.Itoa(fd)))
 		if err != nil {
 			continue
+		}
+		if target == "anon_inode:bpf-prog" || target == "anon_inode:bpf-map" || target == "anon_inode:[bpf-prog]" || target == "anon_inode:[bpf-map]" {
+			if raw.BPFReads < min(bpfLimit, 128) {
+				raw.BPFReads++
+				f.readBPF(pidStr, fd, target, p)
+			} else if !slices.Contains(p.Access, "bpf:limit") {
+				p.Access = append(p.Access, "bpf:limit")
+			}
 		}
 		kind := FDKind(target)
 		if kind == "socket" {

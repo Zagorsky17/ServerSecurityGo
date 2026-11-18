@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -77,7 +78,7 @@ func (a *auditor) sysctl(name string) (int, error) {
 	// В файле может быть несколько значений (например, per-CPU): берём
 	// первое поле — у проверяемых здесь параметров оно одно.
 	f := strings.Fields(string(data))
-	if len(f) == 0 {
+	if len(f) != 1 {
 		return 0, strconv.ErrSyntax
 	}
 	return strconv.Atoi(f[0])
@@ -93,7 +94,7 @@ func (a *auditor) sysctlCheck(r sysctlRule) model.AuditCheck {
 		ch.Status = model.AuditUnknown
 		addEv(&ch, i18n.T("ev.audit_no_access", shown))
 		return ch
-	case r.optional:
+	case r.optional && os.IsNotExist(err):
 		ch.Status = model.AuditNA
 		addEv(&ch, i18n.T("ev.audit_sysctl_absent", shown))
 		return ch

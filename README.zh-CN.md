@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/Zagorsky17/ServerSecurityGo/main/sc
 安装脚本会执行以下操作：
 
 1. 将仓库克隆到 `/opt/serversecuritygo`。仓库是公开的，不需要 deploy key。
-2. 如果已安装 Go 1.24 或更高版本，则从源码构建二进制文件；否则从 [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) 下载预编译的二进制文件并校验其 SHA256。服务器上不需要安装 Go。
+2. 如果已安装 Go 1.27.4 或更高版本，则从源码构建二进制文件；否则从 [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) 下载预编译的二进制文件并校验其 SHA256。服务器上不需要安装 Go。
 3. 根据 `.env.example` 创建 `/opt/serversecuritygo/.env`，权限为 `600`。
 4. 安装 `serversecuritygo.service`，设置开机启动并启动服务，然后检查 `/healthz`。
 5. 创建链接 `/usr/local/bin/serversecuritygo`，这样一条命令即可打开界面。
@@ -495,6 +495,8 @@ Docker 检查读取 `config.v2.json` 与 `hostconfig.json`，支持自定义 `da
 | `SSG_NET_TRUSTED_NETS` | — | 受信网络（CDN、代理）：不计为洪流来源 |
 | `SSG_NET_MAX_SOCKETS` | `100000` | 每个网络命名空间的套接字上限 |
 
+已退出进程的历史记录最多保留 4096 条，预算为 8 MiB（字符串及估算开销）。达到任一限制时删除最旧的已退出记录，并生成 `history_trimmed` 事件；活动进程仍会保留。Retention 是最长保留时间，不保证完整的历史深度。`state.json` 上限为 16 MiB：文件过大或不安全时启动将报错，原文件保持不变。移走该文件前请先备份。新命令行中的带引号赋值会被脱敏；已有数据和归档不会自动清理。
+
 修改 `.env` 后，执行 `systemctl restart serversecuritygo`。
 
 **白名单。** 将 [`allowlist.example.json`](allowlist.example.json) 复制到 `/opt/serversecuritygo/allowlist.json`。一条规则可以设置 `exe` 和 `name`（支持 `*` 和 `?` 通配符）、`user` 以及 `rules` 列表（指标 ID）。没有任何条件的规则会被忽略，以免意外抑制所有指标。进程可以自行设置名称（`comm`），因此没有 `exe` 的规则只有在名称同时与可执行文件名匹配时才生效：自称 `node` 的挖矿程序不会被 `{"name": "node"}` 覆盖。对于运行在解释器上的程序（例如运行在 Python 上的 `gunicorn`），请指定 `exe`。服务启动时会在日志中对没有 `exe` 的规则发出警告。
@@ -523,7 +525,7 @@ Docker 检查读取 `config.v2.json` 与 `hostconfig.json`，支持自定义 `da
    # 把输出的 SSG_AUTH_PASSWORD_HASH=... 这一行粘贴到 .env 中
    ```
 2. 已设置用于打开面板的主机名：`SSG_ALLOWED_HOSTS=mon.example.com`。
-3. 已启用 HTTPS：要么设置 `SSG_TLS_CERT` 和 `SSG_TLS_KEY`，要么使用带 HTTPS 的反向代理并设置 `SSG_TRUST_PROXY_TLS=true`。第二种情况下最好让程序保持在 `127.0.0.1` 上。
+3. 已启用 HTTPS：要么设置 `SSG_TLS_CERT` 和 `SSG_TLS_KEY`，要么使用带 HTTPS 的反向代理并设置 `SSG_TRUST_PROXY_TLS=true`。未启用程序自身的 TLS 时，必须监听 loopback（`127.0.0.1` 或 `[::1]`），即使设置了 `SSG_TRUST_PROXY_TLS=true` 也是如此。使用网络地址的后端需要在代理与程序之间启用 TLS。
 
 nginx 示例：程序保持在 `127.0.0.1:8090`，由 nginx 通过 HTTPS 提供面板。在 `.env` 中设置 `SSG_TRUST_PROXY_TLS=true` 和密码。设置 `SSG_TRUST_PROXY_TLS=true` 时，没有密码服务将拒绝启动，因为它无法判断代理是否把它暴露到了互联网。
 
@@ -665,7 +667,7 @@ go run ./cmd/serversecuritygo demo         # 在浏览器中：http://127.0.0.1:
 
 ## 构建与测试
 
-需要 Go 1.24 或更高版本；没有外部模块。
+需要 Go 1.27.4 或更高版本；没有外部模块。
 
 ```bash
 make build        # 为当前系统构建 bin/serversecuritygo
@@ -747,7 +749,7 @@ serversecuritygo recent --days 3 --format json --output /root/recent.json
 serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
 ```
 
-`triage` 包含进程扫描、配置审计、认证记录、最近文件和十项优先检查，附带经过 shell 引用处理的验证命令。`--full` 等待现有 PID 遍历及选定 dpkg 文件校验，不代表完整的 SUID/capabilities 清单。验证命令只展示，不执行。报告支持 text/JSON/HTML/Markdown 及现有 `--fail-on` 退出码。`SSG_HOST_ROOT` 指向磁盘镜像且使用默认 `/proc` 时，调查命令排除分析机器的实时进程，并明确说明无法进行的实时检查。单次命令不写入服务历史或登录基线。
+`triage` 包含进程扫描、配置审计、认证记录、最近文件和十项优先检查，附带经过 shell 引用处理的验证命令。`--full` 等待 PID 遍历、选定 dpkg 文件校验及有界 SUID/capabilities 清单。验证命令只展示，不执行。报告支持 text/JSON/HTML/Markdown 及现有 `--fail-on` 退出码。`SSG_HOST_ROOT` 指向磁盘镜像且使用默认 `/proc` 时，调查命令排除分析机器的实时进程，并明确说明无法进行的实时检查。单次命令不写入服务历史或登录基线。
 
 `collect` 创建新归档，拒绝覆盖，要求私有目标目录（700），归档及其文件权限为 600。内容包括进程、网络、审计数据，受限的持久化配置与日志副本，maps、**所有值均被省略的环境变量名称**，可执行文件 SHA256，以及可访问的已删除/memfd 可执行文件副本。`/proc/PID/exe` 是唯一有意允许的文件符号链接例外；程序会复查 PID 身份与文件元数据。`MANIFEST.sha256` 包含已保存文件的哈希，`collection.json` 记录遗漏，CLI 同时输出归档 SHA256。不要执行采集的二进制文件。采集仅通过 CLI 提供，网页不启用采集或归档下载接口。
 
@@ -758,3 +760,54 @@ serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
 新增发现 ID：`login_new_ip`、`login_password_root`、`login_after_bruteforce`、`login_unusual_time`、`login_service_account`、`log_wtmp_truncated`、`log_wtmp_gap`、`log_authlog_truncated`、`log_history_null`、`log_journal_vacuum`、`log_utmp_missing`。服务账户认证在未确认终端时为 LOW，匹配到会话 TTY 时为 HIGH。同一 IP 十分钟内至少十次失败后成功登录会被标记；共享 NAT 和管理员活动也可能解释该现象。内核遭入侵后，本地检查不能恢复信任，应保留磁盘镜像并在独立环境分析。
 
 记账格式于 2026-11-16 对照 [glibc utmp 定义](https://github.com/bminor/glibc/blob/master/bits/utmp.h)及 [aarch64 ABI 定义](https://github.com/bminor/glibc/blob/master/sysdeps/aarch64/bits/wordsize.h)核对。Linux CI 将 C 生成的记账记录与 Go 解析器进行比较，并从独立测试进程采集已删除的可执行文件。
+
+### 发现详情、加固审计与基线比较
+
+进程、系统和审计详情包含原因、正常场景、验证命令、建议、MITRE ATT&CK 上下文，以及最近 2,000 条记录中最多八条相关事件。进程按 PID 与启动时间关联，文件按路径关联。ATT&CK 和软件包归属不能证明入侵或完整性；程序不会执行显示的命令。
+
+审计新增内核加固、临时目录挂载与敏感权限、SUID/SGID 和文件 capabilities、重启标记、同类型较新内核、APT 数据时间、unattended-upgrades、发行版支持期限及保存的防火墙配置。`audit --full` 等待文件清单；快速审计明确报告清单缺失。未知状态也包括不支持的语法和无法读取的数据源。运行中的内核规则及云提供商防火墙未经验证；待安装安全更新计数和 netlink 规则读取仍留待后续阶段。
+
+独立文件扫描默认每六小时执行一次，每秒 2,000 个路径。配置项为 `SSG_FS_SCAN_INTERVAL`、`SSG_FS_SCAN_RATE`，以及逗号分隔的 `SSG_FS_SCAN_EXCLUDE` 和额外挂载根目录 `SSG_FS_SCAN_MOUNTS`。默认覆盖根文件系统与 `/dev/shm`，不跨越其他文件系统、不跟随符号链接；排除 `/proc`、`/sys`、`/dev`（`/dev/shm` 除外）、`/run`、Docker/容器存储以及网络/FUSE 挂载。限制为 200 万路径、10,000 个特权文件/发现、128 层和 30 分钟。超限、取消或读取失败均明确标记不完整。首个完整清单保存在 `baseline.json`，新增权限生成 `fs_privilege_new`。软件包归属不是可信签名。新增 ID：`fs_suid_inventory`、`fs_capabilities`、`fs_world_writable_system`、`fs_unowned`、`fs_privilege_new`、`fs_inventory_pending`、`fs_inventory_unavailable`、`new_public_listener`、`ports_baseline_unavailable`。
+
+```sh
+serversecuritygo audit --full --format json --output /root/audit.json
+serversecuritygo baseline save --name before-upgrade
+serversecuritygo baseline list
+serversecuritygo diff --from before-upgrade --to now --format json --output /root/diff.json
+serversecuritygo baseline accept --ports
+```
+
+快照保存在 `SSG_DATA_DIR/baselines`，目录权限 700、文件权限 600，命名快照禁止覆盖。保存及与 `now` 比较会等待有界文件扫描。内容包括本地用户/组、公网监听端口及其进程文件、保存的 systemd 单元/服务、SUID/SGID、capabilities、默认 authorized_keys 指纹、模块名称、选定关键程序的哈希及审计状态。不保存密码哈希、密钥材料、密钥注释或单元内容。比较要求相同 machine-id，且仅比较完整、范围一致的部分；不可读数据不会产生虚假的删除结论。这是分时采集的观察结果，不是原子快照或独立的主机可信证明。
+
+安装创建 `installation`；升级后的服务在首次获得清单且该快照不存在时创建它。每周自动保存快照，保留最近 12 个，手动命名快照不删除。Web/TUI 的“Changes”和 `/api/changes` 每小时更新，使用最新文件清单（通常可滞后六小时）。七天视图使用截止点之前最近的快照，并显示实际比较时间；历史不足时显示缺失信息。
+
+完整的初始公网端口清单确定预期的协议、地址、端口和进程文件组合。新组合触发 HIGH `new_public_listener` 与 `listen` 事件。审核后执行 `baseline accept --ports` 仅更新预期清单，服务一分钟内加载；必须拥有完整套接字表和已知进程文件。无法确定所有者的 Docker 发布端口等情况会阻止接受。此操作不修改防火墙，也不抑制其他发现。
+
+离线支持表于 2026-11-18 根据 [Ubuntu](https://ubuntu.com/project/docs/release-team/list-of-releases/) 和 [Debian](https://www.debian.org/releases/) 核对，区分 Ubuntu 标准支持、Debian LTS 与需管理员确认的 Pro/ESM/ELTS。文件 capabilities 遵循 [Linux 格式](https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h)，支持版本 1–3。
+
+### 允许列表审核、学习模式和新增检测
+
+进程发现卡片中的 **This is legitimate** 提供限定可执行文件、用户和规则 ID 的 JSON 片段。`"exact": true` 防止文件名中的 `*`、`?`、`[` 被解释为通配符。请审核后自行将规则合并到现有允许列表；复制不会更改任何配置。CRITICAL 进程、强信号、信息性发现和已抑制发现不会生成建议。系统发现与审计没有自动允许列表操作。
+
+`SSG_LEARNING_HOURS=0` 默认关闭学习；1–168 小时用于收集待审核候选。候选要求至少三次观察、跨度至少五分钟、进程风险不高于 LOW，且发现权重不超过 10。当前扫描仍须满足条件；升至 HIGH/CRITICAL 或出现强信号会移除候选。首次学习窗口和计数保存在 `learning.json`，重启后继续；修改设置不会重新开始窗口。学习不会降低评分、接受基线或编辑允许列表。 审核候选后，面板还提供只读的 `baseline save` 命令文本，用于保存当前整个系统的命名快照；它不会接受端口或抑制检测。**Learning** 面板、`/api/learning` 和 TUI 显示候选及范围过宽规则的警告。30 个日历日没有匹配到观察结果的规则会提示审核；停机时间也计入，因此不能据此认定规则过时。状态最多包含 1000 个候选和 1000 条规则使用记录；损坏状态会保留并提示错误。
+
+新增 ID：`bpf_unexpected`、`raw_packet_socket`、`iface_promisc`、`exe_packed`、`exe_static_in_temp` 和可选的 `webshell_pattern`。eBPF 仅从可见进程描述符及 `fdinfo` 读取，不能枚举所有内核程序或确认挂载状态。AF_PACKET 表按 inode 关联可见描述符所有者；本程序不捕获数据包。已知软件包工具、root 所有且组和其他用户不可写的可执行文件会降低相关评分，但软件包归属不能证明完整性。混杂模式也用于网桥和虚拟化。现有独立类别评分继续生效；单个强类别不能独自使进程达到 HIGH。
+
+ELF 检查在启动时和每小时独立运行：最多 256 个不同可执行文件，每文件 32 MiB、总计 64 MiB、一分钟工作预算。缓存要求相同进程代次、路径、设备/inode、ctime、大小和 mtime，且不超过两小时。尚未检查的新进程或已变化进程会明确标记为覆盖不完整。UPX 标记需要核实来源；仅高熵属于 INFO。文件不会被执行或解包。eBPF 每进程最多读取 128 个描述符、每扫描 2048 个；AF_PACKET 每扫描最多 128 个命名空间和 10000 行。缺失覆盖使用 `advanced_pending`、`advanced_process_pending`、`advanced_unavailable`、`packet_inventory_unavailable`、`promisc_unavailable` 表示。
+
+网页木马检查默认关闭：`SSG_WEBSHELL_ENABLED=false`。开启后，仅在观察到 nginx、Apache/httpd 或 PHP-FPM 时运行。读取本地配置中的静态 `root`/`DocumentRoot` 路径及 `/var/www`，检查 `SSG_WEBSHELL_DAYS` 天内修改的 `.php`、`.jsp`、`.aspx`；默认 7 天，范围 1–365。限制为 32 个根路径、100000 个路径、每内容文件 1 MiB、内容总量 16 MiB、1000 条发现；配置查找最多 256 个文件，每个 256 KiB。不跟随符号链接；变量路径不受支持并会报告不完整；容器内部路径可能不可见。发现仅包含模式 ID，不包含源代码或提取的秘密。INFO/MEDIUM 匹配需要人工审核，合法管理代码也可能匹配。与 `web_spawns_shell` 的关联只提供上下文，不证明该文件触发执行。
+
+### SARIF 与安装诊断
+
+```sh
+serversecuritygo scan --full --format sarif --output /root/scan.sarif --min-risk INFO
+serversecuritygo audit --full --format sarif --output /root/audit.sarif
+serversecuritygo triage --full --format sarif --output /root/triage.sarif
+serversecuritygo explain exe_memfd
+serversecuritygo explain kern_aslr --format json
+serversecuritygo doctor --format json --output /root/doctor.json
+```
+
+SARIF 2.1.0 是 `scan`、`audit`、`triage` 的本地导出，包含规则 ID、级别、转义文件 URI、`properties.attack` 中的 ATT&CK ID、明确的允许列表抑制和运行不完整状态。审计通过、信息性、未知和不适用结果分别表示。原有退出码和风险过滤仍然有效。程序不会上传报告或连接外部集成；报告文件权限为 600。
+
+`explain` 只读取内置规则和检查目录，不扫描主机；参考文本中的 `{N}` 由具体发现提供数值。`doctor` 只读取安装路径及权限、systemd 主单元文件、最多 32 个其他进程的样本、auth.log 可用性、内核版本和 dpkg 元数据，不执行命令或修改权限。它不能证明服务就绪、已加载单元及 drop-in 正确、可访问全部 PID 或已修复 CVE；建议文本说明后续核查。通过 `SSG_HOST_ROOT` 检查磁盘映像时，不会默默使用工作站默认的 `/proc`。网页和 TUI 进程搜索包含规则 ID、用户、容器及本地/远程端口。

@@ -44,6 +44,8 @@ func (a *Audit) ExitCode(f FailOn) int {
 // Render выводит отчёт в нужном формате на языке l.
 func (a *Audit) Render(w io.Writer, f Format, l i18n.Lang) error {
 	switch f {
+	case SARIF:
+		return renderSARIF(w, a.Version, "audit", a.Incomplete(), auditSARIF(a.View.Checks, l))
 	case JSON:
 		v, found := a.Verdict()
 		out, err := i18n.RenderJSON(map[string]any{

@@ -398,6 +398,9 @@ func (t *Tree) writeNet(dir, netns string) error {
 			return err
 		}
 	}
+	if err := os.WriteFile(filepath.Join(dir, "packet"), []byte("sk RefCnt Type Proto Iface R Rmem User Inode\n"), 0644); err != nil {
+		return err
+	}
 	return os.WriteFile(filepath.Join(dir, "unix"), []byte("Num       RefCount Protocol Flags    Type St Inode Path\n"), 0o644)
 }
 

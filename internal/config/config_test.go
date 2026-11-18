@@ -22,7 +22,10 @@ func TestValidateSecurity(t *testing.T) {
 		{"сеть без пароля", Config{ListenAddr: "0.0.0.0:8090"}, false},
 		{"сеть с паролем без TLS", Config{ListenAddr: "0.0.0.0:8090", AuthPasswordHash: "x"}, false},
 		{"сеть с паролем и TLS", Config{ListenAddr: "0.0.0.0:8443", AuthPasswordHash: "x", TLSCert: "c", TLSKey: "k"}, true},
-		{"сеть за прокси", Config{ListenAddr: "10.0.0.5:8090", AuthPasswordHash: "x", TrustProxyTLS: true}, true},
+		{"сеть за прокси", Config{ListenAddr: "10.0.0.5:8090", AuthPasswordHash: "x", TrustProxyTLS: true}, false},
+		{"loopback proxy", Config{ListenAddr: "127.0.0.1:8090", AuthPasswordHash: "x", TrustProxyTLS: true}, true},
+		{"public proxy", Config{ListenAddr: "0.0.0.0:8090", AuthPasswordHash: "x", TrustProxyTLS: true}, false},
+		{"TLS proxy", Config{ListenAddr: "10.0.0.5:8090", AuthPasswordHash: "x", TrustProxyTLS: true, TLSCert: "c", TLSKey: "k"}, true},
 		{"прокси без пароля", Config{ListenAddr: "127.0.0.1:8090", TrustProxyTLS: true}, false},
 		{"только сертификат", Config{ListenAddr: "127.0.0.1:8090", TLSCert: "c"}, false},
 	}
@@ -240,5 +243,63 @@ func TestInvestigationConfig(t *testing.T) {
 	t.Setenv("SSG_AUTH_LOG_ENABLED", "invalid")
 	if _, e := FromEnv(); e == nil {
 		t.Fatal("invalid boolean")
+	}
+}
+
+func TestFilesystemScanSettings(t *testing.T) {
+	t.Setenv("SSG_FS_SCAN_INTERVAL", "2h")
+	t.Setenv("SSG_FS_SCAN_RATE", "1234")
+	t.Setenv("SSG_FS_SCAN_EXCLUDE", "/opt/cache,/home/test")
+	t.Setenv("SSG_FS_SCAN_MOUNTS", "/srv")
+	c, e := FromEnv()
+	if e != nil || c.FSScanInterval != 2*time.Hour || c.FSScanRate != 1234 || len(c.FSScanExclude) != 2 || len(c.FSScanMounts) != 1 {
+		t.Fatal(c, e)
+	}
+	for k, values := range map[string][]string{"SSG_FS_SCAN_INTERVAL": {"1s", "invalid"}, "SSG_FS_SCAN_RATE": {"0", "100001", "abc"}, "SSG_FS_SCAN_EXCLUDE": {"/", "relative", "/a/../b", "/a\nb"}} {
+		for _, v := range values {
+			t.Run(k+v, func(t *testing.T) {
+				t.Setenv(k, v)
+				if _, e := FromEnv(); e == nil {
+					t.Fatal("accepted invalid filesystem scan setting")
+				}
+			})
+		}
+	}
+}
+
+func TestLearningHoursValidation(t *testing.T) {
+	for _, value := range []string{"-1", "169", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("SSG_LEARNING_HOURS", value)
+			if _, e := FromEnv(); e == nil {
+				t.Fatal(value)
+			}
+		})
+	}
+	t.Setenv("SSG_LEARNING_HOURS", "24")
+	c, e := FromEnv()
+	if e != nil || c.LearningHours != 24 {
+		t.Fatal(c.LearningHours, e)
+	}
+}
+
+func TestWebshellConfigValidation(t *testing.T) {
+	for _, value := range []string{"0", "366", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("SSG_WEBSHELL_DAYS", value)
+			if _, e := FromEnv(); e == nil {
+				t.Fatal(value)
+			}
+		})
+	}
+	t.Setenv("SSG_WEBSHELL_ENABLED", "invalid")
+	if _, e := FromEnv(); e == nil {
+		t.Fatal("invalid boolean")
+	}
+	t.Setenv("SSG_WEBSHELL_ENABLED", "true")
+	t.Setenv("SSG_WEBSHELL_DAYS", "14")
+	cfg, e := FromEnv()
+	if e != nil || !cfg.WebshellEnabled || cfg.WebshellDays != 14 {
+		t.Fatal(cfg.WebshellEnabled, cfg.WebshellDays, e)
 	}
 }

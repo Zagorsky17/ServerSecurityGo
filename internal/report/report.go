@@ -33,6 +33,7 @@ const SchemaVersion = 1
 type Format string
 
 const (
+	SARIF    Format = "sarif"
 	Text     Format = "text"
 	JSON     Format = "json"
 	HTML     Format = "html"
@@ -45,6 +46,8 @@ func ParseFormat(s string) (Format, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "text", "table":
 		return Text, nil
+	case "sarif":
+		return SARIF, nil
 	case "json":
 		return JSON, nil
 	case "html":

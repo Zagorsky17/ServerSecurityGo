@@ -2,6 +2,7 @@ package investigate
 
 import (
 	"fmt"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/detect"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"strconv"
 	"strings"
@@ -20,6 +21,12 @@ func Commands(id string, pid int, path string) []string {
 		switch id {
 		case "exe_deleted", "exe_memfd", "bin_modified":
 			return []string{"ls -l -- " + p + "/exe", "sha256sum -- " + p + "/exe"}
+		case "bpf_unexpected":
+			return []string{"cat -- " + p + "/fdinfo/*", "bpftool prog show", "bpftool map show"}
+		case "raw_packet_socket":
+			return []string{"cat -- " + p + "/net/packet", "ls -l -- " + p + "/fd"}
+		case "exe_packed", "exe_static_in_temp":
+			return []string{"file -- " + p + "/exe", "readelf -lS -- " + p + "/exe", "sha256sum -- " + p + "/exe"}
 		case "stdio_socket":
 			return []string{"ls -l -- " + p + "/fd", "ss -tpn"}
 		case "ld_preload":
@@ -57,15 +64,32 @@ func Commands(id string, pid int, path string) []string {
 	}
 	return []string{"serversecuritygo scan --full --format json"}
 }
-func Attach(snap *model.Snapshot) {
+func Attach(snap *model.Snapshot, events ...model.Event) {
+	idx := indexEvents(events)
+	parents := map[int]*model.Process{}
+	for _, p := range snap.Processes {
+		parents[p.PID] = p
+	}
 	for _, p := range snap.Processes {
 		for i := range p.Findings {
 			f := &p.Findings[i]
+			f.AllowlistProposal = detect.AllowlistProposal(p, *f)
 			f.VerifyCommands = Commands(f.ID, p.PID, p.Exe)
+			f.FindingContext = contextFor(f.ID, f.Category, p.Exe)
+			if f.ID == "scheduler_suspicious" {
+				if par := parents[p.PPID]; par != nil && (par.Name == "cron" || par.Name == "crond") {
+					f.Attack = []string{"T1053.003"}
+				}
+			}
+			f.RelatedEvents = idx["key:"+p.Key]
 		}
 	}
 	for i := range snap.System {
 		f := &snap.System[i]
 		f.VerifyCommands = Commands(f.ID, 0, f.Path)
+		f.FindingContext = contextFor(f.ID, f.Category, f.Path)
+		if f.Path != "" {
+			f.RelatedEvents = idx["path:"+f.Path]
+		}
 	}
 }

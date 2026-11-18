@@ -88,6 +88,8 @@ const (
 // Finding — один сработавший признак. Evidence содержит проверяемые
 // факты (что именно прочитано и откуда), а не выводы.
 type Finding struct {
+	AllowlistProposal string `json:"allowlistProposal,omitempty"`
+	FindingContext
 	VerifyCommands []string   `json:"verifyCommands,omitempty"`
 	ID             string     `json:"id"`
 	Title          i18n.Msg   `json:"title"`
@@ -103,15 +105,18 @@ type Finding struct {
 
 // Socket — сетевой сокет (TCP/UDP/Unix), прочитанный из /proc/net/*.
 type Socket struct {
-	Proto      string `json:"proto"` // tcp, tcp6, udp, udp6, unix
-	LocalAddr  string `json:"localAddr"`
-	LocalPort  int    `json:"localPort"`
-	RemoteAddr string `json:"remoteAddr"`
-	RemotePort int    `json:"remotePort"`
-	State      string `json:"state"`
-	Inode      uint64 `json:"inode"`
-	UID        int    `json:"uid"`
-	NetNS      string `json:"netns,omitempty"`
+	PacketInterface int    `json:"packetInterface,omitempty"`
+	PacketProtocol  uint16 `json:"packetProtocol,omitempty"`
+	PacketType      int    `json:"packetType,omitempty"`
+	Proto           string `json:"proto"` // tcp, tcp6, udp, udp6, unix
+	LocalAddr       string `json:"localAddr"`
+	LocalPort       int    `json:"localPort"`
+	RemoteAddr      string `json:"remoteAddr"`
+	RemotePort      int    `json:"remotePort"`
+	State           string `json:"state"`
+	Inode           uint64 `json:"inode"`
+	UID             int    `json:"uid"`
+	NetNS           string `json:"netns,omitempty"`
 	// TxQueue, RxQueue — поле tx_queue:rx_queue из /proc/net/tcp. У
 	// слушающего сокета это backlog и текущая длина очереди accept
 	// (сколько соединений ждёт, пока приложение их примет), у
@@ -140,10 +145,12 @@ type OpenFile struct {
 
 // FileInfo — сведения об исполняемом файле (stat через /proc/PID/exe).
 type FileInfo struct {
+	Identity      string    `json:"-"`
 	Mode          string    `json:"mode"`
 	UID           int       `json:"uid"`
 	Size          int64     `json:"size"`
 	ModTime       time.Time `json:"modTime"`
+	GroupWritable bool      `json:"groupWritable"`
 	WorldWritable bool      `json:"worldWritable"`
 	SetUID        bool      `json:"setuid"`
 	SetGID        bool      `json:"setgid"`
@@ -151,6 +158,8 @@ type FileInfo struct {
 
 // Process — всё, что удалось собрать о процессе, плюс результат анализа.
 type Process struct {
+	BPF        []BPFDescriptor       `json:"bpf,omitempty"`
+	Executable *ExecutableInspection `json:"executableInspection,omitempty"`
 	// Key = "PID-starttime": PID переиспользуется, а пара с временем
 	// старта однозначно определяет экземпляр процесса.
 	Key     string   `json:"key"`
@@ -247,6 +256,8 @@ type Stats struct {
 
 // Snapshot — результат одного сканирования.
 type Snapshot struct {
+	Learning  *LearningReport     `json:"learning,omitempty"`
+	Inventory *FileInventory      `json:"inventory,omitempty"`
 	Auth      *AuthReport         `json:"auth,omitempty"`
 	Recent    *RecentReport       `json:"recent,omitempty"`
 	Time      time.Time           `json:"time"`
@@ -351,6 +362,7 @@ type FirewallInfo struct {
 
 // ExposureReport — внешняя поверхность атаки по данным одного сканирования.
 type ExposureReport struct {
+	Incomplete        bool            `json:"incomplete,omitempty"`
 	ContainerFindings []SystemFinding `json:"containerFindings,omitempty"`
 	Entries           []Exposure      `json:"entries"`
 	Addrs             []IfaceAddr     `json:"addrs"`
@@ -582,12 +594,17 @@ const (
 	AuditGroupAccounts = "accounts"
 	AuditGroupSudo     = "sudo"
 	AuditGroupKernel   = "kernel"
+	AuditGroupFS       = "filesystem"
+	AuditGroupUpdates  = "updates"
+	AuditGroupFirewall = "firewall"
 )
 
 // AuditCheck — результат одной проверки конфигурации. Severity —
 // важность проверки при провале (для pass — та же важность, чтобы было
 // видно, что именно проверено).
 type AuditCheck struct {
+	FindingContext
+	VerifyCommands []string   `json:"verifyCommands,omitempty"`
 	ID             string     `json:"id"`
 	Group          string     `json:"group"`
 	Title          i18n.Msg   `json:"title"`
@@ -641,7 +658,7 @@ type Event struct {
 // Incomplete показывает, что отсутствие находок нельзя считать результатом полной проверки.
 func (f SystemFinding) Incomplete() bool {
 	switch f.ID {
-	case "self_check_unavailable", "persistence_unavailable", "container_unavailable", "package_ownership_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
+	case "advanced_process_pending", "promisc_unavailable", "advanced_pending", "advanced_unavailable", "packet_inventory_unavailable", "ports_baseline_unavailable", "fs_inventory_pending", "fs_inventory_unavailable", "self_check_unavailable", "persistence_unavailable", "container_unavailable", "package_ownership_unavailable", "rootkit_unavailable", "rootkit_sweep_pending", "integrity_pending", "integrity_unavailable", "integrity_unverified":
 		return true
 	}
 	return false

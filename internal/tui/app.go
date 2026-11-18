@@ -67,6 +67,8 @@ const (
 	pUFW
 	pAuth
 	pTimeline
+	pChanges
+	pLearning
 	pHist
 	pSys
 	pMetrics // только при включённом сборе метрик
@@ -76,7 +78,7 @@ const (
 
 // panelKeys — ключи каталога для названий панелей.
 var panelKeys = [nPanels]string{"tui.panel.status", "tui.panel.susp", "tui.panel.procs", "tui.panel.net", "tui.panel.ports",
-	"tui.panel.audit", "tui.panel.f2b", "tui.panel.ufw", "web.tab.logins", "web.tab.timeline", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics", "tui.panel.netload"}
+	"tui.panel.audit", "tui.panel.f2b", "tui.panel.ufw", "web.tab.logins", "web.tab.timeline", "web.tab.changes", "web.tab.learning", "tui.panel.hist", "tui.panel.sys", "tui.panel.metrics", "tui.panel.netload"}
 
 // sortKeys — режимы сортировки списка процессов (ключи каталога).
 var sortKeys = []string{"tui.sort.risk", "tui.sort.cpu", "tui.sort.mem", "tui.sort.pid", "tui.sort.name"}
@@ -300,6 +302,9 @@ func matches(filter string, fields ...string) bool {
 
 func procMatches(l i18n.Lang, f string, p view.Summary) bool {
 	fields := []string{strconv.Itoa(p.PID), p.Name, p.User, p.Exe, p.Cmdline, p.Risk.String(), p.Container}
+	for _, port := range p.Ports {
+		fields = append(fields, strconv.Itoa(port))
+	}
 	for _, fb := range p.Findings {
 		fields = append(fields, fb.Title.In(l), fb.ID)
 	}
@@ -313,6 +318,12 @@ func (a *App) visible() []panelID {
 	out := make([]panelID, 0, nPanels)
 	for p := pStatus; p < nPanels; p++ {
 		if p == pAuth && (a.data == nil || a.data.Auth == nil) {
+			continue
+		}
+		if p == pLearning && (a.data == nil || a.data.Learning == nil) {
+			continue
+		}
+		if p == pChanges && (a.data == nil || a.data.Changes == nil) {
 			continue
 		}
 		if p == pTimeline && (a.data == nil || a.data.Timeline == nil) {
@@ -644,6 +655,16 @@ func (a *App) count(p panelID) int {
 	switch p {
 	case pAuth:
 		return len(a.logins)
+	case pLearning:
+		if a.data != nil && a.data.Learning != nil {
+			return 1 + len(a.data.Learning.Candidates)
+		}
+		return 0
+	case pChanges:
+		if a.data != nil && a.data.Changes != nil {
+			return 2
+		}
+		return 0
 	case pTimeline:
 		return len(a.timeline)
 	case pSusp:
@@ -978,9 +999,17 @@ func (a *App) mouse(k Key) {
 func (a *App) copyJSON() {
 	var v any
 	switch a.focus {
+	case pLearning:
+		if a.data != nil {
+			v = a.data.Learning
+		}
 	case pAuth:
 		if i := a.lists[pAuth].cursor; i >= 0 && i < len(a.logins) {
 			v = a.logins[i]
+		}
+	case pChanges:
+		if a.data != nil {
+			v = a.data.Changes
 		}
 	case pTimeline:
 		if i := a.lists[pTimeline].cursor; i >= 0 && i < len(a.timeline) {

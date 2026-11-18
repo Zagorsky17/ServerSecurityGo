@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/Zagorsky17/ServerSecurityGo/main/sc
 What the installer does:
 
 1. Clones the repository into `/opt/serversecuritygo`. The repository is public, so no deploy key is needed.
-2. Builds the binary from source if Go 1.24+ is installed. Otherwise it downloads a prebuilt binary from [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) and verifies its SHA256. Go is not required on the server.
+2. Builds the binary from source if Go 1.27.4+ is installed. Otherwise it downloads a prebuilt binary from [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) and verifies its SHA256. Go is not required on the server.
 3. Creates `/opt/serversecuritygo/.env` from `.env.example` with permissions `600`.
 4. Installs `serversecuritygo.service`, enables and starts it, then checks `/healthz`.
 5. Creates the link `/usr/local/bin/serversecuritygo`, so the interface opens with a single command.
@@ -495,6 +495,8 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 | `SSG_NET_TRUSTED_NETS` | — | trusted networks (CDN, proxy): never counted as flood sources |
 | `SSG_NET_MAX_SOCKETS` | `100000` | socket limit per network namespace |
 
+Exited-process history is limited to 4096 records and an 8 MiB budget (strings and accounting overhead). The oldest exited records are removed when either limit is reached, with a `history_trimmed` event; active processes are retained. Retention is a maximum age, not a guaranteed history depth. `state.json` is limited to 16 MiB: an oversized or unsafe file causes a startup error and remains untouched. Back up that file before moving it aside. New command lines redact quoted assignments; existing data and archives are not automatically scrubbed.
+
 After editing `.env`, run `systemctl restart serversecuritygo`.
 
 **Allowlist.** Copy [`allowlist.example.json`](allowlist.example.json) to `/opt/serversecuritygo/allowlist.json`. A rule sets `exe` and `name` (with `*` and `?` wildcards), `user` and a list of `rules` (indicator IDs). A rule with no conditions is ignored, so nothing gets suppressed by accident. A process sets its own name (`comm`), so a rule without `exe` matches only if the name also matches the executable's file name: a miner calling itself `node` is not covered by `{"name": "node"}`. For programs running on an interpreter (for example, `gunicorn` on Python), specify `exe`. The service warns about rules without `exe` in its log at startup.
@@ -523,7 +525,7 @@ If you need direct access, the service starts only when all of these conditions 
    # paste the printed SSG_AUTH_PASSWORD_HASH=... line into .env
    ```
 2. The host name used to open the dashboard is set: `SSG_ALLOWED_HOSTS=mon.example.com`.
-3. HTTPS is enabled: either `SSG_TLS_CERT` and `SSG_TLS_KEY`, or a reverse proxy with HTTPS plus `SSG_TRUST_PROXY_TLS=true`. In the second case it is better to keep the application on `127.0.0.1`.
+3. HTTPS is enabled: either `SSG_TLS_CERT` and `SSG_TLS_KEY`, or a reverse proxy with HTTPS plus `SSG_TRUST_PROXY_TLS=true`. Without application TLS, the listener must use loopback (`127.0.0.1` or `[::1]`), including with `SSG_TRUST_PROXY_TLS=true`. A network backend requires TLS between the proxy and the application.
 
 Example for nginx: the application stays on `127.0.0.1:8090`, and nginx serves the dashboard over HTTPS. In `.env`, set `SSG_TRUST_PROXY_TLS=true` and a password. With `SSG_TRUST_PROXY_TLS=true` the service refuses to start without a password, because it cannot tell whether the proxy exposes it to the internet.
 
@@ -665,7 +667,7 @@ go run ./cmd/serversecuritygo demo         # in the browser: http://127.0.0.1:80
 
 ## Building and testing
 
-Requires Go 1.24 or newer; there are no external modules.
+Requires Go 1.27.4 or newer; there are no external modules.
 
 ```bash
 make build        # bin/serversecuritygo for the current OS
@@ -747,7 +749,7 @@ serversecuritygo recent --days 3 --format json --output /root/recent.json
 serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
 ```
 
-`triage` includes the process scan, configuration audit, authentication records, recent files and ten priority checks with shell-quoted verification commands. `--full` waits for the existing PID sweep and selected dpkg integrity checks; it does not claim a complete SUID/capability inventory. Verification commands are displayed, never executed. Reports support text/JSON/HTML/Markdown and the existing `--fail-on` exit codes. With `SSG_HOST_ROOT` pointing to an image and the default `/proc`, investigation commands exclude the analysis machine's live processes and clearly report unavailable live checks. One-shot commands do not write service history or authentication baselines.
+`triage` includes the process scan, configuration audit, authentication records, recent files and ten priority checks with shell-quoted verification commands. `--full` waits for the PID sweep, selected dpkg integrity checks and the bounded SUID/capability inventory. Verification commands are displayed, never executed. Reports support text/JSON/HTML/Markdown and the existing `--fail-on` exit codes. With `SSG_HOST_ROOT` pointing to an image and the default `/proc`, investigation commands exclude the analysis machine's live processes and clearly report unavailable live checks. One-shot commands do not write service history or authentication baselines.
 
 `collect` creates a new archive, refuses overwrite, requires a private destination directory (700), and writes the archive and entries with mode 600. It includes process/network/audit data, bounded persistence and log copies, maps, environment **names with every value omitted**, executable SHA256 hashes and copies of deleted/memfd executables when accessible. `/proc/PID/exe` is the only intentional file-symlink exception; PID identity and executable metadata are rechecked. `MANIFEST.sha256` hashes the stored archive members; `collection.json` records omissions. The CLI also prints the archive SHA256. Do not execute collected binaries. Collection is CLI-only; no archive download or collection endpoint is enabled in the web panel.
 
@@ -758,3 +760,54 @@ Authentication reads have byte/event bounds: at most 5,000 events and keys, fixe
 New finding IDs: `login_new_ip`, `login_password_root`, `login_after_bruteforce`, `login_unusual_time`, `login_service_account`, `log_wtmp_truncated`, `log_wtmp_gap`, `log_authlog_truncated`, `log_history_null`, `log_journal_vacuum`, `log_utmp_missing`. A service-account authentication is LOW without a confirmed terminal and HIGH when a session TTY is matched. A successful login after at least ten failures from the same IP within ten minutes is flagged; shared NAT addresses and administrator activity must be considered. Local checks cannot establish trust after kernel compromise: preserve a disk image and analyze it independently.
 
 Accounting layouts follow the [glibc utmp definitions](https://github.com/bminor/glibc/blob/master/bits/utmp.h) and [aarch64 ABI definitions](https://github.com/bminor/glibc/blob/master/sysdeps/aarch64/bits/wordsize.h), checked on 2026-11-16. Linux CI compares a C-generated accounting record against the Go parser and collects a deleted executable from an isolated test process.
+
+### Finding cards, hardening and baseline changes
+
+Process, system and audit cards include an explanation, legitimate causes, verification commands, recommendations, contextual MITRE ATT&CK links and up to eight related events from the latest 2,000 retained records. Process history uses PID plus start time; file history uses the path. ATT&CK mappings and file package ownership do not prove compromise or integrity. Commands are displayed only.
+
+The audit now covers kernel hardening, temporary mounts and sensitive permissions, SUID/SGID and file capabilities, reboot markers, newer installed kernels of the same flavor, local APT metadata age, unattended-upgrades configuration, distribution support windows and saved firewall configuration. `audit --full` waits for the filesystem inventory; a quick audit explicitly reports those checks as unknown. Unknown also covers unsupported syntax and missing sources, not just insufficient privileges. UFW/nftables checks do not inspect effective kernel rules or a provider firewall. Pending security-package counts and netlink rule enumeration remain deferred.
+
+The filesystem worker runs independently every six hours at 2,000 paths/second. Set `SSG_FS_SCAN_INTERVAL`, `SSG_FS_SCAN_RATE`, comma-separated `SSG_FS_SCAN_EXCLUDE` and `SSG_FS_SCAN_MOUNTS` for additional mount roots. It covers the root filesystem and `/dev/shm`, stays on each selected filesystem, does not follow symlinks, and excludes `/proc`, `/sys`, `/dev` outside `/dev/shm`, `/run`, Docker/container storage and network/FUSE mounts. Limits are two million paths, 10,000 privileged files/findings, depth 128 and 30 minutes; limits, cancellation and unreadable sources produce an incomplete report. The first complete inventory is stored in `baseline.json`; newly added privilege bits produce `fs_privilege_new`. Package ownership is a separate observation, not a trusted signature. New finding IDs: `fs_suid_inventory`, `fs_capabilities`, `fs_world_writable_system`, `fs_unowned`, `fs_privilege_new`, `fs_inventory_pending`, `fs_inventory_unavailable`, `new_public_listener`, `ports_baseline_unavailable`.
+
+```sh
+serversecuritygo audit --full --format json --output /root/audit.json
+serversecuritygo baseline save --name before-upgrade
+serversecuritygo baseline list
+serversecuritygo diff --from before-upgrade --to now --format json --output /root/diff.json
+serversecuritygo baseline accept --ports
+```
+
+Snapshots live in `SSG_DATA_DIR/baselines` (directory 700, files 600); named snapshots never overwrite existing files. Saving or comparing to `now` waits for the bounded filesystem inventory. Sections cover local users/groups, public listeners and their executable owners, saved systemd units/services, SUID/SGID, capabilities, default authorized-key fingerprints, loaded module names, selected critical executable hashes and audit statuses. Password hashes, key material, comments and unit contents are not stored. A matching `machine-id` is required; only complete sections with identical scope are compared. Unavailable sections cannot generate removal claims. These are observations taken over time, not an atomic or independently trusted host image.
+
+Installation saves `installation`; an upgraded service creates it at its first available inventory if absent. The service adds weekly snapshots, retaining 12, without deleting manually named snapshots. `/api/changes` and the **Changes** web/TUI panel show installation and seven-day comparisons, refreshed hourly using the latest filesystem inventory (normally up to six hours old). The seven-day view selects the latest available snapshot before its cutoff and shows the actual comparison dates; before sufficient history exists it reports missing data.
+
+A complete initial public-port section establishes expected protocol/address/port/executable tuples. A new tuple produces a HIGH `new_public_listener` and a `listen` event. `baseline accept --ports` replaces only that expectation after operator review; it requires complete socket tables and known executable owners and takes effect in the service within a minute. Unknown owners, including Docker publications without a visible executable, prevent acceptance. It does not change firewall rules or suppress other findings.
+
+The offline support table was checked on 2026-11-18 against [Ubuntu release information](https://ubuntu.com/project/docs/release-team/list-of-releases/) and [Debian releases](https://www.debian.org/releases/). It distinguishes Ubuntu standard support and Debian LTS from separately purchased Pro/ESM/ELTS coverage, which must be verified by the administrator. File capabilities follow the [Linux VFS capability format](https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h), including revisions 1–3.
+
+### Allowlist review, learning and additional detectors
+
+Process finding cards offer **This is legitimate** for eligible signals: a JSON fragment constrained to the exact executable, user and finding ID. `"exact": true` prevents `*`, `?` or `[` in a filename from becoming allowlist wildcards. Review the fragment and merge its rule into your existing allowlist yourself; copying it changes nothing. Critical processes, strong signals, informational and already suppressed findings do not produce suggestions. System and audit findings have no automatic allowlist action.
+
+`SSG_LEARNING_HOURS=0` disables learning by default; set 1–168 hours to collect review candidates. A candidate requires at least three observations over five minutes, a process rated at most LOW, and a weak finding (weight at most 10). It must still be eligible in the current scan; escalation to HIGH/CRITICAL or a strong signal removes it. The initial learning window and counts survive restarts in `learning.json`; changing the setting does not restart that window. Learning never lowers a score, accepts a baseline or edits an allowlist. After candidate review, the panel also offers a text-only `baseline save` command to retain a named snapshot of the whole current system; it neither accepts ports nor suppresses detections. The **Learning** panel, `/api/learning` and TUI show candidates and warnings about broad rules. A rule with no matching observed finding for 30 calendar days is flagged for review; downtime counts, so this is not proof that the rule is obsolete. State is limited to 1,000 candidates and 1,000 rule-usage records; invalid state is reported and preserved.
+
+New process/system observations are `bpf_unexpected`, `raw_packet_socket`, `iface_promisc`, `exe_packed`, `exe_static_in_temp` and optional `webshell_pattern`. eBPF data comes only from visible process descriptors and `fdinfo`: it does not enumerate all loaded programs or establish attachment. AF_PACKET tables are joined to visible descriptor owners; no packets are captured. Known packaged tools with root-owned executable files without group/world write permissions lower these signals, but package ownership is not proof of integrity. Promiscuous mode also occurs with bridges and virtualization. Existing independent-category scoring still applies; one strong category alone cannot make a process HIGH.
+
+ELF inspection runs separately at startup and hourly, with limits of 256 unique executables, 32 MiB per file, 64 MiB total and a one-minute work budget. Cached results require the same process generation, path, device/inode, ctime, size and mtime and expire after two hours. New or changed processes awaiting inspection are explicitly incomplete. UPX markers require provenance review; entropy alone is INFO. Files are never executed or unpacked. eBPF reads are limited to 128 descriptors per process and 2,048 per scan; AF_PACKET collection to 128 namespaces and 10,000 rows per scan. `advanced_pending`, `advanced_process_pending`, `advanced_unavailable`, `packet_inventory_unavailable` and `promisc_unavailable` describe missing coverage.
+
+`SSG_WEBSHELL_ENABLED=false` is the default. When enabled, the worker runs only if nginx, Apache/httpd or PHP-FPM is observed. It reads static `root`/`DocumentRoot` paths under local server configurations and `/var/www`, then inspects `.php`, `.jsp` and `.aspx` modified within `SSG_WEBSHELL_DAYS` (default 7, range 1–365). Bounds: 32 roots, 100,000 paths, 1 MiB per content file, 16 MiB of content and 1,000 findings; configuration discovery is capped at 256 files of 256 KiB. Symlinks are not followed, variable roots are unsupported and reported incomplete, and container-private paths may be invisible. Findings contain pattern IDs, not source content or extracted secrets. Matches are INFO/MEDIUM review leads, including legitimate administration code; links to `web_spawns_shell` provide context, not proof that the file caused execution.
+
+### SARIF and installation diagnostics
+
+```sh
+serversecuritygo scan --full --format sarif --output /root/scan.sarif --min-risk INFO
+serversecuritygo audit --full --format sarif --output /root/audit.sarif
+serversecuritygo triage --full --format sarif --output /root/triage.sarif
+serversecuritygo explain exe_memfd
+serversecuritygo explain kern_aslr --format json
+serversecuritygo doctor --format json --output /root/doctor.json
+```
+
+SARIF 2.1.0 is a local export for `scan`, `audit` and `triage`, with rule IDs, levels, escaped file URIs, ATT&CK IDs in `properties.attack`, explicit suppressions and incomplete-run status. Audit pass, informational, unknown and not-applicable results remain distinct. Existing exit-code and risk-filter rules still apply. The application neither uploads the report nor connects to integrations. Output files use mode 600.
+
+`explain` reads the bundled rule/check catalogue without scanning the host. Placeholders `{N}` in reference text are values supplied by a concrete finding. `doctor` reads installation paths and permissions, the main systemd unit, a sample of up to 32 other processes, auth.log availability, kernel release and dpkg metadata. It executes no commands and changes no permissions. It cannot prove service readiness, loaded unit/drop-in correctness, access to every process or CVE patch status; its recommendations explain the follow-up checks. An image configured through `SSG_HOST_ROOT` never silently uses the workstation's default `/proc`. Process search in web and TUI includes finding IDs, users, containers and local/remote ports.

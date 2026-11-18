@@ -18,10 +18,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Check Go vulnerabilities on Linux targets
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          GOOS=linux GOARCH=amd64 govulncheck ./...
+          GOOS=linux GOARCH=arm64 govulncheck ./...
       - name: gofmt и vet
         run: make vet
       - name: Тесты
         run: go test -race -v ./...
+      - name: Проверки веб-интерфейса
+        run: node --test internal/web/static_test.cjs
       - name: Тест настоящего /proc от root
         # Тестовый бинарник собираем от пользователя (чтобы не испортить
         # права на кеш сборки), а запускаем от root.
@@ -36,6 +43,8 @@ jobs:
           sudo /tmp/integrity.test -test.v -test.run '^TestReal'
           go test -race -c -o /tmp/ufw.test ./internal/ufw
           sudo /tmp/ufw.test -test.v -test.run '^TestReal'
+          go test -race -c -o /tmp/fsinspect.test ./internal/fsinspect
+          sudo /tmp/fsinspect.test -test.v -test.run '^TestRealFileCapabilitiesAndSUID$'
       - name: Настоящие метаданные Docker без запуска контейнера
         run: bash .github/scripts/container-security.sh
       - name: Разовое сканирование настоящей системы
@@ -59,7 +68,7 @@ jobs:
       - name: Настоящий systemd-юнит и watchdog
         run: sudo --preserve-env=GITHUB_ACTIONS bash .github/scripts/selfcheck-systemd.sh /tmp/ssg
       - name: Полный обход PID и файлов настоящего Linux
-        timeout-minutes: 15
+        timeout-minutes: 35
         run: |
           set +e
           sudo /tmp/ssg scan --full --format json --output /tmp/full-scan.json --min-risk INFO --fail-on none
@@ -74,16 +83,43 @@ jobs:
           ids = {f['id'] for f in findings}
           assert 'rootkit_sweep_complete' in ids, findings
           assert 'integrity_complete' in ids, findings
+          inventory = d['inventory']
+          assert inventory and inventory['scanned'] > 100 and inventory['scope'], inventory
+          assert 'fs_inventory_pending' not in ids, findings
+          print('Filesystem inventory:', inventory['scanned'], 'paths; incomplete:', inventory['incomplete'])
           assert 'self_check_unavailable' in ids and d['incomplete'], findings
           assert not ids.intersection({'hidden_process', 'kmod_hidden', 'rootkit_sweep_pending', 'integrity_pending'}), findings
           print('System finding IDs:', sorted(ids), 'incomplete:', d['incomplete'])
           PYCODE
       - name: Аудит настроек настоящей системы
         run: |
-          sudo /tmp/ssg audit --all --fail-on none | head -80
+          # Быстрый аудит явно сообщает, что полный инвентарь ещё не получен.
+          set +e
+          sudo /tmp/ssg audit --all --fail-on none > /tmp/audit.txt
+          code=$?
+          set -e
+          test "$code" = 3
+          head -80 /tmp/audit.txt
+          set +e
           sudo /tmp/ssg audit --format json --fail-on none > /tmp/audit.json
-          python3 -c "import json; d=json.load(open('/tmp/audit.json')); assert d['schema_version']==1 and len(d['checks'])>20 and d['summary']['unknown']==0, d['summary']; print('проверок:', len(d['checks']), d['summary'])"
+          code=$?
+          set -e
+          test "$code" = 3
+          python3 - <<'PYCODE'
+          import json
+          d = json.load(open('/tmp/audit.json'))
+          checks = {c['id']: c for c in d['checks']}
+          assert d['schema_version'] == 1 and len(checks) > 60, d
+          assert all(checks[k]['status'] == 'unknown' for k in ('fs_suid_inventory', 'fs_capabilities')), checks
+          assert checks['kern_aslr']['status'] != 'unknown', checks['kern_aslr']
+          assert checks['upd_eol_release']['status'] != 'unknown', checks['upd_eol_release']
+          print('Audit:', len(checks), d['summary'])
+          PYCODE
+          set +e
           sudo /tmp/ssg audit --format html --output /tmp/audit.html --fail-on none
+          code=$?
+          set -e
+          test "$code" = 3
           test "$(sudo stat -c %a /tmp/audit.html)" = 600
           # Код выхода: ошибка неверного флага — 2.
           set +e; /tmp/ssg audit --fail-on bogus; code=$?; set -e

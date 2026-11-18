@@ -437,6 +437,18 @@ func (a *App) row(p panelID, i, w int) []seg {
 	case pAuth:
 		e := a.logins[i]
 		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.User + " " + e.IP + " " + e.Kind, riskStyle(e.Risk.String())}}
+	case pLearning:
+		if i == 0 {
+			return []seg{{a.tr("web.tab.learning"), stNormal}}
+		}
+		c := a.data.Learning.Candidates[i-1]
+		return []seg{{c.Exe + " " + c.Rule, stNormal}}
+	case pChanges:
+		title := a.tr("web.changes.installation")
+		if i == 1 {
+			title = a.tr("web.changes.week")
+		}
+		return []seg{{title, stNormal}}
 	case pTimeline:
 		e := a.timeline[i]
 		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.Kind + " " + a.txt(e.Detail), riskStyle(e.Risk.String())}}
@@ -760,6 +772,54 @@ func (a *App) mainContent(w int) (string, []line) {
 			}
 		}
 		return a.tr("web.tab.logins"), b.lines
+	case pLearning:
+		if r := a.data.Learning; r != nil {
+			b.para(a.tr("web.allow.review"), stDim, 0)
+			if r.Enabled {
+				b.para(a.tr("web.learning.until", fmtTime(r.Until)), stNormal, 0)
+			} else {
+				b.para(a.tr("web.learning.disabled"), stDim, 0)
+			}
+			if r.BaselineCommand != "" {
+				b.para(a.tr("web.learning.baseline"), stDim, 0)
+				b.para(r.BaselineCommand, stNormal, 0)
+			}
+			for _, w := range r.Warnings {
+				b.para(a.txt(w), stWarn, 0)
+			}
+			i := a.lists[pLearning].cursor - 1
+			if i >= 0 && i < len(r.Candidates) {
+				c := r.Candidates[i]
+				b.para(c.Exe+" "+c.User+" "+c.Rule, stBold, 0)
+				b.para(a.tr("web.learning.count", c.Count, fmtTime(c.First), fmtTime(c.Last)), stDim, 0)
+				b.para(c.Proposal, stNormal, 0)
+			}
+		}
+		return a.tr("web.tab.learning"), b.lines
+	case pChanges:
+		if a.data.Changes == nil {
+			b.para(a.tr("warn.baseline_missing"), stDim, 0)
+		} else {
+			r := a.data.Changes
+			for _, w := range r.Warnings {
+				b.para(a.txt(w), stWarn, 0)
+			}
+			d := r.Installation
+			if a.lists[pChanges].cursor == 1 {
+				d = r.Week
+			}
+			if d != nil {
+				b.para(a.tr("web.changes.period", fmtTime(d.From), fmtTime(d.To)), stDim, 0)
+				for _, w := range d.Warnings {
+					b.para(a.txt(w), stWarn, 0)
+				}
+				for _, c := range d.Changes {
+					b.para(c.Section+" "+c.Kind+" "+c.Key, stBold, 0)
+					b.para(c.Before+" → "+c.After, stNormal, 2)
+				}
+			}
+		}
+		return a.tr("web.tab.changes"), b.lines
 	case pTimeline:
 		i := a.lists[pTimeline].cursor
 		if i >= 0 && i < len(a.timeline) {
@@ -894,6 +954,16 @@ func (a *App) processDetail(b *lb, key string) {
 	}
 	b.kv("CPU", cpu)
 	b.kv(a.tr("tui.k.memory"), a.tr("tui.memory", fmtBytes(p.RSSBytes), fmt.Sprintf("%.1f", p.MemPercent), p.Threads, p.FDCount))
+	if len(p.BPF) > 0 {
+		b.header(a.tr("tui.h.bpf"))
+		for _, f := range p.BPF {
+			b.para(fmt.Sprintf("fd=%d %s type=%d id=%d tag=%s", f.FD, f.Kind, f.Type, f.ID, f.Tag), stNormal, 2)
+		}
+	}
+	if x := p.Executable; x != nil {
+		b.header(a.tr("tui.h.elf"))
+		b.para(fmtTime(x.Time)+" "+x.Packing+fmt.Sprintf(" entropy=%.3f static=%t incomplete=%t", x.Entropy, x.Static, x.Incomplete), stNormal, 2)
+	}
 	if s := p.Security; s != nil {
 		b.kv("TracerPid", strconv.Itoa(s.TracerPID))
 		for _, v := range []struct {
@@ -997,6 +1067,12 @@ func findingBlock(b *lb, f model.Finding) {
 	}
 	tags += "]"
 	b.add(seg{"  " + mark + " ", st}, seg{sanitize(f.Title.In(b.lang)), st}, seg{tags, stDim})
+	b.findingContext(f.FindingContext)
+	if f.AllowlistProposal != "" {
+		b.header(b.tr("web.allow.legitimate"))
+		b.para(b.tr("web.allow.review"), stDim, 2)
+		b.para(f.AllowlistProposal, stNormal, 2)
+	}
 	for _, e := range f.Evidence {
 		b.para("· "+e.In(b.lang), Style{FG: 250, BG: -1}, 6)
 	}
@@ -1099,6 +1175,10 @@ func (a *App) auditHeader(b *lb) {
 
 // auditDetail — подробности проверки: факты, рекомендация, команда.
 func (a *App) auditDetail(b *lb, c model.AuditCheck) {
+	b.findingContext(c.FindingContext)
+	for _, cmd := range c.VerifyCommands {
+		b.para(cmd, stNormal, 2)
+	}
 	b.add(seg{" " + auditShort(c.Status) + " ", Style{FG: 16, BG: auditStyle(c.Status).FG, Bold: true}}, seg{"  " + sanitize(a.txt(c.Title)), stBold})
 	b.kv(a.tr("web.col.status"), a.statusName(c.Status))
 	b.kv(a.tr("web.col.severity"), c.Severity.String())
@@ -1398,6 +1478,7 @@ func fmtDur(a *App, sec int64) string {
 }
 
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
+	b.findingContext(f.FindingContext)
 	rs := f.Risk.String()
 	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
 	for _, cmd := range f.VerifyCommands {
@@ -1865,6 +1946,29 @@ func (a *App) ufwDetail(b *lb) {
 		}
 		for _, line := range strings.Split(f.Content, "\n") {
 			b.para(line, stNormal, 0)
+		}
+	}
+}
+
+func (b *lb) findingContext(c model.FindingContext) {
+	if !c.Why.IsZero() {
+		b.header(b.tr("card.why"))
+		b.para(c.Why.In(b.lang), stNormal, 2)
+	}
+	if !c.Legitimate.IsZero() {
+		b.header(b.tr("card.legitimate"))
+		b.para(c.Legitimate.In(b.lang), stDim, 2)
+	}
+	if len(c.Attack) > 0 {
+		b.header(b.tr("card.attack"))
+		for _, id := range c.Attack {
+			b.para(id+" https://attack.mitre.org/techniques/"+strings.ReplaceAll(id, ".", "/")+"/", stDim, 2)
+		}
+	}
+	if len(c.RelatedEvents) > 0 {
+		b.header(b.tr("card.related"))
+		for _, e := range c.RelatedEvents {
+			b.para(fmtTime(e.Time)+" · "+e.Details.In(b.lang), stDim, 2)
 		}
 	}
 }
