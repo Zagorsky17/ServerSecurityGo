@@ -30,7 +30,7 @@ func TestAdvancedCalibration(t *testing.T) {
 	if f[len(f)-1].Weight != 0 {
 		t.Fatal("entropy raised risk")
 	}
-	p.Executable.Packing = "upx-marker"
+	p.Executable.Packing = "upx-header"
 	f = ruleAdvanced(p, c)
 	if f[len(f)-1].Weight == 0 {
 		t.Fatal("UPX signal lost")

@@ -45,7 +45,7 @@ func TestELFBoundsPackingAndEntropy(t *testing.T) {
 	}
 	copy(b[1000:], "UPX!")
 	x, e = InspectELF(b)
-	if e != nil || x.Packing != "upx-marker" {
+	if e != nil || x.Packing != "" {
 		t.Fatal(x, e)
 	}
 	b = elfFixture(true)
@@ -138,8 +138,7 @@ func TestWebRootsAndPatterns(t *testing.T) {
 }
 func TestRunnerGenerationAndCancellation(t *testing.T) {
 	root := t.TempDir()
-	b := elfFixture(false)
-	copy(b[1000:], "UPX!")
+	b := packedELFFixture()
 	writeFixture(t, root, "opt/app", b)
 	fi, _ := os.Stat(filepath.Join(root, "opt/app"))
 	p := &model.Process{Key: "12-1", PID: 12, Exe: "/opt/app", ExeInfo: &model.FileInfo{Identity: procfs.FileIdentity(fi), Size: fi.Size(), ModTime: fi.ModTime()}}
@@ -149,7 +148,7 @@ func TestRunnerGenerationAndCancellation(t *testing.T) {
 	}
 	r.Scan(context.Background(), &model.Snapshot{Processes: []*model.Process{p}})
 	r.Apply([]*model.Process{p})
-	if p.Executable == nil || p.Executable.Packing != "upx-marker" {
+	if p.Executable == nil || p.Executable.Packing != "upx-header" {
 		t.Fatal(p.Executable)
 	}
 	previous := p.Executable
@@ -168,12 +167,13 @@ func TestRunnerGenerationAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	r.Scan(ctx, &model.Snapshot{Processes: []*model.Process{p}})
-	if len(r.Findings()) == 0 || previous.Packing != "upx-marker" {
+	if len(r.Findings()) == 0 || previous.Packing != "upx-header" {
 		t.Fatal("cancel/result mutation")
 	}
 }
 func FuzzELF(f *testing.F) {
 	f.Add(elfFixture(false))
+	f.Add(packedELFFixture())
 	f.Add([]byte("\x7fELF"))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		if len(b) > 1<<20 {
