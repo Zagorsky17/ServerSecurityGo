@@ -122,20 +122,23 @@ type App struct {
 	lists    [nPanels]listState
 
 	// Отфильтрованные и отсортированные элементы панелей.
-	susp       []view.Summary
-	procs      []view.Summary
-	procPrefix []string // префиксы дерева («├─ ») в режиме дерева
-	socks      []model.Socket
-	ports      []model.Exposure
-	checks     []model.AuditCheck
-	bans       []model.Fail2banBan
-	ufwFiles   []model.UFWFile
-	events     []model.Event
-	system     []model.SystemFinding
-	mrows      []metricRow
-	loadPorts  []model.PortLoad // строки панели «Сетевая нагрузка»
-	mrange     string           // окно графиков метрик (metrics.Range*)
-	byKey      map[string]view.Summary
+	susp         []view.Summary
+	procs        []view.Summary
+	procPrefix   []string // префиксы дерева («├─ ») в режиме дерева
+	socks        []model.Socket
+	ports        []model.Exposure
+	checks       []model.AuditCheck
+	bans         []model.Fail2banBan
+	ufwFiles     []model.UFWFile
+	events       []model.Event
+	system       []model.SystemFinding
+	systemRows   []int
+	systemGroups map[int]view.SystemGroup
+	systemGroup  string
+	mrows        []metricRow
+	loadPorts    []model.PortLoad // строки панели «Сетевая нагрузка»
+	mrange       string           // окно графиков метрик (metrics.Range*)
+	byKey        map[string]view.Summary
 
 	sortMode   int
 	treeMode   bool
@@ -508,10 +511,15 @@ func (a *App) rebuild() {
 	}
 	a.system = a.system[:0]
 	for _, f := range a.data.System {
-		if matches(a.lists[pSys].filter, a.txt(f.Title), f.Path, f.ID, f.Risk.String()) {
+		facts := ""
+		for _, e := range f.Evidence {
+			facts += " " + a.txt(e)
+		}
+		if matches(a.lists[pSys].filter, a.txt(f.Title), f.Path, f.ID, f.Risk.String(), facts) {
 			a.system = append(a.system, f)
 		}
 	}
+	a.buildSystemRows()
 	a.buildMetrics()
 	a.buildNet()
 	for p := pSusp; p < nPanels; p++ {
@@ -684,7 +692,7 @@ func (a *App) count(p panelID) int {
 	case pHist:
 		return len(a.events)
 	case pSys:
-		return len(a.system)
+		return len(a.systemRows)
 	case pMetrics:
 		return len(a.mrows)
 	case pLoad:
@@ -762,15 +770,18 @@ func (a *App) handleKey(k Key) bool {
 	case KeyBackTab:
 		a.cyclePanel(-1)
 	case KeyRight, KeyEnter:
-		if !a.inMain {
+		if !a.openSystemGroup() && !a.inMain {
 			a.inMain, a.mainOffset = true, 0
 		}
 	case KeyLeft:
-		a.inMain = false
+		if !a.backSystemGroup() {
+			a.inMain = false
+		}
 	case KeyEsc:
 		switch {
 		case a.inMain:
 			a.inMain = false
+		case a.backSystemGroup():
 		case list >= pSusp && a.lists[list].filter != "":
 			a.lists[list].filter = ""
 			a.rebuild()
@@ -794,9 +805,13 @@ func (a *App) runeKey(r rune, list panelID) bool {
 	case 'G':
 		a.move(1 << 30)
 	case 'l':
-		a.inMain, a.mainOffset = true, 0
+		if !a.openSystemGroup() {
+			a.inMain, a.mainOffset = true, 0
+		}
 	case 'h':
-		a.inMain = false
+		if !a.backSystemGroup() {
+			a.inMain = false
+		}
 	case ']':
 		a.cyclePanel(1)
 	case '[':
@@ -1045,7 +1060,9 @@ func (a *App) copyJSON() {
 			v = e
 		}
 	case pSys:
-		if f, ok := a.selSystem(); ok {
+		if g, ok := a.selSystemGroup(); ok {
+			v = a.systemGroupFindings(g)
+		} else if f, ok := a.selSystem(); ok {
 			v = f
 		}
 	case pMetrics:
@@ -1143,8 +1160,11 @@ func (a *App) selNetPort() (model.PortLoad, bool) {
 }
 
 func (a *App) selSystem() (model.SystemFinding, bool) {
-	if c := a.lists[pSys].cursor; c < len(a.system) {
-		return a.system[c], true
+	if _, ok := a.selSystemGroup(); ok {
+		return model.SystemFinding{}, false
+	}
+	if c := a.lists[pSys].cursor; c >= 0 && c < len(a.systemRows) {
+		return a.system[a.systemRows[c]], true
 	}
 	return model.SystemFinding{}, false
 }

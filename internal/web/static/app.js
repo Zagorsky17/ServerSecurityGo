@@ -781,6 +781,29 @@ function renderHistory() {
   ], rows, (e) => e.key && openCard(e.key), tr('web.empty.events'));
 }
 
+function systemRows(s, groupKey) {
+  const findings = s.findings || [];
+  const groups = s.groups || [];
+  const selected = groups.find(g => g.key === groupKey);
+  if (selected) return selected.indices.map(i => findings[i]);
+  const heads = new Map(groups.map(g => [g.indices[0], g]));
+  const hidden = new Set(groups.flatMap(g => g.indices.slice(1)));
+  return findings.flatMap((f, i) => {
+    if (hidden.has(i)) return [];
+    const g = heads.get(i);
+    return [g ? { ...f, group: g, title: tr('web.system.group', g.indices.length), path: g.directory, modTime: '' } : f];
+  });
+}
+
+function systemFindingTitle(f) {
+  if (!f.group) return tx(f.title);
+  return h('button', { type: 'button', class: 'secondary', onclick: () => {
+    state.systemGroup = f.group.key;
+    state.showAll['t-system'] = false;
+    renderSystem();
+  } }, tx(f.title));
+}
+
 function renderSystem() {
   const s = state.system;
   if (!s) return;
@@ -793,14 +816,24 @@ function renderSystem() {
   );
   const warns = s.warnings && s.warnings.length ? s.warnings.map(tx) : [tr('web.no_limits')];
   $('sys-warn').replaceChildren(...warns.map((w) => h('li', null, w)));
+  const selected = (s.groups || []).find(g => g.key === state.systemGroup);
+  if (!selected) state.systemGroup = '';
+  $('sys-group-nav').replaceChildren(...(selected ? [
+    h('button', { type: 'button', class: 'secondary', onclick: () => {
+      state.systemGroup = '';
+      state.showAll['t-system'] = false;
+      renderSystem();
+    } }, tr('web.system.back')),
+    h('p', null, selected.directory, ' · ', selected.owner, ' · ', tr('web.system.group', selected.indices.length)),
+  ] : []));
   renderTable('t-system', [
     { t: tr('web.col.risk'), v: (f) => riskNum(f.risk), r: (f) => riskBadge(f.risk), desc: true },
-    { t: tr('tui.title.check'), v: (f) => tx(f.title), r: (f) => tx(f.title), c: 'wrap' },
+    { t: tr('tui.title.check'), v: (f) => tx(f.title), r: systemFindingTitle, c: 'wrap' },
     { t: tr('tui.k.file'), v: (f) => f.path, r: (f) => f.path, c: 'mono' },
     { t: tr('tui.k.modified'), v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
     { t: tr('tui.h.facts'), v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))), c: 'wrap' },
     { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => h('div', {}, tx(f.recommendation), findingContext(f)), c: 'wrap' },
-  ], s.findings || [], null, tr('web.empty.system'));
+  ], systemRows(s, state.systemGroup), null, tr('web.empty.system'));
 }
 
 function yesNo(v) { return v ? tr('tui.yes') : tr('tui.no'); }

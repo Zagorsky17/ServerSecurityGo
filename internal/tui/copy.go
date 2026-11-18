@@ -92,7 +92,10 @@ func (a *App) copyItems() []copyItem {
 		}
 		return out
 	case pSys:
-		if f, ok := a.selSystem(); ok {
+		if g, ok := a.selSystemGroup(); ok {
+			add("tui.copy.path", g.Directory)
+			add("tui.copy.fact", g.Owner)
+		} else if f, ok := a.selSystem(); ok {
 			add("tui.copy.path", f.Path)
 			for _, e := range f.Evidence {
 				add("tui.copy.fact", a.txt(e))
