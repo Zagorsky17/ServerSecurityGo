@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/Zagorsky17/ServerSecurityGo/main/sc
 What the installer does:
 
 1. Clones the repository into `/opt/serversecuritygo`. The repository is public, so no deploy key is needed.
-2. Builds the binary from source if Go 1.24+ is installed. Otherwise it downloads a prebuilt binary from [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) and verifies its SHA256. Go is not required on the server.
+2. Builds the binary from source if Go 1.27.4+ is installed. Otherwise it downloads a prebuilt binary from [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) and verifies its SHA256. Go is not required on the server.
 3. Creates `/opt/serversecuritygo/.env` from `.env.example` with permissions `600`.
 4. Installs `serversecuritygo.service`, enables and starts it, then checks `/healthz`.
 5. Creates the link `/usr/local/bin/serversecuritygo`, so the interface opens with a single command.
@@ -495,6 +495,8 @@ All variables are listed with detailed comments (in Russian) in [`.env.example`]
 | `SSG_NET_TRUSTED_NETS` | — | trusted networks (CDN, proxy): never counted as flood sources |
 | `SSG_NET_MAX_SOCKETS` | `100000` | socket limit per network namespace |
 
+Exited-process history is limited to 4096 records and an 8 MiB budget (strings and accounting overhead). The oldest exited records are removed when either limit is reached, with a `history_trimmed` event; active processes are retained. Retention is a maximum age, not a guaranteed history depth. `state.json` is limited to 16 MiB: an oversized or unsafe file causes a startup error and remains untouched. Back up that file before moving it aside. New command lines redact quoted assignments; existing data and archives are not automatically scrubbed.
+
 After editing `.env`, run `systemctl restart serversecuritygo`.
 
 **Allowlist.** Copy [`allowlist.example.json`](allowlist.example.json) to `/opt/serversecuritygo/allowlist.json`. A rule sets `exe` and `name` (with `*` and `?` wildcards), `user` and a list of `rules` (indicator IDs). A rule with no conditions is ignored, so nothing gets suppressed by accident. A process sets its own name (`comm`), so a rule without `exe` matches only if the name also matches the executable's file name: a miner calling itself `node` is not covered by `{"name": "node"}`. For programs running on an interpreter (for example, `gunicorn` on Python), specify `exe`. The service warns about rules without `exe` in its log at startup.
@@ -523,7 +525,7 @@ If you need direct access, the service starts only when all of these conditions 
    # paste the printed SSG_AUTH_PASSWORD_HASH=... line into .env
    ```
 2. The host name used to open the dashboard is set: `SSG_ALLOWED_HOSTS=mon.example.com`.
-3. HTTPS is enabled: either `SSG_TLS_CERT` and `SSG_TLS_KEY`, or a reverse proxy with HTTPS plus `SSG_TRUST_PROXY_TLS=true`. In the second case it is better to keep the application on `127.0.0.1`.
+3. HTTPS is enabled: either `SSG_TLS_CERT` and `SSG_TLS_KEY`, or a reverse proxy with HTTPS plus `SSG_TRUST_PROXY_TLS=true`. Without application TLS, the listener must use loopback (`127.0.0.1` or `[::1]`), including with `SSG_TRUST_PROXY_TLS=true`. A network backend requires TLS between the proxy and the application.
 
 Example for nginx: the application stays on `127.0.0.1:8090`, and nginx serves the dashboard over HTTPS. In `.env`, set `SSG_TRUST_PROXY_TLS=true` and a password. With `SSG_TRUST_PROXY_TLS=true` the service refuses to start without a password, because it cannot tell whether the proxy exposes it to the internet.
 
@@ -665,7 +667,7 @@ go run ./cmd/serversecuritygo demo         # in the browser: http://127.0.0.1:80
 
 ## Building and testing
 
-Requires Go 1.24 or newer; there are no external modules.
+Requires Go 1.27.4 or newer; there are no external modules.
 
 ```bash
 make build        # bin/serversecuritygo for the current OS

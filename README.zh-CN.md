@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/Zagorsky17/ServerSecurityGo/main/sc
 安装脚本会执行以下操作：
 
 1. 将仓库克隆到 `/opt/serversecuritygo`。仓库是公开的，不需要 deploy key。
-2. 如果已安装 Go 1.24 或更高版本，则从源码构建二进制文件；否则从 [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) 下载预编译的二进制文件并校验其 SHA256。服务器上不需要安装 Go。
+2. 如果已安装 Go 1.27.4 或更高版本，则从源码构建二进制文件；否则从 [GitHub Releases](https://github.com/Zagorsky17/ServerSecurityGo/releases) 下载预编译的二进制文件并校验其 SHA256。服务器上不需要安装 Go。
 3. 根据 `.env.example` 创建 `/opt/serversecuritygo/.env`，权限为 `600`。
 4. 安装 `serversecuritygo.service`，设置开机启动并启动服务，然后检查 `/healthz`。
 5. 创建链接 `/usr/local/bin/serversecuritygo`，这样一条命令即可打开界面。
@@ -495,6 +495,8 @@ Docker 检查读取 `config.v2.json` 与 `hostconfig.json`，支持自定义 `da
 | `SSG_NET_TRUSTED_NETS` | — | 受信网络（CDN、代理）：不计为洪流来源 |
 | `SSG_NET_MAX_SOCKETS` | `100000` | 每个网络命名空间的套接字上限 |
 
+已退出进程的历史记录最多保留 4096 条，预算为 8 MiB（字符串及估算开销）。达到任一限制时删除最旧的已退出记录，并生成 `history_trimmed` 事件；活动进程仍会保留。Retention 是最长保留时间，不保证完整的历史深度。`state.json` 上限为 16 MiB：文件过大或不安全时启动将报错，原文件保持不变。移走该文件前请先备份。新命令行中的带引号赋值会被脱敏；已有数据和归档不会自动清理。
+
 修改 `.env` 后，执行 `systemctl restart serversecuritygo`。
 
 **白名单。** 将 [`allowlist.example.json`](allowlist.example.json) 复制到 `/opt/serversecuritygo/allowlist.json`。一条规则可以设置 `exe` 和 `name`（支持 `*` 和 `?` 通配符）、`user` 以及 `rules` 列表（指标 ID）。没有任何条件的规则会被忽略，以免意外抑制所有指标。进程可以自行设置名称（`comm`），因此没有 `exe` 的规则只有在名称同时与可执行文件名匹配时才生效：自称 `node` 的挖矿程序不会被 `{"name": "node"}` 覆盖。对于运行在解释器上的程序（例如运行在 Python 上的 `gunicorn`），请指定 `exe`。服务启动时会在日志中对没有 `exe` 的规则发出警告。
@@ -523,7 +525,7 @@ Docker 检查读取 `config.v2.json` 与 `hostconfig.json`，支持自定义 `da
    # 把输出的 SSG_AUTH_PASSWORD_HASH=... 这一行粘贴到 .env 中
    ```
 2. 已设置用于打开面板的主机名：`SSG_ALLOWED_HOSTS=mon.example.com`。
-3. 已启用 HTTPS：要么设置 `SSG_TLS_CERT` 和 `SSG_TLS_KEY`，要么使用带 HTTPS 的反向代理并设置 `SSG_TRUST_PROXY_TLS=true`。第二种情况下最好让程序保持在 `127.0.0.1` 上。
+3. 已启用 HTTPS：要么设置 `SSG_TLS_CERT` 和 `SSG_TLS_KEY`，要么使用带 HTTPS 的反向代理并设置 `SSG_TRUST_PROXY_TLS=true`。未启用程序自身的 TLS 时，必须监听 loopback（`127.0.0.1` 或 `[::1]`），即使设置了 `SSG_TRUST_PROXY_TLS=true` 也是如此。使用网络地址的后端需要在代理与程序之间启用 TLS。
 
 nginx 示例：程序保持在 `127.0.0.1:8090`，由 nginx 通过 HTTPS 提供面板。在 `.env` 中设置 `SSG_TRUST_PROXY_TLS=true` 和密码。设置 `SSG_TRUST_PROXY_TLS=true` 时，没有密码服务将拒绝启动，因为它无法判断代理是否把它暴露到了互联网。
 
@@ -665,7 +667,7 @@ go run ./cmd/serversecuritygo demo         # 在浏览器中：http://127.0.0.1:
 
 ## 构建与测试
 
-需要 Go 1.24 或更高版本；没有外部模块。
+需要 Go 1.27.4 或更高版本；没有外部模块。
 
 ```bash
 make build        # 为当前系统构建 bin/serversecuritygo

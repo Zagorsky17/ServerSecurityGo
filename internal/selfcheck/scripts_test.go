@@ -180,3 +180,23 @@ write_self_baseline() {
 		})
 	}
 }
+
+func TestInstallerGoVersion(t *testing.T) {
+	lib, err := filepath.Abs("../../scripts/lib.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		v  string
+		ok bool
+	}{{"go1.24.13", false}, {"go1.26.2", false}, {"go1.27.3", false}, {"go1.27.4", true}, {"go1.27.10", true}, {"go1.28.0", true}, {"go1.28rc1", false}, {"devel go1.28", false}, {"garbage", false}} {
+		t.Run(tc.v, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", `. "$1"; go() { printf '%s\n' "$TEST_GO_VERSION"; }; have_go`, "test", lib)
+			cmd.Env = append(os.Environ(), "TEST_GO_VERSION="+tc.v)
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != tc.ok {
+				t.Fatalf("%v %s", err, out)
+			}
+		})
+	}
+}

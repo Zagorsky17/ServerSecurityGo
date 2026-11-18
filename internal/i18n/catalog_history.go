@@ -22,6 +22,8 @@ func init() {
 		"hist.finding":        {"Признак: {0}", "Indicator: {0}"},
 		"hist.listen":         {"Начал слушать {0}", "Started listening on {0}"},
 		"hist.exited":         {"Процесс завершился (наблюдался с {0})", "Process exited (observed since {0})"},
+		"hist.save_failed":    {"Не удалось сохранить историю; предыдущий state.json сохранён: {0}", "Could not save history; the previous state.json is retained: {0}"},
+		"hist.trimmed":        {"История ограничена по объёму: удалено старейших завершённых процессов — {0}. Активные процессы сохранены.", "History size limit reached: removed {0} oldest exited processes. Active processes are retained."},
 		"hist.system":         {"{0}: {1}", "{0}: {1}"},
 		"hist.audit_bad":      {"Аудит: «{0}» — {1}", "Audit: “{0}” — {1}"},
 		"hist.audit_fixed":    {"Аудит: «{0}» — исправлено", "Audit: “{0}” — fixed"},

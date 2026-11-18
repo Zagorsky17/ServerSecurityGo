@@ -64,3 +64,23 @@ func TestJoin(t *testing.T) {
 		t.Errorf("got %s, want %s", got, want)
 	}
 }
+
+func TestShellAssignments(t *testing.T) {
+	for _, value := range []string{`'sentinel with spaces'`, `"sentinel with spaces"`, `"sentinel\" tail"`, `'sen'"tinel"`, `'sen'\''tinel'`, `sentinel\ with\ spaces`, `"sentinel`, `'sentinel`, `''`, `""`} {
+		in := "DB_PASSWORD=" + value + "; next"
+		if strings.HasSuffix(value, `sentinel`) {
+			in = "DB_PASSWORD=" + value
+		}
+		got := String(in)
+		want := "DB_PASSWORD=***; next"
+		if strings.HasSuffix(value, `sentinel`) {
+			want = "DB_PASSWORD=***"
+		}
+		if got != want {
+			t.Errorf("String(%q)=%q, want %q", in, got, want)
+		}
+	}
+	if got := String(`PORT="8090" sleep 60`); got != `PORT="8090" sleep 60` {
+		t.Fatal(got)
+	}
+}

@@ -22,7 +22,10 @@ func TestValidateSecurity(t *testing.T) {
 		{"сеть без пароля", Config{ListenAddr: "0.0.0.0:8090"}, false},
 		{"сеть с паролем без TLS", Config{ListenAddr: "0.0.0.0:8090", AuthPasswordHash: "x"}, false},
 		{"сеть с паролем и TLS", Config{ListenAddr: "0.0.0.0:8443", AuthPasswordHash: "x", TLSCert: "c", TLSKey: "k"}, true},
-		{"сеть за прокси", Config{ListenAddr: "10.0.0.5:8090", AuthPasswordHash: "x", TrustProxyTLS: true}, true},
+		{"сеть за прокси", Config{ListenAddr: "10.0.0.5:8090", AuthPasswordHash: "x", TrustProxyTLS: true}, false},
+		{"loopback proxy", Config{ListenAddr: "127.0.0.1:8090", AuthPasswordHash: "x", TrustProxyTLS: true}, true},
+		{"public proxy", Config{ListenAddr: "0.0.0.0:8090", AuthPasswordHash: "x", TrustProxyTLS: true}, false},
+		{"TLS proxy", Config{ListenAddr: "10.0.0.5:8090", AuthPasswordHash: "x", TrustProxyTLS: true, TLSCert: "c", TLSKey: "k"}, true},
 		{"прокси без пароля", Config{ListenAddr: "127.0.0.1:8090", TrustProxyTLS: true}, false},
 		{"только сертификат", Config{ListenAddr: "127.0.0.1:8090", TLSCert: "c"}, false},
 	}

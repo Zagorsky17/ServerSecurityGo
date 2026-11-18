@@ -16,11 +16,13 @@ package history
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/procfs"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/safefile"
 )
 
 // Track — накопленные сведения об одном экземпляре процесса.
@@ -85,6 +88,13 @@ type sysSeen struct {
 // пропавших находок удаляются.
 const systemForget = 3
 
+// Лимиты завершённой истории не зависят от числа циклов за retention.
+const (
+	maxExitedTracks = 4096
+	maxExitedBytes  = 8 << 20
+	maxStateBytes   = 16 << 20
+)
+
 type stateFile struct {
 	Version int               `json:"version"`
 	Saved   time.Time         `json:"saved"`
@@ -115,13 +125,22 @@ func Open(opt Options) (*Store, error) {
 	if err := os.MkdirAll(opt.Dir, 0o700); err != nil {
 		return nil, i18n.Errorf("err.data_dir", err)
 	}
-	if data, err := os.ReadFile(s.statePath()); err == nil {
+	data, _, err := safefile.ReadRegular(s.statePath(), maxStateBytes, false)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, i18n.Errorf("err.data_dir", fmt.Errorf("%s: %w", s.statePath(), err))
+	}
+	if err == nil {
 		var st stateFile
 		if err := json.Unmarshal(data, &st); err != nil {
 			// Повреждённый файл не должен мешать запуску: сохраняем копию
 			// для разбора и начинаем с чистого листа.
 			_ = os.Rename(s.statePath(), s.statePath()+".corrupt")
 		} else {
+			for key, track := range st.Tracks {
+				if track == nil || track.Key != key {
+					return nil, i18n.Errorf("err.data_dir", fmt.Errorf("%s: %w", s.statePath(), os.ErrInvalid))
+				}
+			}
 			if st.Tracks != nil {
 				s.tracks = st.Tracks
 			}
@@ -142,6 +161,11 @@ func Open(opt Options) (*Store, error) {
 		}
 	}
 	s.loadEvents()
+	if removed := s.trimExited(); removed > 0 {
+		if err := s.appendEvents([]model.Event{trimEvent(time.Now(), removed)}); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
@@ -333,6 +357,10 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 		}
 	}
 
+	if removed := s.trimExited(); removed > 0 {
+		evs = append(evs, trimEvent(now, removed))
+	}
+
 	// Системные находки: событие при появлении и при росте уровня (Redis
 	// был закрыт ufw — LOW, ufw выключили — CRITICAL с тем же ключом).
 	// Находка, которой нет systemForget сканирований подряд, забывается:
@@ -383,6 +411,10 @@ func (s *Store) Record(now time.Time, procs []*model.Process, system []model.Sys
 	if s.opt.Dir != "" && (s.dirty || now.Sub(s.lastSave) > 5*time.Minute) {
 		if err := s.save(now); err == nil {
 			s.dirty, s.lastSave = false, now
+		} else {
+			e := model.Event{Time: now, Type: model.EvSystem, Name: "history_save_failed", Risk: model.RiskHigh, Details: i18n.T("hist.save_failed", err.Error())}
+			evs = append(evs, e)
+			s.appendEvents([]model.Event{e})
 		}
 	}
 	return evs
@@ -469,30 +501,7 @@ func (s *Store) save(now time.Time) error {
 		st.SystemRisk[k] = seen.risk
 	}
 	sort.Strings(st.System)
-	data, err := json.Marshal(st)
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(s.opt.Dir, ".state-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), s.statePath())
+	return safefile.WriteJSON(s.statePath(), st, maxStateBytes)
 }
 
 // RecordAudit записывает изменения результатов аудита конфигурации:
@@ -534,6 +543,10 @@ func (s *Store) RecordAudit(now time.Time, checks []model.AuditCheck) []model.Ev
 	if s.opt.Dir != "" && s.dirty {
 		if err := s.save(now); err == nil {
 			s.dirty, s.lastSave = false, now
+		} else {
+			e := model.Event{Time: now, Type: model.EvSystem, Name: "history_save_failed", Risk: model.RiskHigh, Details: i18n.T("hist.save_failed", err.Error())}
+			evs = append(evs, e)
+			s.appendEvents([]model.Event{e})
 		}
 	}
 	return evs
@@ -608,4 +621,51 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// trimExited удаляет только старейшие завершённые треки; активные нужны для CPU и правил.
+func (s *Store) trimExited() int {
+	var exited []*Track
+	bytes := 0
+	for _, t := range s.tracks {
+		if t.Exited {
+			exited = append(exited, t)
+			bytes += trackBytes(t)
+		}
+	}
+	if len(exited) <= maxExitedTracks && bytes <= maxExitedBytes {
+		return 0
+	}
+	slices.SortFunc(exited, func(a, b *Track) int {
+		if c := a.LastSeen.Compare(b.LastSeen); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Key, b.Key)
+	})
+	removed := 0
+	for _, t := range exited {
+		if len(exited)-removed <= maxExitedTracks && bytes <= maxExitedBytes {
+			break
+		}
+		bytes -= trackBytes(t)
+		delete(s.tracks, t.Key)
+		removed++
+	}
+	s.dirty = true
+	return removed
+}
+
+func trackBytes(t *Track) int {
+	n := 512 + len(t.Key) + len(t.Name) + len(t.User) + len(t.Exe) + len(t.Cmdline)
+	for _, values := range [][]string{t.Listen, t.Findings} {
+		n += 16 * cap(values)
+		for _, v := range values {
+			n += len(v)
+		}
+	}
+	return n
+}
+
+func trimEvent(now time.Time, removed int) model.Event {
+	return model.Event{Time: now, Type: model.EvSystem, Name: "history_trimmed", Risk: model.RiskLow, Details: i18n.T("hist.trimmed", removed)}
 }

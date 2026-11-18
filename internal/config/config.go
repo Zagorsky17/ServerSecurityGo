@@ -411,7 +411,7 @@ func (c Config) ValidateSecurity() error {
 	if c.AuthPasswordHash == "" {
 		return i18n.Errorf("err.network_needs_password", c.ListenAddr)
 	}
-	if !c.TLSEnabled() && !c.TrustProxyTLS {
+	if !c.TLSEnabled() {
 		return i18n.Errorf("err.network_needs_tls", c.ListenAddr)
 	}
 	return nil

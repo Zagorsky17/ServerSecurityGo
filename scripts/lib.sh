@@ -11,7 +11,7 @@ LINK_PATH="/usr/local/bin/${APP_NAME}"
 BACKUP_DIR="/var/backups/${APP_NAME}"
 DATA_DIR="/var/lib/${APP_NAME}"
 # Минимальная версия Go для сборки из исходников (см. go.mod).
-GO_MIN_MINOR=24
+GO_MIN_VERSION=1.27.4
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -32,7 +32,7 @@ detect_arch() {
   case "$(uname -m)" in
     x86_64|amd64) echo amd64 ;;
     aarch64|arm64) echo arm64 ;;
-    *) die "архитектура $(uname -m) не поддерживается готовыми сборками; соберите из исходников (нужен Go 1.${GO_MIN_MINOR}+)" ;;
+    *) die "архитектура $(uname -m) не поддерживается готовыми сборками; соберите из исходников (нужен Go ${GO_MIN_VERSION}+)" ;;
   esac
 }
 
@@ -45,10 +45,11 @@ latest_tag() {
 # have_go проверяет, что установлен Go нужной версии.
 have_go() {
   command -v go >/dev/null 2>&1 || return 1
-  local v minor
-  v="$(go env GOVERSION 2>/dev/null)"   # go1.24.3
-  minor="$(echo "$v" | sed -E 's/^go1\.([0-9]+).*/\1/')"
-  [ -n "$minor" ] && [ "$minor" -ge "$GO_MIN_MINOR" ] 2>/dev/null
+  local v major minor patch
+  v="$(GOTOOLCHAIN=local go env GOVERSION 2>/dev/null)" || return 1
+  [[ "$v" =~ ^go([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+  major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+  (( major > 1 || (major == 1 && (minor > 27 || (minor == 27 && patch >= 4))) ))
 }
 
 # build_binary DEST VERSION — собрать из исходников текущего каталога.
@@ -84,7 +85,7 @@ obtain_binary() {
   elif [ -n "$tag" ]; then
     fetch_binary "$dest" "$tag"
   else
-    die "релизов пока нет, а Go 1.${GO_MIN_MINOR}+ не установлен — собрать нечем"
+    die "релизов пока нет, а Go ${GO_MIN_VERSION}+ не установлен — собрать нечем"
   fi
   "$dest" version >/dev/null || die "новый бинарник не запускается"
 }
