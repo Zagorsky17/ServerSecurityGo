@@ -64,11 +64,22 @@ func TestDemoPipeline(t *testing.T) {
 		3401: model.RiskMedium, // memfd: сильный признак одной категории
 		3501: model.RiskHigh,
 	}
+	tp, tn, fp, fn := 0, 0, 0, 0
 	for pid, r := range want {
 		p := byPID(snap, pid)
 		if p == nil {
 			t.Errorf("PID %d не найден", pid)
 			continue
+		}
+		switch {
+		case r >= model.RiskMedium && p.Risk >= model.RiskMedium:
+			tp++
+		case r < model.RiskMedium && p.Risk < model.RiskMedium:
+			tn++
+		case r < model.RiskMedium:
+			fp++
+		default:
+			fn++
 		}
 		if p.Risk != r {
 			var ids []string
@@ -78,6 +89,8 @@ func TestDemoPipeline(t *testing.T) {
 			t.Errorf("PID %d %s: риск %s (%d), ожидался %s; признаки %v", pid, p.Name, p.Risk, p.Score, r, ids)
 		}
 	}
+
+	t.Logf("controlled fixture, threshold MEDIUM: TP=%d TN=%d FP=%d FN=%d (not a population estimate)", tp, tn, fp, fn)
 
 	// Сокеты связаны с процессами, включая контейнерное пространство имён.
 	if p := byPID(snap, 3101); len(p.Sockets) != 1 || p.Sockets[0].RemotePort != 3333 {

@@ -226,8 +226,17 @@ func Diff(a, b *model.BaselineSnapshot) *model.BaselineDiff {
 			}
 		}
 	}
+	for i := range d.Changes {
+		switch d.Changes[i].Section {
+		case "ports", "ssh_keys", "suid", "capabilities":
+			d.Changes[i].ReviewFirst = true
+		}
+	}
 	sort.Slice(d.Changes, func(i, j int) bool {
 		x, y := d.Changes[i], d.Changes[j]
+		if x.ReviewFirst != y.ReviewFirst {
+			return x.ReviewFirst
+		}
 		if x.Section != y.Section {
 			return x.Section < y.Section
 		}

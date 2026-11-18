@@ -140,6 +140,7 @@
     <form class="filters" id="audit-filters" autocomplete="off">
       <input type="search" id="a-q" placeholder="Проверка, файл, пользователь" data-i18n-placeholder="web.audit.q">
       <select id="a-status">
+        <option value="attention" data-i18n="web.overview.attention">Проблемы, изменения и недоступные проверки</option>
         <option value="" data-i18n="web.audit.all_statuses">Все результаты</option>
         <option value="problems" data-i18n="web.audit.problems">Только проблемы</option>
         <option value="fail" data-i18n="audit.status.fail">опасно</option>
@@ -211,7 +212,15 @@
     <div id="ufw-files"></div>
   </section>
 
-  <section id="tab-logins" class="tab"><div id="auth-notes"></div><table id="t-logins"></table><h3 data-i18n="web.auth.summary"></h3><table id="t-auth-ips"></table><table id="t-auth-users"></table><table id="t-auth-hours"></table><table id="t-auth-keys"></table></section>
+  <section id="tab-logins" class="tab">
+    <div id="auth-notes"></div>
+    <div class="table-wrap"><table id="t-logins"></table></div>
+    <h3 data-i18n="web.auth.summary"></h3>
+    <div class="table-wrap"><table id="t-auth-ips"></table></div>
+    <div class="table-wrap"><table id="t-auth-users"></table></div>
+    <div class="table-wrap"><table id="t-auth-hours"></table></div>
+    <div class="table-wrap"><table id="t-auth-keys"></table></div>
+  </section>
 <section id="tab-learning" class="tab"><div id="learning-content"></div></section>
 <section id="tab-changes" class="tab"><div id="changes-content"></div></section>
 <section id="tab-timeline" class="tab"><div id="timeline-notes"></div><table id="t-timeline"></table></section>
@@ -292,6 +301,9 @@
     </div>
     <h3 data-i18n="web.sys.persistence">Проверки закрепления</h3>
     <p class="hint" data-i18n="web.sys.hint">cron, systemd, rc.local, профили shell, /etc/ld.so.preload, authorized_keys. Только чтение; ключи SSH и секреты не показываются.</p>
+    <div id="sys-group-nav"></div>
+    <p id="sys-overview"></p>
+    <label><input type="checkbox" id="sys-all"><span data-i18n="web.overview.all">Показать все результаты, включая INFO</span></label>
     <div class="table-wrap"><table id="t-system"></table></div>
   </section>
 </main>

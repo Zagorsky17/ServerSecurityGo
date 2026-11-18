@@ -31,6 +31,8 @@ type FileInventory struct {
 
 // FindingContext contains explanation, contextual ATT&CK mappings and bounded history.
 type FindingContext struct {
+	ReviewFirst   bool     `json:"reviewFirst,omitempty"`
+	Confidence    i18n.Msg `json:"confidence,omitzero"`
 	Why           i18n.Msg `json:"why"`
 	Legitimate    i18n.Msg `json:"legitimate"`
 	Attack        []string `json:"attack,omitempty"`

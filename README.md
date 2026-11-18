@@ -166,6 +166,12 @@ While no password is set, the service lets only root into the dashboard: for eve
 
 ## Features
 
+### Diagnostic summaries
+
+Audit results initially show failures, warnings, unavailable checks and change checks. Select **All results** to inspect passes and advice. The system overview keeps incomplete checks and findings with linked history visible; other INFO findings are available through **Show all results, including INFO**. In TUI, `i` toggles all results in the audit and system panels; searching includes their details. UFW settings and reading limitations precede configuration file contents.
+
+Failed-login records are grouped by IP, log source and authentication method within fixed 15-minute UTC intervals. Counts refer to records, not unique attempts: different logs can describe the same attempt. Successful logins and records without a source, IP or timestamp remain separate. Expand a web group or select it in TUI to inspect every event; `Y` copies the selected group as a JSON array (a single event remains an object). Web group details initially show up to 400 records; **Show all** reveals the rest. No raw events or findings are removed from the API or history.
+
 **Data collection** reads `/proc` and related sources:
 
 | Data | Source |
@@ -329,6 +335,8 @@ The data comes from `/proc` only: `net/netstat`, `net/snmp`, `net/sockstat`, `ne
 
 ### UFW and PID sweep timing
 
+In the TUI, UFW opens with **Ports and rules summary**: saved state, main policies, listening and published ports with addresses/processes, and IPv4/IPv6 user-rule declarations in file order. The summary is independent of the Ports filter; the UFW filter applies to the source-file list. Enter focuses detail scrolling; `Y` copies UFW and port data as JSON. The summary shows up to 100 ports and 100 declarations with an explicit limit message. Before/after rules and manual entries without tuples remain available in the source files; a listening port alone does not prove network reachability.
+
 The **UFW** section follows fail2ban (or audit when fail2ban is absent). It shows saved incoming, outgoing and forwarding policies, IPv6, logging, application profiles, conntrack modules and the sysctl file. Open the full contents of `ufw.conf`, `/etc/default/ufw`, `before/user/after.rules` and their IPv6 counterparts, `before/after.init`, `sysctl.conf`, the file selected by `IPT_SYSCTL` and `applications.d` profiles. In the TUI, select a file and press Enter to scroll its details; `/` filters paths and contents, and `y` copies the path and `Y` copies JSON. Expand a file in the web panel. API: `GET /api/ufw`, with the same authorization as other sections.
 
 This is on-disk configuration; changes may not have been applied. Active kernel rules and third-party Docker rules are not verified here. Reads execute no commands and are limited to 1 MiB per file, 4 MiB total and 1000 profiles; errors, exceeded limits and missing required files are explicit. Missing settings are not replaced with assumed defaults. [UFW evaluation order](https://manpages.ubuntu.com/manpages/noble/man8/ufw-framework.8.html): before → user → after, separately for IPv4 and IPv6.
@@ -442,7 +450,7 @@ This is a heuristic tool for initial triage, not an antivirus or an EDR.
 
 - **Kernel-level rootkits** can hide processes, files and sockets directly in `/proc`. The scanner sees what the kernel shows. User-space rootkits that use `LD_PRELOAD` and `/etc/ld.so.preload` do not affect the scanner itself (a static Go binary without libc), but they can distort the output of `ps`, `ls` and other tools.
 - **Snapshots, not events.** Scans run every `SSG_SCAN_INTERVAL` (30 s by default), so processes that live shorter than the interval may be missed. Complete launch auditing requires auditd or eBPF.
-- **No file content analysis:** no signatures, hashes or IP reputation. Command-line patterns (`stratum+tcp`, `/dev/tcp/`) are matched by templates and can be evaded by renaming or obfuscation.
+- **Limited file analysis.** Integrity checks cover selected package files; ELF analysis and optional webshell checks use bounded heuristics. They do not inspect every file or provide a general malware signature database. External IP reputation is not used. Command-line patterns (`stratum+tcp`, `/dev/tcp/`) can be evaded by renaming or obfuscation.
 - **Privileges.** Without root, exe, cwd, fd and environ of other users' processes are unreadable. The same happens with `hidepid` on `/proc`, `kernel.yama.ptrace_scope=3` and strict AppArmor or SELinux profiles. The scanner reports this in a banner and in the process card.
 - **Containers.** Inside a container the scanner sees only that container's PID namespace, so run it on the host. Exe and cwd paths of containerized processes are relative to the container filesystem, so comparisons with the host's system paths can be wrong.
 - **False positives** are possible for developer tools (`go run` from `/tmp`, CI builds), custom services in non-standard directories, legitimate mining and `curl | sh` installers. The allowlist exists for these.
@@ -667,6 +675,12 @@ go run ./cmd/serversecuritygo demo         # in the browser: http://127.0.0.1:80
 
 ## Building and testing
 
+For a bounded repeatability run on the synthetic `/proc` fixture with temporary on-disk history, use the command below. It checks stable event counts and history reload; it does not measure real-world detection accuracy or replace long observation of a live service. Test directories are removed automatically. The ordinary test suite runs 30 iterations without waiting.
+
+```bash
+SSG_TEST_SOAK_DURATION=20m go test ./internal/scanner -run '^TestDiagnosticStability$' -count=1 -timeout 25m -v
+```
+
 Requires Go 1.27.4 or newer; there are no external modules.
 
 ```bash
@@ -769,6 +783,10 @@ The audit now covers kernel hardening, temporary mounts and sensitive permission
 
 The filesystem worker runs independently every six hours at 2,000 paths/second. Set `SSG_FS_SCAN_INTERVAL`, `SSG_FS_SCAN_RATE`, comma-separated `SSG_FS_SCAN_EXCLUDE` and `SSG_FS_SCAN_MOUNTS` for additional mount roots. It covers the root filesystem and `/dev/shm`, stays on each selected filesystem, does not follow symlinks, and excludes `/proc`, `/sys`, `/dev` outside `/dev/shm`, `/run`, Docker/container storage and network/FUSE mounts. Limits are two million paths, 10,000 privileged files/findings, depth 128 and 30 minutes; limits, cancellation and unreadable sources produce an incomplete report. The first complete inventory is stored in `baseline.json`; newly added privilege bits produce `fs_privilege_new`. Package ownership is a separate observation, not a trusted signature. New finding IDs: `fs_suid_inventory`, `fs_capabilities`, `fs_world_writable_system`, `fs_unowned`, `fs_privilege_new`, `fs_inventory_pending`, `fs_inventory_unavailable`, `new_public_listener`, `ports_baseline_unavailable`.
 
+After each completed filesystem scan, the service automatically refreshes four dependent checks: `fs_world_writable_system`, `fs_unowned`, `fs_suid_inventory` and `fs_capabilities`. This also works in local TUI mode. Refresh uses the collected inventory without starting another scan or rereading unrelated settings. Scheduled and manual full audits remain available. Runs are serialized, notifications coalesce, and the same report is not processed twice. Incomplete inventory retains `unknown` where no confirmed dangerous finding exists; an observed HIGH/CRITICAL finding remains `fail`.
+
+Web and TUI separately show full-audit time, the collection start time of the inventory used, and completeness within its configured scope. This exposes source age: full-audit time does not imply fresh filesystem data. In the service API, `inventorySource` contains `ready`, `time` and `incomplete`; audit and summary `updatedAt` also changes on partial refresh so TUI invalidates its cache. Older services without these fields remain supported but cannot provide separate source freshness. No external requests or new settings are added.
+
 ```sh
 serversecuritygo audit --full --format json --output /root/audit.json
 serversecuritygo baseline save --name before-upgrade
@@ -785,6 +803,14 @@ A complete initial public-port section establishes expected protocol/address/por
 
 The offline support table was checked on 2026-11-18 against [Ubuntu release information](https://ubuntu.com/project/docs/release-team/list-of-releases/) and [Debian releases](https://www.debian.org/releases/). It distinguishes Ubuntu standard support and Debian LTS from separately purchased Pro/ESM/ELTS coverage, which must be verified by the administrator. File capabilities follow the [Linux VFS capability format](https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h), including revisions 1–3.
 
+### Change priority and evidence
+
+The system list shows CRITICAL findings first, then unsuppressed `new_public_listener`, `fs_privilege_new` and `ssh_keys_recent`, then other findings by risk. **Change — review first** controls review order without raising severity or proving an attack. Snapshot comparisons prioritize changes to ports, SSH keys, SUID/SGID and capabilities; incomplete or incompatible sections cannot produce these differences.
+
+Web and TUI cards separate observed evidence, risk and consequences, confidence and limitations, and verification commands. `fs_privilege_new` shows before/after privileges; absence from the baseline privileged-file list does not prove that the file itself was absent. Package ownership does not dismiss the warning. `ssh_keys_recent` uses mtime alone and cannot confirm changed keys: compare fingerprints with approved keys and complete compatible snapshots. A new public listener does not prove external reachability.
+
+Confidence describes evidence and limits without attack-probability percentages. Commands are displayed only, with shell-quoted paths. `explain` also includes these explanations. JSON adds `reviewFirst` and `confidence` to finding context, and `reviewFirst` to snapshot changes. Data from an older service lacks the new explanations and markers.
+
 ### Allowlist review, learning and additional detectors
 
 Process finding cards offer **This is legitimate** for eligible signals: a JSON fragment constrained to the exact executable, user and finding ID. `"exact": true` prevents `*`, `?` or `[` in a filename from becoming allowlist wildcards. Review the fragment and merge its rule into your existing allowlist yourself; copying it changes nothing. Critical processes, strong signals, informational and already suppressed findings do not produce suggestions. System and audit findings have no automatic allowlist action.
@@ -793,7 +819,7 @@ Process finding cards offer **This is legitimate** for eligible signals: a JSON 
 
 New process/system observations are `bpf_unexpected`, `raw_packet_socket`, `iface_promisc`, `exe_packed`, `exe_static_in_temp` and optional `webshell_pattern`. eBPF data comes only from visible process descriptors and `fdinfo`: it does not enumerate all loaded programs or establish attachment. AF_PACKET tables are joined to visible descriptor owners; no packets are captured. Known packaged tools with root-owned executable files without group/world write permissions lower these signals, but package ownership is not proof of integrity. Promiscuous mode also occurs with bridges and virtualization. Existing independent-category scoring still applies; one strong category alone cannot make a process HIGH.
 
-ELF inspection runs separately at startup and hourly, with limits of 256 unique executables, 32 MiB per file, 64 MiB total and a one-minute work budget. Cached results require the same process generation, path, device/inode, ctime, size and mtime and expire after two hours. New or changed processes awaiting inspection are explicitly incomplete. UPX markers require provenance review; entropy alone is INFO. Files are never executed or unpacked. eBPF reads are limited to 128 descriptors per process and 2,048 per scan; AF_PACKET collection to 128 namespaces and 10,000 rows per scan. `advanced_pending`, `advanced_process_pending`, `advanced_unavailable`, `packet_inventory_unavailable` and `promisc_unavailable` describe missing coverage.
+ELF inspection runs separately at startup and hourly, with limits of 256 unique executables, 32 MiB per file, 64 MiB total and a one-minute work budget. Cached results require the same process generation, path, device/inode, ctime, size and mtime and expire after two hours. New or changed processes awaiting inspection are explicitly incomplete. UPX detection requires consistent ELF architecture, loader/program headers and a checksummed pack header near the end of the file (`upx-header`). A literal `UPX!` or an `UPX` section name alone does not raise risk. Supported pack-header versions are 11–14, with at most 8 KiB of trailing zeros; modified or unsupported layouts may be missed. A match still requires provenance review; entropy alone is INFO. Files are never executed or unpacked. eBPF reads are limited to 128 descriptors per process and 2,048 per scan; AF_PACKET collection to 128 namespaces and 10,000 rows per scan. `advanced_pending`, `advanced_process_pending`, `advanced_unavailable`, `packet_inventory_unavailable` and `promisc_unavailable` describe missing coverage.
 
 `SSG_WEBSHELL_ENABLED=false` is the default. When enabled, the worker runs only if nginx, Apache/httpd or PHP-FPM is observed. It reads static `root`/`DocumentRoot` paths under local server configurations and `/var/www`, then inspects `.php`, `.jsp` and `.aspx` modified within `SSG_WEBSHELL_DAYS` (default 7, range 1–365). Bounds: 32 roots, 100,000 paths, 1 MiB per content file, 16 MiB of content and 1,000 findings; configuration discovery is capped at 256 files of 256 KiB. Symlinks are not followed, variable roots are unsupported and reported incomplete, and container-private paths may be invisible. Findings contain pattern IDs, not source content or extracted secrets. Matches are INFO/MEDIUM review leads, including legitimate administration code; links to `web_spawns_shell` provide context, not proof that the file caused execution.
 
@@ -811,3 +837,19 @@ serversecuritygo doctor --format json --output /root/doctor.json
 SARIF 2.1.0 is a local export for `scan`, `audit` and `triage`, with rule IDs, levels, escaped file URIs, ATT&CK IDs in `properties.attack`, explicit suppressions and incomplete-run status. Audit pass, informational, unknown and not-applicable results remain distinct. Existing exit-code and risk-filter rules still apply. The application neither uploads the report nor connects to integrations. Output files use mode 600.
 
 `explain` reads the bundled rule/check catalogue without scanning the host. Placeholders `{N}` in reference text are values supplied by a concrete finding. `doctor` reads installation paths and permissions, the main systemd unit, a sample of up to 32 other processes, auth.log availability, kernel release and dpkg metadata. It executes no commands and changes no permissions. It cannot prove service readiness, loaded unit/drop-in correctness, access to every process or CVE patch status; its recommendations explain the follow-up checks. An image configured through `SSG_HOST_ROOT` never silently uses the workstation's default `/proc`. Process search in web and TUI includes finding IDs, users, containers and local/remote ports.
+
+### Grouped filesystem findings
+
+The System section groups repeated `fs_unowned` findings by directory and UID/GID. This finding means that a UID or GID was not found in the local `/etc/passwd` and `/etc/group` files; it does not describe package ownership or prove compromise. Group directories use at most the first three components of the parent path: `/usr/local/include/node/a.h`, for example, belongs to `/usr/local/include`. Different risk levels and suppression states remain separate. Single findings, unrecognized evidence formats and other finding types stay as individual rows.
+
+In the web panel, select a group title to open its original findings; the button above the table returns to groups. In the TUI, Enter opens the file list, then Enter opens a selected file's details; Left or Esc from the file list returns to groups. `/` searches every original path, finding ID, risk level and evidence, including UID/GID. `y` copies the group directory or selected file path; `Y` copies the group's findings or an individual finding as JSON, subject to the terminal's clipboard capacity. Data refreshes preserve the selected group while it exists.
+
+Grouping only changes presentation: original findings, history, risk ratings and CLI reports remain intact. `GET /api/system` still returns the complete `findings` array; the additional `groups` array contains `key` (opaque identifier), `directory`, `owner` and `indices`, which are zero-based indices into `findings` in that same response. The TUI also builds groups when connected to older services; the web panel falls back to the ordinary list when `groups` is absent.
+
+### Refreshing large reports
+
+System findings, audit, UFW and snapshot comparisons support conditional GET using `ETag` / `If-None-Match`. An unchanged report returns `304` without a body; web and TUI reuse the parsed data. Caches exist only in memory and HTTP responses retain `Cache-Control: no-store`. The server retains one latest version of five representations (full/summary system reports, audit, UFW, changes), capped at 8 MiB of JSON each; larger responses bypass server storage. The immutable source structures are also retained until replacement. Changed evidence, warnings, audit state or source completeness updates the response even when full-audit time stays unchanged.
+
+Web requests `/api/system?summary=1` for risk, titles, IDs and paths. The **Details** button fetches a finding's evidence, recommendations and commands from `/api/system/detail?index=N&revision=REVISION`, using values from the list response. If that report has changed, the server returns `409` and asks the user to refresh the list. Full `/api/system` remains available for TUI and other clients. TUI fetches it in full initially and then uses conditional requests; process cards still load when selected. Older services without ETags or the summary representation fall back to full transfers.
+
+`/api/status` is fetched on every refresh. `304` means only that a report is unchanged, not that scanning is fresh: stale data, incomplete sources and connection errors stay visible. Web skips rebuilding an unchanged table during automatic refresh but updates the summary; filters, sorting and language changes still redraw it. Dynamic processes, events and metrics are outside this cache.

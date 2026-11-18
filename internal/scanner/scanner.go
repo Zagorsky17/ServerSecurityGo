@@ -160,6 +160,22 @@ func (s *Scanner) Snapshot() *model.Snapshot {
 	return &copy
 }
 
+// Inventory возвращает последний инвентарь, не дожидаясь следующего скана процессов.
+func (s *Scanner) Inventory() *model.FileInventory {
+	if s.opt.Inventory == nil {
+		return nil
+	}
+	return s.opt.Inventory.Report()
+}
+
+// InventoryUpdates используется единственным исполнителем аудита.
+func (s *Scanner) InventoryUpdates() <-chan struct{} {
+	if s.opt.Inventory == nil {
+		return nil
+	}
+	return s.opt.Inventory.Updates()
+}
+
 // History возвращает хранилище истории.
 func (s *Scanner) History() *history.Store { return s.opt.History }
 

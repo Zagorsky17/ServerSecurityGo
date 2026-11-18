@@ -115,7 +115,8 @@ type Server struct {
 	hosts      map[string]bool
 	mux        *http.ServeMux
 	// catalogs — готовые JSON-каталоги переводов для веб-панели и их ETag.
-	catalogs map[i18n.Lang]catalogFile
+	catalogs                                                            map[i18n.Lang]catalogFile
+	systemCache, systemSummaryCache, auditCache, ufwCache, changesCache reportCache
 }
 
 type catalogFile struct {
@@ -227,9 +228,13 @@ func (s *Server) routes() {
 		}
 		writeJSON(w, 200, snap.Learning)
 	}))
-	s.mux.HandleFunc("GET /api/changes", s.api(func(w http.ResponseWriter, r *http.Request, _ session) { writeJSON(w, 200, s.opt.Scanner.Changes()) }))
+	s.mux.HandleFunc("GET /api/changes", s.api(func(w http.ResponseWriter, r *http.Request, _ session) {
+		rep := s.opt.Scanner.Changes()
+		s.reportJSON(w, r, &s.changesCache, rep, func() any { return rep })
+	}))
 	s.mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	s.mux.HandleFunc("GET /api/system", s.api(s.handleSystem))
+	s.mux.HandleFunc("GET /api/system/detail", s.api(s.handleSystemDetail))
 	s.mux.HandleFunc("GET /api/metrics", s.api(s.handleMetrics))
 	s.mux.HandleFunc("GET /api/netload", s.api(s.handleNetLoad))
 	s.mux.HandleFunc("POST /api/rescan", s.api(s.handleRescan))
@@ -569,7 +574,7 @@ func (s *Server) handleUFW(w http.ResponseWriter, r *http.Request, _ session) {
 	if snap == nil {
 		return
 	}
-	writeJSON(w, http.StatusOK, snap.UFW)
+	s.reportJSON(w, r, &s.ufwCache, snap.UFW, func() any { return snap.UFW })
 }
 
 // handleFail2ban отдаёт состояние fail2ban и статистику перебора паролей.
@@ -622,24 +627,49 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, _ session)
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request, _ session) {
-	snap := s.snapshot(w, r)
-	if snap == nil {
+	reply, ok := s.systemReport(w, r)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"findings": view.SortedSystem(snap), "host": snap.Host, "warnings": snap.Warnings})
-}
-
-// auditView — текущее состояние аудита конфигурации.
-func (s *Server) auditView() view.AuditView {
-	if s.opt.Audit == nil {
-		return view.BuildAudit(false, false, 0, nil)
+	if r.URL.Query().Get("summary") != "1" {
+		reply.write(w, r)
+		return
 	}
-	a := s.opt.Audit
-	return view.BuildAudit(true, a.Running(), a.Interval(), a.Report())
+	s.reportJSON(w, r, &s.systemSummaryCache, reply.etag, func() any {
+		report := reply.value.(systemReport)
+		items := make([]systemItem, 0, len(report.Findings))
+		for index, f := range report.Findings {
+			item := systemItem{Index: index, ID: f.ID, Title: f.Title, Path: f.Path, Risk: f.Risk, Suppressed: f.Suppressed, ReviewFirst: f.ReviewFirst}
+			if !f.ModTime.IsZero() {
+				item.ModTime = f.ModTime.Format(time.RFC3339Nano)
+			}
+			items = append(items, item)
+		}
+		return struct {
+			Overview view.SystemOverview `json:"overview"`
+			Groups   []view.SystemGroup  `json:"groups"`
+			Findings []systemItem        `json:"findings"`
+			Host     model.HostInfo      `json:"host"`
+			Warnings []i18n.Msg          `json:"warnings"`
+			Revision string              `json:"revision"`
+			Summary  bool                `json:"summary"`
+		}{report.Overview, report.Groups, items, report.Host, report.Warnings, reply.etag, true}
+	})
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, _ session) {
-	writeJSON(w, http.StatusOK, s.auditView())
+	var rep *model.AuditReport
+	var running bool
+	var interval time.Duration
+	if a := s.opt.Audit; a != nil {
+		rep, running, interval = a.Report(), a.Running(), a.Interval()
+	}
+	source := struct {
+		Report           *model.AuditReport
+		Running, Enabled bool
+		Interval         time.Duration
+	}{rep, running, s.opt.Audit != nil, interval}
+	s.reportJSON(w, r, &s.auditCache, source, func() any { return view.BuildAudit(source.Enabled, running, interval, rep) })
 }
 
 // handleAuditRun — «Проверить сейчас». Если проверка уже идёт, новая не
@@ -662,7 +692,11 @@ func (s *Server) handleLogins(w http.ResponseWriter, r *http.Request, _ session)
 	if snap == nil {
 		return
 	}
-	writeJSON(w, 200, map[string]any{"enabled": snap.Auth != nil, "report": snap.Auth})
+	var groups []view.LoginGroup
+	if snap.Auth != nil {
+		groups = view.GroupLogins(snap.Auth.Events)
+	}
+	writeJSON(w, 200, map[string]any{"enabled": snap.Auth != nil, "report": snap.Auth, "groups": groups})
 }
 func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request, _ session) {
 	snap := s.snapshot(w, r)

@@ -2,7 +2,7 @@ package i18n
 
 func init() {
 	add(map[string]entry{
-		"card.why":                    {"Почему требует внимания", "Why this needs attention"},
+		"card.why":                    {"Риск и последствия", "Risk and consequences"},
 		"card.legitimate":             {"Возможные штатные причины", "Possible legitimate causes"},
 		"card.related":                {"Связанные события (до 8 из последних 2000)", "Related events (up to 8 of the latest 2000)"},
 		"card.attack":                 {"ATT&CK: возможный контекст, не доказательство атаки", "ATT&CK: possible context, not proof of an attack"},

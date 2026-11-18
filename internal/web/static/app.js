@@ -126,17 +126,33 @@ async function copyText(text) {
 const state = {
   csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null, ufw: null,
   metrics: null, mrange: '1h', netload: null,
-  tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
+  refreshError: '', tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
+
+const reportCache = new Map();
+const cachedPaths = new Set(['/api/system?summary=1', '/api/audit', '/api/ufw', '/api/changes']);
 
 async function api(path, opts = {}) {
   const headers = { 'Accept': 'application/json', 'X-SSG-Lang': I18N.lang };
-  if (opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = state.csrf;
-  const r = await fetch(path, { credentials: 'same-origin', ...opts, headers });
-  if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
-  return data;
+  const get = !opts.method || opts.method === 'GET';
+  if (!get) { headers['X-CSRF-Token'] = state.csrf; reportCache.clear(); }
+  const cached = get && cachedPaths.has(path) ? reportCache.get(path) : null;
+  if (cached) headers['If-None-Match'] = cached.etag;
+  try {
+    const r = await fetch(path, { credentials: 'same-origin', ...opts, headers });
+    if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+    if (r.status === 304) {
+      if (!cached) throw new Error(tr('web.err.report'));
+      return cached.data;
+    }
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    const etag = r.headers.get('ETag');
+    if (get && cachedPaths.has(path)) {
+      if (etag) reportCache.set(path, { etag, data }); else reportCache.delete(path);
+    }
+    return data;
+  } catch (e) { reportCache.clear(); throw e; }
 }
 
 // ---------------------------------------------------------------------
@@ -318,6 +334,10 @@ function renderPorts() {
   ], rows, (e) => e.procKey && openCard(e.procKey), tr('web.ports.empty'));
 }
 
+function auditAttention(c) {
+  return c.change || !['pass', 'info', 'n/a'].includes(c.status);
+}
+
 function renderAudit() {
   const a = state.audit;
   if (!a) return;
@@ -335,12 +355,17 @@ function renderAudit() {
     const s = a.summary;
     $('audit-score').textContent = tr('web.audit.score', a.passed, a.total, s.fail, s.warn, s.info, s.na + s.unknown);
   }
+  if (a.enabled && a.ready && a.inventorySource) {
+    const src = a.inventorySource;
+    $('audit-when').textContent += ' · ' + (!src.ready ? tr('web.audit.inventory_pending') : src.incomplete ? tr('web.audit.inventory_incomplete', fmtTime(src.time)) : tr('web.audit.inventory_complete', fmtTime(src.time)));
+  }
   const q = $('a-q').value.trim().toLowerCase();
   const st = $('a-status').value;
   const grp = $('a-group').value;
   const rows = (a.checks || []).filter((c) => {
+    if (st === 'attention' && !q && !auditAttention(c)) return false;
     if (st === 'problems' && c.status !== 'fail' && c.status !== 'warn') return false;
-    if (st && st !== 'problems' && c.status !== st) return false;
+    if (st && st !== 'attention' && st !== 'problems' && c.status !== st) return false;
     if (grp && c.group !== grp) return false;
     if (q && ![c.id, tx(c.title), ...(c.evidence || []).map(tx)].join(' ').toLowerCase().includes(q)) return false;
     return true;
@@ -781,6 +806,29 @@ function renderHistory() {
   ], rows, (e) => e.key && openCard(e.key), tr('web.empty.events'));
 }
 
+function systemRows(s, groupKey) {
+  const findings = s.findings || [];
+  const groups = s.groups || [];
+  const selected = groups.find(g => g.key === groupKey);
+  if (selected) return selected.indices.map(i => findings[i]);
+  const heads = new Map(groups.map(g => [g.indices[0], g]));
+  const hidden = new Set(groups.flatMap(g => g.indices.slice(1)));
+  return findings.flatMap((f, i) => {
+    if (hidden.has(i)) return [];
+    const g = heads.get(i);
+    return [g ? { ...f, group: g, title: tr('web.system.group', g.indices.length), path: g.directory, modTime: '' } : f];
+  });
+}
+
+function systemFindingTitle(f) {
+  if (!f.group) return f.reviewFirst && !f.suppressed ? h('div', null, h('strong', null, tr('card.review_first')), h('div', null, tx(f.title))) : tx(f.title);
+  return h('button', { type: 'button', class: 'secondary', onclick: () => {
+    state.systemGroup = f.group.key;
+    state.showAll['t-system'] = false;
+    renderSystem();
+  } }, tx(f.title));
+}
+
 function renderSystem() {
   const s = state.system;
   if (!s) return;
@@ -793,14 +841,30 @@ function renderSystem() {
   );
   const warns = s.warnings && s.warnings.length ? s.warnings.map(tx) : [tr('web.no_limits')];
   $('sys-warn').replaceChildren(...warns.map((w) => h('li', null, w)));
+  const selected = (s.groups || []).find(g => g.key === state.systemGroup);
+  if (!selected) state.systemGroup = '';
+  $('sys-group-nav').replaceChildren(...(selected ? [
+    h('button', { type: 'button', class: 'secondary', onclick: () => {
+      state.systemGroup = '';
+      state.showAll['t-system'] = false;
+      renderSystem();
+    } }, tr('web.system.back')),
+    h('p', null, selected.directory, ' · ', selected.owner, ' · ', tr('web.system.group', selected.indices.length)),
+  ] : []));
+  const overview = s.overview;
+  $('sys-overview').textContent = overview ? tr('web.overview.system', overview.attention, overview.incomplete, overview.details.length) : '';
+  const hidden = new Set((overview?.details || []).map(i => s.findings[i]));
+  const rows = systemRows(s, state.systemGroup).filter(f => $('sys-all').checked || (f.group ? f.group.indices.some(i => !hidden.has(s.findings[i])) : !hidden.has(f)));
   renderTable('t-system', [
     { t: tr('web.col.risk'), v: (f) => riskNum(f.risk), r: (f) => riskBadge(f.risk), desc: true },
-    { t: tr('tui.title.check'), v: (f) => tx(f.title), r: (f) => tx(f.title), c: 'wrap' },
+    { t: tr('tui.title.check'), v: (f) => tx(f.title), r: systemFindingTitle, c: 'wrap' },
     { t: tr('tui.k.file'), v: (f) => f.path, r: (f) => f.path, c: 'mono' },
     { t: tr('tui.k.modified'), v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
+    ...(s.summary ? [{ t: tr('tui.title.details'), v: () => 0, r: (f) => f.group ? '' : h('button', {type:'button', class:'small secondary', onclick:()=>openSystemDetail(f.index,s.revision)}, tr('tui.title.details')) }] : [
     { t: tr('tui.h.facts'), v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))), c: 'wrap' },
     { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => h('div', {}, tx(f.recommendation), findingContext(f)), c: 'wrap' },
-  ], s.findings || [], null, tr('web.empty.system'));
+    ]),
+  ], rows, null, tr('web.overview.empty'));
 }
 
 function yesNo(v) { return v ? tr('tui.yes') : tr('tui.no'); }
@@ -867,6 +931,15 @@ async function openCard(key) {
   }
 }
 
+async function openSystemDetail(index, revision) {
+  try {
+    const finding = await api('/api/system/detail?index=' + encodeURIComponent(index) + '&revision=' + encodeURIComponent(revision));
+    cardData = { systemFinding: finding };
+    renderCard(cardData);
+    $('modal').classList.remove('hidden');
+  } catch (e) { toast(tr('web.card_error', e.message)); }
+}
+
 function closeCard() {
   $('modal').classList.add('hidden');
   cardData = null;
@@ -877,6 +950,14 @@ function section(title, ...content) { return h('section', null, h('h3', null, ti
 
 function renderCard(data) {
   const body = $('m-body');
+  if (data.systemFinding) {
+    const f = data.systemFinding;
+    $('m-title').replaceChildren(riskBadge(f.risk), tx(f.title));
+    body.replaceChildren(h('p', {class:'mono'}, f.path),
+      section(tr('tui.h.facts'), h('ul', null, (f.evidence || []).map(e=>h('li',{class:'mono'},tx(e))))),
+      findingContext(f), section(tr('tui.h.recommendation'), tx(f.recommendation)));
+    return;
+  }
   if (data.exited) {
     const t = data.track;
     $('m-title').replaceChildren(tr('web.card.exited_title', t.pid, t.name));
@@ -944,10 +1025,12 @@ function renderCard(data) {
 }
 
 function findingContext(f) {
-  return h('details', null, h('summary', null, tr('card.why')),
-    h('p', null, tx(f.why)), h('b', null, tr('card.legitimate')), h('p', null, tx(f.legitimate)),
+  return h('details', {open: f.reviewFirst && !f.suppressed}, h('summary', null, tr('card.why')),
+    h('p', null, tx(f.why)),
+    f.confidence ? h('div', null, h('b', null, tr('card.confidence')), h('p', null, tx(f.confidence))) : '',
+    (f.verifyCommands || []).length ? h('div', null, h('b', null, tr('card.verify')), h('pre', null, f.verifyCommands.join('\n'))) : '',
+    h('b', null, tr('card.legitimate')), h('p', null, tx(f.legitimate)),
     (f.attack || []).length ? h('div', null, tr('card.attack'), ' ', (f.attack || []).filter(id => /^T[0-9]{4}(\.[0-9]{3})?$/.test(id)).map(id => h('a', {href: 'https://attack.mitre.org/techniques/' + id.replace('.', '/') + '/', target: '_blank', rel: 'noopener noreferrer'}, id + ' '))) : '',
-    h('pre', null, (f.verifyCommands || []).join('\n')),
     (f.relatedEvents || []).length ? h('div', null, tr('card.related'), h('ul', null, f.relatedEvents.map(e => h('li', null, fmtTime(e.time) + ' · ' + tx(e.details))))) : '');
 }
 
@@ -958,6 +1041,7 @@ function findingBlock(f) {
       f.category !== 'info' ? h('span', { class: 'tag' }, tr('web.card.points', f.weight)) : '',
       f.strong ? h('span', { class: 'tag strong' }, tr('web.card.strong')) : '',
       f.suppressed ? h('span', { class: 'tag' }, tr('tui.suppressed')) : ''),
+    h('b', null, tr('tui.h.facts')),
     h('ul', { class: 'ev' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))),
     findingContext(f), allowlistProposal(f.allowlistProposal),
     tx(f.recommendation) ? h('div', { class: 'rec' }, '→ ' + tx(f.recommendation)) : '');
@@ -1027,8 +1111,9 @@ function renderSummary() {
       h('div', { class: 'lbl' }, tr('web.stat.metrics'))) : '',
   );
   const banner = $('banner');
-  if (s.warnings && s.warnings.length) {
-    banner.replaceChildren(h('b', null, tr('web.limits') + ' '), s.warnings.map(tx).join(' '));
+  const warnings = [...(s.warnings || []).map(tx), ...(s.stale ? [tr('web.data_stale')] : []), ...(state.refreshError ? [state.refreshError] : [])];
+  if (warnings.length) {
+    banner.replaceChildren(h('b', null, tr('web.limits') + ' '), warnings.join(' '));
     banner.classList.remove('hidden');
   } else banner.classList.add('hidden');
   $('btn-logout').classList.toggle('hidden', !s.auth);
@@ -1045,8 +1130,12 @@ function renderSummary() {
   $('cnt-fail2ban').textContent = s.fail2ban ? s.fail2ban.banned : 0;
 }
 
-function renderAll() {
+let renderedReport = null;
+function renderAll(skipUnchanged = false) {
   renderSummary();
+  const report = ['system','audit','ufw','changes'].includes(state.tab) ? state[state.tab] : null;
+  if (skipUnchanged && report && renderedReport && renderedReport.data === report && renderedReport.tab === state.tab && renderedReport.lang === I18N.lang) return;
+  renderedReport = {data:report,tab:state.tab,lang:I18N.lang};
   switch (state.tab) {
     case 'suspicious': renderSuspicious(); break;
     case 'all': renderAllProcs(); break;
@@ -1080,7 +1169,7 @@ case 'learning': state.learning = await api('/api/learning'); break;
 case 'changes': state.changes = await api('/api/changes'); break;
 case 'timeline': state.timeline = await api('/api/timeline?since=48h'); break;
 case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
-    case 'system': state.system = await api('/api/system'); break;
+    case 'system': state.system = await api('/api/system?summary=1'); break;
     case 'metrics': state.metrics = await api('/api/metrics?range=' + encodeURIComponent(state.mrange)); break;
     case 'netload': state.netload = await api('/api/netload'); break;
   }
@@ -1108,9 +1197,14 @@ async function refresh() {
       state.processes = (await api('/api/processes')).processes || [];
     }
     await loadTabData();
-    renderAll();
+    state.refreshError = '';
+    renderAll(true);
   } catch (e) {
-    if (e.message !== 'unauthorized') toast(tr('web.refresh_error', e.message));
+    if (e.message !== 'unauthorized') {
+      state.refreshError = tr('web.refresh_error', e.message);
+      renderSummary();
+      toast(state.refreshError);
+    }
   } finally {
     loading = false;
   }
@@ -1156,6 +1250,7 @@ async function init() {
 
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   $('m-range').addEventListener('change', (e) => { state.mrange = e.target.value; switchTab('metrics'); });
+  $('sys-all').addEventListener('change', renderSystem);
   for (const id of ['proc-filters', 'net-filters', 'ports-filters', 'audit-filters', 'f2b-filters', 'hist-filters']) {
     const form = $(id);
     form.addEventListener('input', () => { state.showAll = {}; renderAll(); });
@@ -1189,7 +1284,7 @@ async function init() {
     try {
       const r = await api('/api/audit/run', { method: 'POST' });
       toast(r.started ? tr('web.audit.started') : tr('web.audit.already'));
-      if (state.audit) { state.audit.running = true; renderAudit(); }
+      if (state.audit) { state.audit = {...state.audit, running:true}; renderAudit(); }
       setTimeout(refresh, 1000);
     } catch (e) { toast(e.message); }
   });
@@ -1222,20 +1317,64 @@ async function init() {
 
 init();
 
+function loginRows(events, groups) {
+ // Старые службы не присылают группы; исходные события остаются доступны.
+ groups = groups || events.map((e, i) => ({indices: [i], first: e.time, last: e.time, risk: e.risk})).reverse();
+ return groups.map(g => ({...events[g.indices[0]], time: g.last, risk: g.risk, group: g}));
+}
+
+function loginGroupDetails(row, events, opened) {
+ const g = row.group;
+ const key = JSON.stringify([row.ip, row.source, row.method, row.kind, g.first]);
+ const body = h('div');
+ const details = h('details', {}, h('summary', {}, tr('web.overview.group', g.indices.length, fmtTime(g.first), fmtTime(g.last)), ' · ', row.source || ''), body);
+ details.dataset.group = key;
+ let all = opened.get(key) === true;
+ details.dataset.all = String(all);
+ let loaded = false;
+ const load = () => {
+  if (!details.open || loaded) return;
+  loaded = true;
+  const indices = all ? g.indices : g.indices.slice(0, PAGE);
+  for (const i of indices) {
+   const e = events[i];
+   body.append(h('dl', {class: 'kv'}, ...kv(tr('web.col.time'), fmtTime(e.time)), ...kv(tr('tui.title.event'), e.kind),
+    ...kv(tr('tui.k.user'), e.user), ...kv('IP', e.ip), ...kv(tr('web.auth.method'), e.method),
+    ...kv(tr('web.auth.key'), [e.fingerprint, e.keyComment].filter(Boolean).join(' ')), ...kv('TTY', e.tty), ...kv('PID', e.pid),
+    ...kv(tr('tui.k.file'), e.source), ...kv(tr('web.col.risk'), e.risk)),
+    h('p', {}, e.detail || '', ' ', (e.findings || []).join(', '), e.end ? ' '+fmtTime(e.end) : ''));
+  }
+  if (indices.length < g.indices.length) body.append(h('p', {}, tr('web.shown', indices.length, g.indices.length), ' ',
+   h('button', {type: 'button', class: 'small secondary', onclick: () => {
+    all = true; details.dataset.all = 'true'; loaded = false; body.replaceChildren(); load();
+   }}, tr('web.show_all'))));
+ };
+ details.addEventListener('toggle', load);
+ details.open = opened.has(key);
+ load();
+ return details;
+}
+
 function renderLogins() {
  const a = state.auth?.report;
  $('auth-notes').replaceChildren(...(a?.warnings || []).map(w => h('p', {}, tx(w))));
  if (!a) $('auth-notes').textContent = tr('web.auth.disabled');
+ else {
+  $('auth-notes').prepend(h('p', {}, tr('web.overview.logins', (a.events || []).length, fmtTime(a.since), fmtTime(a.time))), h('p', {}, tr('web.overview.login_groups')));
+  if (a.incomplete) $('auth-notes').append(h('p', {}, tr('web.overview.incomplete')));
+ }
+ const opened = new Map([...$('t-logins').querySelectorAll('details[open]')].map(e => [e.dataset.group, e.dataset.all === 'true']));
+ const rows = loginRows(a?.events || [], state.auth?.groups);
  renderTable('t-logins', [
  {t: tr('web.col.time'), v:e=>e.time, r:e=>fmtTime(e.time)},
  {t: tr('tui.title.event'), v:e=>e.kind, r:e=>e.kind},
- {t: tr('tui.k.user'), v:e=>e.user || '', r:e=>e.user || ''},
+ {t: tr('tui.k.user'), v:e=>e.user || '', r:e=>e.group.indices.length > 1 ? '—' : e.user || ''},
  {t:'IP',v:e=>e.ip || '',r:e=>e.ip || ''},
  {t:tr('web.auth.method'),v:e=>e.method || '',r:e=>e.method || ''},
- {t:tr('web.auth.key'),v:e=>e.fingerprint || '',r:e=>[e.fingerprint,e.keyComment].filter(Boolean).join(' ')},
- {t:tr('tui.title.details'),v:e=>e.detail || '',r:e=>h('div',{},e.detail || '',h('div',{},e.source),h('div',{},(e.findings || []).join(', ')),e.end ? h('div',{},fmtTime(e.end)) : '')},
+ {t:tr('web.auth.key'),v:e=>e.fingerprint || '',r:e=>e.group.indices.length > 1 ? '—' : [e.fingerprint,e.keyComment].filter(Boolean).join(' ')},
+ {t:tr('tui.title.details'),v:e=>e.group.indices.length,r:e=>loginGroupDetails(e, a.events, opened)},
  {t:tr('web.col.risk'),v:e=>riskNum(e.risk),r:e=>riskBadge(e.risk)}
- ], [...(a?.events || [])].reverse(), null, tr('web.empty.events'));
+ ], rows, null, tr('web.empty.events'));
 
  for (const [id, rows, label] of [['t-auth-ips',a?.failedIPs,'IP'],['t-auth-users',a?.failedUsers,tr('tui.k.user')],['t-auth-hours',a?.failedHours,'UTC']]) {
  renderTable(id,[{t:label,v:e=>e.name,r:e=>e.name},{t:tr('web.auth.count'),v:e=>e.count,r:e=>e.count}],rows || [],null,tr('web.empty.events'));
@@ -1270,7 +1409,7 @@ function renderChanges() {
   box.append(h('p',null,tr('web.changes.period',fmtTime(d.from),fmtTime(d.to))));
   for (const w of d.warnings || []) box.append(h('p',null,tx(w)));
   box.append(h('table',null,h('thead',null,h('tr',null,[tr('web.col.group'),tr('tui.k.file'),tr('web.changes.kind'),tr('web.changes.before'),tr('web.changes.after')].map(x=>h('th',null,x)))),
-   h('tbody',null,(d.changes || []).map(c=>h('tr',null,[c.section,c.key,c.kind,c.before || '',c.after || ''].map(x=>h('td',{class:'mono wrap'},x)))))));
+   h('tbody',null,(d.changes || []).map(c=>h('tr',null,[h('div',null,c.reviewFirst ? h('strong',null,tr('card.review_first')) : '',h('div',null,c.section)),c.key,c.kind,c.before || '',c.after || ''].map(x=>h('td',{class:'mono wrap'},x)))))));
  }
 }
 

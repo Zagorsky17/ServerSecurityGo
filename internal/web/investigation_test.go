@@ -9,6 +9,7 @@ import (
 	"github.com/Zagorsky17/ServerSecurityGo/internal/history"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/scanner"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,6 +55,10 @@ func TestInvestigationAccessAndWindow(t *testing.T) {
 func TestAuthenticationPipelineToAPI(t *testing.T) {
 	now := time.Now()
 	tree := fakeproc.Demo(now)
+	for i := 1; i <= 2; i++ {
+		at := now.UTC().Truncate(15 * time.Minute).Add(-15*time.Minute + time.Duration(i)*time.Minute)
+		tree.HostFiles["var/log/auth.log"] += at.Format(time.RFC3339) + " host sshd[42]: Failed password for test-user from 192.0.2.177 port 12345 ssh2\n"
+	}
 	tree.HostFiles["var/log/auth.log"] += now.Add(-time.Minute).UTC().Format(time.RFC3339) + " host sudo: deploy : TTY=pts/0 ; COMMAND=/bin/app --password pipeline-canary\n"
 	proc, host, e := tree.Write(t.TempDir())
 	if e != nil {
@@ -83,10 +88,33 @@ func TestAuthenticationPipelineToAPI(t *testing.T) {
 	}
 	var r struct {
 		Enabled bool              `json:"enabled"`
+		Groups  []view.LoginGroup `json:"groups"`
 		Report  *model.AuthReport `json:"report"`
 	}
 	if e = json.Unmarshal(w.Body.Bytes(), &r); e != nil || !r.Enabled || r.Report == nil || len(r.Report.Events) < 2 {
 		t.Fatalf("%+v %v", r, e)
+	}
+
+	grouped := false
+	seen := make([]int, len(r.Report.Events))
+	for _, g := range r.Groups {
+		for _, i := range g.Indices {
+			if i < 0 || i >= len(seen) {
+				t.Fatal("invalid group index", i)
+			}
+			seen[i]++
+		}
+		if len(g.Indices) == 2 && r.Report.Events[g.Indices[0]].IP == "192.0.2.177" {
+			grouped = true
+		}
+	}
+	for _, n := range seen {
+		if n != 1 {
+			t.Fatal("API group lost or duplicated raw record")
+		}
+	}
+	if !grouped {
+		t.Fatal("repeated failures not grouped", r.Groups)
 	}
 	found := false
 	for _, f := range r.Report.Findings {

@@ -166,6 +166,12 @@ ssh -L 8090:127.0.0.1:8090 root@<服务器 IP>
 
 ## 功能
 
+### 诊断摘要
+
+审计默认显示失败、警告、不可用检查和变更检查。选择 **All results（所有结果）** 可查看通过项和建议。系统摘要保留不完整检查及带有关联历史的发现；其他 INFO 项可通过 **Show all results, including INFO（显示所有结果，包括 INFO）** 查看。在 TUI 的审计和系统面板中，`i` 切换完整列表，搜索也包含详情。UFW 设置和读取限制显示在配置文件内容之前。
+
+失败登录记录按 IP、日志来源和认证方法分组，使用固定的 15 分钟 UTC 时间区间。计数表示日志记录数，而非唯一尝试次数：不同日志可能描述同一次尝试。成功登录以及缺少来源、IP 或时间的记录分别显示。展开 Web 分组或在 TUI 中选择分组即可查看全部事件；`Y` 将分组复制为 JSON 数组（单个事件仍为对象）。Web 分组详情默认显示最多 400 条记录，点击 **Show all（显示全部）** 可查看其余记录。API 和历史中的原始事件与发现均保留。
+
 **数据收集**读取 `/proc` 及相关来源：
 
 | 数据 | 来源 |
@@ -329,6 +335,8 @@ sshd 配置的解析方式与 sshd 本身一致：`Include` 就地展开，每�
 
 ### UFW 与 PID 扫描耗时
 
+在 TUI 中，UFW 的第一项是 **Ports and rules summary（端口与规则汇总）**：显示保存的状态、主要策略、监听及发布端口的地址和进程，以及按文件顺序列出的 IPv4/IPv6 用户规则声明。汇总不受“端口”筛选条件影响；UFW 筛选仅作用于源文件列表。Enter 切换到详情滚动，`Y` 将 UFW 和端口数据复制为 JSON。汇总最多显示 100 个端口和 100 条声明，超出时明确提示。before/after 规则及无 tuple 的手写规则仍可在源文件中查看；监听端口本身不代表外部网络可达。
+
 **UFW** 位于 fail2ban 后面（未安装 fail2ban 时位于审计后面）。显示已保存的入站、出站和转发策略、IPv6、日志、应用程序配置、conntrack 模块及 sysctl 文件。可以查看 `ufw.conf`、`/etc/default/ufw`、`before/user/after.rules` 及其 IPv6 版本、`before/after.init`、`sysctl.conf`、`IPT_SYSCTL` 指定的文件和 `applications.d` 配置的完整内容。TUI 中选择文件后按 Enter 滚动详情；`/` 按路径和内容过滤，`y` 复制路径，`Y` 复制 JSON。网页中展开文件即可。API 为 `GET /api/ufw`，采用与其他接口相同的授权机制。
 
 这里展示磁盘上的配置，文件修改可能尚未生效；不验证内核当前规则或 Docker 的第三方规则。读取时不执行命令，每个文件限制 1 MiB，总计 4 MiB，应用配置最多 1000 个；读取错误、超限和必需文件缺失会明确显示。缺失设置不会被假定的默认值代替。[UFW 处理顺序](https://manpages.ubuntu.com/manpages/noble/man8/ufw-framework.8.html) 为 before → user → after，IPv4 和 IPv6 分别处理。
@@ -442,7 +450,7 @@ Docker 检查读取 `config.v2.json` 与 `hostconfig.json`，支持自定义 `da
 
 - **内核级 rootkit** 可以直接在 `/proc` 中隐藏进程、文件和套接字。扫描器只能看到内核展示的内容。使用 `LD_PRELOAD` 和 `/etc/ld.so.preload` 的用户态 rootkit 不会影响扫描器本身（它是不依赖 libc 的静态 Go 二进制文件），但可能篡改 `ps`、`ls` 等工具的输出。
 - **是快照，而不是事件。** 扫描每隔 `SSG_SCAN_INTERVAL`（默认 30 秒）运行一次，因此存活时间短于该间隔的进程可能被漏掉。要完整审计进程启动，需要 auditd 或 eBPF。
-- **不分析文件内容：** 没有特征码、哈希或 IP 信誉库。命令行模式（`stratum+tcp`、`/dev/tcp/`）通过模板匹配，可以通过改名或混淆绕过。
+- **有限的文件分析。** 完整性检查覆盖选定的软件包文件；ELF 分析和可选的 Webshell 检查采用有资源限制的启发式方法。它们不会检查所有文件，也不提供通用恶意软件特征库。不使用外部 IP 信誉服务。命令行模式（`stratum+tcp`、`/dev/tcp/`）可以通过改名或混淆绕过。
 - **权限。** 没有 root 权限时，无法读取其他用户进程的 exe、cwd、fd 和 environ。在 `/proc` 使用 `hidepid`、设置 `kernel.yama.ptrace_scope=3` 或使用严格的 AppArmor、SELinux 策略时也是如此。扫描器会在横幅和进程卡片中提示这一点。
 - **容器。** 在容器内部，扫描器只能看到该容器的 PID 命名空间，因此请在宿主机上运行。容器内进程的 exe 和 cwd 路径是相对于容器文件系统的，因此与宿主机系统路径的比较可能不准确。
 - **误报**可能出现在开发工具（从 `/tmp` 执行 `go run`、CI 构建）、位于非标准目录的自定义服务、合法挖矿以及 `curl | sh` 安装脚本上。白名单就是为这些情况准备的。
@@ -667,6 +675,12 @@ go run ./cmd/serversecuritygo demo         # 在浏览器中：http://127.0.0.1:
 
 ## 构建与测试
 
+下列命令在模拟 `/proc` 数据和临时磁盘历史上执行有时限的重复测试，检查事件数量稳定性及历史重新加载。它不评估真实环境中的检测准确率，也不能代替对运行服务的长期观察。测试目录自动清理。普通测试套件执行 30 次迭代，不等待。
+
+```bash
+SSG_TEST_SOAK_DURATION=20m go test ./internal/scanner -run '^TestDiagnosticStability$' -count=1 -timeout 25m -v
+```
+
 需要 Go 1.27.4 或更高版本；没有外部模块。
 
 ```bash
@@ -769,6 +783,10 @@ serversecuritygo collect --output /var/backups/serversecuritygo/evidence.tar.gz
 
 独立文件扫描默认每六小时执行一次，每秒 2,000 个路径。配置项为 `SSG_FS_SCAN_INTERVAL`、`SSG_FS_SCAN_RATE`，以及逗号分隔的 `SSG_FS_SCAN_EXCLUDE` 和额外挂载根目录 `SSG_FS_SCAN_MOUNTS`。默认覆盖根文件系统与 `/dev/shm`，不跨越其他文件系统、不跟随符号链接；排除 `/proc`、`/sys`、`/dev`（`/dev/shm` 除外）、`/run`、Docker/容器存储以及网络/FUSE 挂载。限制为 200 万路径、10,000 个特权文件/发现、128 层和 30 分钟。超限、取消或读取失败均明确标记不完整。首个完整清单保存在 `baseline.json`，新增权限生成 `fs_privilege_new`。软件包归属不是可信签名。新增 ID：`fs_suid_inventory`、`fs_capabilities`、`fs_world_writable_system`、`fs_unowned`、`fs_privilege_new`、`fs_inventory_pending`、`fs_inventory_unavailable`、`new_public_listener`、`ports_baseline_unavailable`。
 
+每次文件扫描完成后，服务自动刷新四项相关检查：`fs_world_writable_system`、`fs_unowned`、`fs_suid_inventory` 和 `fs_capabilities`。本地 TUI 同样适用。刷新复用已收集的清单，不重新扫描文件，也不重读其他配置。定时及手动完整审计保持可用。执行串行化，通知合并，同一报告不会重复处理。清单不完整且没有已确认的危险发现时保持 `unknown`；已发现的 HIGH/CRITICAL 问题仍为 `fail`。
+
+Web 和 TUI 分别显示完整审计时间、所用文件清单的采集开始时间及其在配置范围内的完整性，以便判断数据年龄；完整审计时间不代表文件数据同样新。在服务 API 中，`inventorySource` 包含 `ready`、`time` 和 `incomplete`；审计及摘要中的 `updatedAt` 在部分刷新后也会改变，触发 TUI 更新缓存。不含这些字段的旧服务仍然兼容，但无法单独显示数据源时间。此机制不新增外部请求或配置项。
+
 ```sh
 serversecuritygo audit --full --format json --output /root/audit.json
 serversecuritygo baseline save --name before-upgrade
@@ -785,6 +803,14 @@ serversecuritygo baseline accept --ports
 
 离线支持表于 2026-11-18 根据 [Ubuntu](https://ubuntu.com/project/docs/release-team/list-of-releases/) 和 [Debian](https://www.debian.org/releases/) 核对，区分 Ubuntu 标准支持、Debian LTS 与需管理员确认的 Pro/ESM/ELTS。文件 capabilities 遵循 [Linux 格式](https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h)，支持版本 1–3。
 
+### 变化优先级与判断依据
+
+系统列表先显示 CRITICAL，再显示未被抑制的 `new_public_listener`、`fs_privilege_new` 和 `ssh_keys_recent`，其余发现按风险排列。**Change — review first** 只决定审核顺序，不提高风险等级，也不证明攻击。快照比较优先显示端口、SSH 密钥、SUID/SGID 和 capabilities 的变化；不完整或范围不兼容的部分不会生成这些差异。
+
+Web 和 TUI 卡片分别显示观察事实、风险与后果、可信依据与限制、验证命令。`fs_privilege_new` 显示变化前后的权限；基线特权文件列表中没有记录，不代表文件本身以前不存在。软件包归属不会消除警告。`ssh_keys_recent` 仅依据 mtime，不能确认密钥变化：应将指纹与批准的密钥和完整且兼容的快照核对。新的公网监听也不能证明外部可达。
+
+可信说明描述依据与限制，不给出攻击概率百分比。命令仅展示，路径经过 shell 引号转义。`explain` 也输出这些说明。JSON 在发现上下文中增加 `reviewFirst` 和 `confidence`，在快照变化中增加 `reviewFirst`。旧服务的数据不包含新增说明和标记。
+
 ### 允许列表审核、学习模式和新增检测
 
 进程发现卡片中的 **This is legitimate** 提供限定可执行文件、用户和规则 ID 的 JSON 片段。`"exact": true` 防止文件名中的 `*`、`?`、`[` 被解释为通配符。请审核后自行将规则合并到现有允许列表；复制不会更改任何配置。CRITICAL 进程、强信号、信息性发现和已抑制发现不会生成建议。系统发现与审计没有自动允许列表操作。
@@ -793,7 +819,7 @@ serversecuritygo baseline accept --ports
 
 新增 ID：`bpf_unexpected`、`raw_packet_socket`、`iface_promisc`、`exe_packed`、`exe_static_in_temp` 和可选的 `webshell_pattern`。eBPF 仅从可见进程描述符及 `fdinfo` 读取，不能枚举所有内核程序或确认挂载状态。AF_PACKET 表按 inode 关联可见描述符所有者；本程序不捕获数据包。已知软件包工具、root 所有且组和其他用户不可写的可执行文件会降低相关评分，但软件包归属不能证明完整性。混杂模式也用于网桥和虚拟化。现有独立类别评分继续生效；单个强类别不能独自使进程达到 HIGH。
 
-ELF 检查在启动时和每小时独立运行：最多 256 个不同可执行文件，每文件 32 MiB、总计 64 MiB、一分钟工作预算。缓存要求相同进程代次、路径、设备/inode、ctime、大小和 mtime，且不超过两小时。尚未检查的新进程或已变化进程会明确标记为覆盖不完整。UPX 标记需要核实来源；仅高熵属于 INFO。文件不会被执行或解包。eBPF 每进程最多读取 128 个描述符、每扫描 2048 个；AF_PACKET 每扫描最多 128 个命名空间和 10000 行。缺失覆盖使用 `advanced_pending`、`advanced_process_pending`、`advanced_unavailable`、`packet_inventory_unavailable`、`promisc_unavailable` 表示。
+ELF 检查在启动时和每小时独立运行：最多 256 个不同可执行文件，每文件 32 MiB、总计 64 MiB、一分钟工作预算。缓存要求相同进程代次、路径、设备/inode、ctime、大小和 mtime，且不超过两小时。尚未检查的新进程或已变化进程会明确标记为覆盖不完整。UPX 检测要求 ELF 架构、加载器/程序头和文件末尾附近带校验和的打包头相互一致（`upx-header`）。仅有 `UPX!` 字符串或 `UPX` 节名称不会提高风险。支持打包头版本 11–14，末尾最多允许 8 KiB 零填充；修改过或不支持的布局可能漏检。匹配后仍需核实文件来源；仅高熵属于 INFO。文件不会被执行或解包。eBPF 每进程最多读取 128 个描述符、每扫描 2048 个；AF_PACKET 每扫描最多 128 个命名空间和 10000 行。缺失覆盖使用 `advanced_pending`、`advanced_process_pending`、`advanced_unavailable`、`packet_inventory_unavailable`、`promisc_unavailable` 表示。
 
 网页木马检查默认关闭：`SSG_WEBSHELL_ENABLED=false`。开启后，仅在观察到 nginx、Apache/httpd 或 PHP-FPM 时运行。读取本地配置中的静态 `root`/`DocumentRoot` 路径及 `/var/www`，检查 `SSG_WEBSHELL_DAYS` 天内修改的 `.php`、`.jsp`、`.aspx`；默认 7 天，范围 1–365。限制为 32 个根路径、100000 个路径、每内容文件 1 MiB、内容总量 16 MiB、1000 条发现；配置查找最多 256 个文件，每个 256 KiB。不跟随符号链接；变量路径不受支持并会报告不完整；容器内部路径可能不可见。发现仅包含模式 ID，不包含源代码或提取的秘密。INFO/MEDIUM 匹配需要人工审核，合法管理代码也可能匹配。与 `web_spawns_shell` 的关联只提供上下文，不证明该文件触发执行。
 
@@ -811,3 +837,19 @@ serversecuritygo doctor --format json --output /root/doctor.json
 SARIF 2.1.0 是 `scan`、`audit`、`triage` 的本地导出，包含规则 ID、级别、转义文件 URI、`properties.attack` 中的 ATT&CK ID、明确的允许列表抑制和运行不完整状态。审计通过、信息性、未知和不适用结果分别表示。原有退出码和风险过滤仍然有效。程序不会上传报告或连接外部集成；报告文件权限为 600。
 
 `explain` 只读取内置规则和检查目录，不扫描主机；参考文本中的 `{N}` 由具体发现提供数值。`doctor` 只读取安装路径及权限、systemd 主单元文件、最多 32 个其他进程的样本、auth.log 可用性、内核版本和 dpkg 元数据，不执行命令或修改权限。它不能证明服务就绪、已加载单元及 drop-in 正确、可访问全部 PID 或已修复 CVE；建议文本说明后续核查。通过 `SSG_HOST_ROOT` 检查磁盘映像时，不会默默使用工作站默认的 `/proc`。网页和 TUI 进程搜索包含规则 ID、用户、容器及本地/远程端口。
+
+### 文件发现分组
+
+“System”部分按目录和 UID/GID 将重复的 `fs_unowned` 发现分组。此标识表示 UID 或 GID 未出现在本地 `/etc/passwd` 和 `/etc/group` 中，不表示文件没有软件包归属，也不能单独证明系统已被入侵。分组目录最多取父路径的前三层，例如 `/usr/local/include/node/a.h` 归入 `/usr/local/include`。不同风险级别和抑制状态分别显示；单条记录、无法识别的证据格式及其他发现类型仍保留独立行。
+
+在网页中点击组标题查看原始发现，通过表格上方的按钮返回分组。在 TUI 中按 Enter 打开文件列表，再按 Enter 查看所选文件详情；在文件列表按左箭头或 Esc 返回分组。`/` 搜索所有原始路径、发现 ID、风险级别和证据，包括 UID/GID。`y` 复制分组目录或所选文件路径，`Y` 复制该组或单条发现的 JSON；可复制的数据量受终端剪贴板容量限制。数据刷新时，只要该组仍存在，就保留当前打开的组。
+
+分组仅改变显示方式，原始发现、历史、风险评级和 CLI 报告均保留。`GET /api/system` 的 `findings` 数组仍包含全部发现；新增 `groups` 数组包含 `key`（不透明标识）、`directory`、`owner` 和 `indices`，其中索引从零开始，指向同一响应中的 `findings`。TUI 连接旧服务时也能生成分组；网页在缺少 `groups` 时显示原有列表。
+
+### 大型报告刷新
+
+系统发现、审计、UFW 和快照比较支持带 `ETag` / `If-None-Match` 的条件 GET。未变化的报告返回无正文的 `304`，Web 与 TUI 复用已解析数据。缓存仅驻留内存，HTTP 响应仍为 `Cache-Control: no-store`。服务端只保留五种表示各自的最新版本（完整/简要系统报告、审计、UFW、变化），每种 JSON 上限 8 MiB；更大的响应不保存在服务端缓存中。不可变源结构也保留到缓存替换时。事实、警告、审计状态或数据完整性变化时，即使完整审计时间不变，响应也会更新。
+
+Web 使用 `/api/system?summary=1` 获取风险、标题、ID 和路径。点击 **Details** 后，通过 `/api/system/detail?index=N&revision=REVISION` 获取事实、建议和命令；参数来自列表响应。如果报告已变化，服务端返回 `409` 并提示刷新列表。完整 `/api/system` 继续供 TUI 和其他客户端使用。TUI 首次获取完整报告，之后使用条件请求；进程卡片仍在选择进程时加载。不支持 ETag 或简要表示的旧服务继续传输完整数据。
+
+每次刷新仍获取 `/api/status`。`304` 仅表示报告未变化，不代表扫描数据仍然新鲜；过期数据、不完整来源和连接错误会明确显示。Web 自动刷新时不重建未变化的表格，但更新摘要；筛选、排序和语言切换仍会重绘。动态进程、事件和指标不使用此缓存。

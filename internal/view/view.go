@@ -295,10 +295,19 @@ func Fail2ban(snap *model.Snapshot) *model.Fail2banReport {
 	return &r
 }
 
-// SortedSystem возвращает системные находки по убыванию риска.
+// Критические находки идут первыми, затем важные изменения, затем остальные по риску.
 func SortedSystem(snap *model.Snapshot) []model.SystemFinding {
 	sys := append([]model.SystemFinding(nil), snap.System...)
-	sort.SliceStable(sys, func(i, j int) bool { return sys[i].Risk > sys[j].Risk })
+	sort.SliceStable(sys, func(i, j int) bool {
+		x, y := sys[i], sys[j]
+		if (x.Risk == model.RiskCritical) != (y.Risk == model.RiskCritical) {
+			return x.Risk == model.RiskCritical
+		}
+		if (x.ReviewFirst && !x.Suppressed) != (y.ReviewFirst && !y.Suppressed) {
+			return x.ReviewFirst && !x.Suppressed
+		}
+		return x.Risk > y.Risk
+	})
 	return sys
 }
 
@@ -395,27 +404,30 @@ func (c *AuditCounts) add(status string) {
 // AuditView — вкладка «Результаты аудита»: результат последнего
 // аудита и сводка «пройдено N из M» (советы, n/a и unknown не считаются).
 type AuditView struct {
-	Enabled    bool                   `json:"enabled"`
-	Running    bool                   `json:"running"`
-	Interval   float64                `json:"interval"` // секунды
-	Ready      bool                   `json:"ready"`    // есть результат
-	Time       time.Time              `json:"time"`
-	DurationMs int64                  `json:"durationMs"`
-	Passed     int                    `json:"passed"`
-	Total      int                    `json:"total"`
-	Summary    AuditCounts            `json:"summary"`
-	Groups     map[string]AuditCounts `json:"groups"`
-	Checks     []model.AuditCheck     `json:"checks"`
+	UpdatedAt       time.Time                   `json:"updatedAt,omitzero"`
+	InventorySource *model.AuditInventorySource `json:"inventorySource,omitempty"`
+	Enabled         bool                        `json:"enabled"`
+	Running         bool                        `json:"running"`
+	Interval        float64                     `json:"interval"` // секунды
+	Ready           bool                        `json:"ready"`    // есть результат
+	Time            time.Time                   `json:"time"`
+	DurationMs      int64                       `json:"durationMs"`
+	Passed          int                         `json:"passed"`
+	Total           int                         `json:"total"`
+	Summary         AuditCounts                 `json:"summary"`
+	Groups          map[string]AuditCounts      `json:"groups"`
+	Checks          []model.AuditCheck          `json:"checks"`
 }
 
 // AuditBrief — счётчики аудита для заголовка интерфейса.
 type AuditBrief struct {
-	Enabled bool      `json:"enabled"`
-	Running bool      `json:"running"`
-	Ready   bool      `json:"ready"`
-	Fail    int       `json:"fail"`
-	Warn    int       `json:"warn"`
-	Time    time.Time `json:"time"`
+	UpdatedAt time.Time `json:"updatedAt,omitzero"`
+	Enabled   bool      `json:"enabled"`
+	Running   bool      `json:"running"`
+	Ready     bool      `json:"ready"`
+	Fail      int       `json:"fail"`
+	Warn      int       `json:"warn"`
+	Time      time.Time `json:"time"`
 }
 
 // auditOrder — порядок статусов в списке: сначала то, что нужно исправить.
@@ -429,6 +441,7 @@ func BuildAudit(enabled, running bool, interval time.Duration, rep *model.AuditR
 		return v
 	}
 	v.Ready, v.Time, v.DurationMs = true, rep.Time, rep.Duration.Milliseconds()
+	v.UpdatedAt, v.InventorySource = rep.UpdatedAt, rep.InventorySource
 	v.Checks = append(v.Checks, rep.Checks...)
 	sort.SliceStable(v.Checks, func(i, j int) bool {
 		a, b := v.Checks[i], v.Checks[j]
@@ -449,7 +462,7 @@ func BuildAudit(enabled, running bool, interval time.Duration, rep *model.AuditR
 
 // Brief — краткая сводка аудита для Status.
 func (v AuditView) Brief() AuditBrief {
-	return AuditBrief{Enabled: v.Enabled, Running: v.Running, Ready: v.Ready, Fail: v.Summary.Fail, Warn: v.Summary.Warn, Time: v.Time}
+	return AuditBrief{UpdatedAt: v.UpdatedAt, Enabled: v.Enabled, Running: v.Running, Ready: v.Ready, Fail: v.Summary.Fail, Warn: v.Summary.Warn, Time: v.Time}
 }
 
 // BuildAuditBrief — то же, что BuildAudit(...).Brief(), но без копирования
@@ -459,7 +472,7 @@ func BuildAuditBrief(enabled, running bool, rep *model.AuditReport) AuditBrief {
 	if rep == nil {
 		return b
 	}
-	b.Ready, b.Time = true, rep.Time
+	b.Ready, b.Time, b.UpdatedAt = true, rep.Time, rep.UpdatedAt
 	for _, c := range rep.Checks {
 		switch c.Status {
 		case model.AuditFail:

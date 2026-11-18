@@ -5,7 +5,7 @@ func init() {
 		"ev.auth_size":                      {"Размер, байт: {0} → {1}", "Size in bytes: {0} → {1}"},
 		"report.observations":               {"Доступные наблюдения для расследования", "Available observations for investigation"},
 		"warn.collect_item":                 {"Сбор неполный: {0}", "Collection incomplete: {0}"},
-		"web.auth.count":                    {"Попыток", "Attempts"},
+		"web.auth.count":                    {"Записей", "Records"},
 		"web.auth.used":                     {"Использован в доступном окне", "Used in available window"},
 		"web.auth.yes":                      {"Да", "Yes"},
 		"web.auth.no":                       {"Не наблюдался", "Not observed"},

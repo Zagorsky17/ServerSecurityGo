@@ -76,20 +76,20 @@ type Source interface {
 // и живёт, пока открыт интерфейс: файлы истории службы не трогаются,
 // чтобы не мешать ей.
 type LocalSource struct {
-	sc      *scanner.Scanner
-	netOn   bool               // наблюдение за сетевой нагрузкой включено
-	audit   *audit.Runner      // nil — аудит выключен
-	met     *metrics.Collector // nil — метрики выключены
-	rng     atomic.Value       // окно графиков (строка)
-	cancel  context.CancelFunc
-	version string
-	demo    bool
-	note    i18n.Msg
+	sc        *scanner.Scanner
+	netOn     bool               // наблюдение за сетевой нагрузкой включено
+	audit     *audit.Runner      // nil — аудит выключен
+	met       *metrics.Collector // nil — метрики выключены
+	rng       atomic.Value       // окно графиков (строка)
+	auditDone chan struct{}
+	cancel    context.CancelFunc
+	version   string
+	demo      bool
+	note      i18n.Msg
 }
 
 // NewLocalSource запускает сканер в фоне и ждёт первого снимка. Аудит
-// (ar может быть nil) выполняется сразу и затем только по клавише r: он
-// быстрый, а отдельная горутина интерфейсу не нужна.
+// (ar может быть nil) выполняется сразу, затем по таймеру, запросу и обновлению инвентаря.
 func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector, netOn bool, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
 	if _, err := sc.ScanOnce(); err != nil {
 		return nil, err
@@ -116,6 +116,10 @@ func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector
 		sc.Run(ctx)
 	}()
 	l := &LocalSource{sc: sc, audit: ar, met: mc, netOn: netOn, cancel: cancel, version: version, demo: demo, note: note}
+	if ar != nil {
+		l.auditDone = make(chan struct{})
+		go func() { defer close(l.auditDone); ar.Run(ctx) }()
+	}
 	l.rng.Store(metrics.RangeHour)
 	return l, nil
 }
@@ -191,7 +195,12 @@ func (l *LocalSource) Rescan() error {
 
 func (l *LocalSource) Describe() i18n.Msg { return l.note }
 
-func (l *LocalSource) Close() { l.cancel() }
+func (l *LocalSource) Close() {
+	l.cancel()
+	if l.auditDone != nil {
+		<-l.auditDone
+	}
+}
 
 // ---------------------------------------------------------------------
 // Источник-служба: API запущенной службы через локальный Unix-сокет
@@ -200,13 +209,13 @@ func (l *LocalSource) Close() { l.cancel() }
 // RemoteSource читает данные у службы. Так интерфейс видит полную
 // историю (с момента установки), а не только текущий сеанс.
 type RemoteSource struct {
-	path   string
-	rng    atomic.Value // окно графиков метрик (строка)
-	client *http.Client
-	// audit — последний полученный /api/audit: он меняется раз в час или
-	// по «Проверить сейчас», поэтому заново запрашивается, только когда
-	// сводка в /api/status говорит, что результат другой.
-	audit *view.AuditView
+	path    string
+	rng     atomic.Value // окно графиков метрик (строка)
+	client  *http.Client
+	system  cachedReport[systemReport]
+	ufw     cachedReport[*model.UFWReport]
+	changes cachedReport[*model.ChangesReport]
+	audit   cachedReport[view.AuditView]
 }
 
 // DialSocket подключается к Unix-сокету службы и проверяет, что она
@@ -235,25 +244,44 @@ var errNotFound = errors.New("not found")
 // get выполняет GET и декодирует JSON. Хост в URL условный: соединение
 // всё равно идёт в Unix-сокет.
 func (r *RemoteSource) get(path string, v any) error {
-	resp, err := r.client.Get("http://serversecuritygo" + path)
+	resp, err := r.request(path, "")
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound && !strings.HasPrefix(path, "/api/process/") {
-		return errNotFound
-	}
 	if resp.StatusCode != http.StatusOK {
-		var e struct {
-			Error string `json:"error"`
-		}
-		_ = json.NewDecoder(resp.Body).Decode(&e)
-		if e.Error == "" {
-			e.Error = resp.Status
-		}
-		return errors.New(e.Error)
+		return errors.New(resp.Status)
 	}
 	return json.NewDecoder(resp.Body).Decode(v)
+}
+
+func (r *RemoteSource) request(path, etag string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, "http://serversecuritygo"+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotModified {
+		return resp, nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound && !strings.HasPrefix(path, "/api/process/") {
+		return nil, errNotFound
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&e)
+	if e.Error == "" {
+		e.Error = resp.Status
+	}
+	return nil, errors.New(e.Error)
 }
 
 func (r *RemoteSource) Fetch() (*Data, error) {
@@ -273,18 +301,20 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 	var evs struct {
 		Events []model.Event `json:"events"`
 	}
-	var sys struct {
-		Findings []model.SystemFinding `json:"findings"`
-	}
 	for _, q := range []struct {
 		path string
 		v    any
-	}{{"/api/processes", &procs}, {"/api/connections", &conns}, {"/api/events?limit=2000", &evs}, {"/api/system", &sys}} {
+	}{{"/api/processes", &procs}, {"/api/connections", &conns}, {"/api/events?limit=2000", &evs}} {
 		if err := r.get(q.path, q.v); err != nil {
 			return nil, fmt.Errorf("%s: %w", q.path, err)
 		}
 	}
-	d.Procs, d.Sockets, d.Events, d.System = procs.Processes, conns.Sockets, evs.Events, sys.Findings
+	d.Procs, d.Sockets, d.Events = procs.Processes, conns.Sockets, evs.Events
+	sys, err := fetchReport(r, "/api/system", &r.system)
+	if err != nil {
+		return nil, fmt.Errorf("/api/system: %w", err)
+	}
+	d.System = sys.Findings
 	// Открытые порты появились в новой версии: служба, обновлённая
 	// позже терминала, отвечает 404 — тогда панель просто пустая.
 	var exp struct {
@@ -294,7 +324,7 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 		return nil, fmt.Errorf("/api/exposure: %w", err)
 	}
 	d.Exposure = exp.Exposure
-	if err := r.get("/api/ufw", &d.UFW); err != nil && !errors.Is(err, errNotFound) {
+	if d.UFW, err = fetchReport(r, "/api/ufw", &r.ufw); err != nil && !errors.Is(err, errNotFound) {
 		return nil, fmt.Errorf("/api/ufw: %w", err)
 	}
 
@@ -346,16 +376,12 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 	if err := r.get("/api/learning", &d.Learning); err != nil && !errors.Is(err, errNotFound) {
 		return nil, err
 	}
-	if err := r.get("/api/changes", &d.Changes); err != nil && !errors.Is(err, errNotFound) {
+	if d.Changes, err = fetchReport(r, "/api/changes", &r.changes); err != nil && !errors.Is(err, errNotFound) {
 		return nil, err
 	}
-	if c, b := r.audit, d.Status.Audit; c != nil && c.Enabled == b.Enabled && c.Running == b.Running && c.Time.Equal(b.Time) {
-		d.Audit = c
-		return d, nil
-	}
-	var av view.AuditView
-	if err := r.get("/api/audit", &av); err == nil {
-		d.Audit, r.audit = &av, &av
+	av, err := fetchReport(r, "/api/audit", &r.audit)
+	if err == nil {
+		d.Audit = &av
 	} else if !errors.Is(err, errNotFound) {
 		return nil, fmt.Errorf("/api/audit: %w", err)
 	}

@@ -152,7 +152,13 @@ func (a *App) drawStatus(r rect) {
 		host += " · " + a.tr("tui.demo")
 	}
 	s.Text(x, r.y+1, iw, fmt.Sprintf("%s · %s · %s", host, h.OS, h.Kernel), stBold)
-	s.Text(x, r.y+2, iw, a.tr("tui.scan_line", st.Time.Local().Format("15:04:05"), st.DurationMs, secs(st.Interval), a.txt(a.src.Describe())), stDim)
+	scanLine := a.tr("tui.scan_line", st.Time.Local().Format("15:04:05"), st.DurationMs, secs(st.Interval), a.txt(a.src.Describe()))
+	scanStyle := stDim
+	if st.Stale {
+		scanLine = a.tr("tui.data_stale") + " · " + scanLine
+		scanStyle = stErr
+	}
+	s.Text(x, r.y+2, iw, scanLine, scanStyle)
 	cx := x
 	for _, rk := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
 		n := st.Stats.ByRisk[rk]
@@ -281,7 +287,7 @@ func (a *App) columnsHeader(p panelID, w int) string {
 	case pAudit:
 		return fit(a.tr("tui.cols.audit"), w)
 	case pUFW:
-		return fit(a.tr("web.ufw.files"), w)
+		return fit(a.tr("tui.ufw.contents"), w)
 	case pF2B:
 		return fit(a.tr("tui.cols.f2b"), w)
 	case pAuth, pTimeline:
@@ -289,6 +295,9 @@ func (a *App) columnsHeader(p panelID, w int) string {
 	case pHist:
 		return fit(a.tr("tui.cols.hist"), w)
 	case pSys:
+		if a.systemGroup != "" {
+			return fit(a.tr("tui.system.members", len(a.systemRows)), w)
+		}
 		return fit(a.tr("tui.cols.sys"), w)
 	case pMetrics:
 		return fit(a.tr("tui.cols.metrics"), w)
@@ -411,7 +420,10 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{a.txt(c.Title), stNormal},
 		}
 	case pUFW:
-		f := a.ufwFiles[i]
+		if i == 0 {
+			return []seg{{a.tr("tui.ufw.summary"), stBold}}
+		}
+		f := a.ufwFiles[i-1]
 		st := stNormal
 		if f.Status != "ok" {
 			st = stWarn
@@ -435,8 +447,13 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{"×" + strconv.Itoa(b.Count), cst},
 		}
 	case pAuth:
-		e := a.logins[i]
-		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.User + " " + e.IP + " " + e.Kind, riskStyle(e.Risk.String())}}
+		g := a.loginGroups[i]
+		e := a.logins[g.Indices[0]]
+		user := e.User
+		if len(g.Indices) > 1 {
+			user = ""
+		}
+		return []seg{{g.Last.Local().Format("01-02 15:04") + " ", stDim}, {user + " " + e.IP + " " + e.Kind + " ×" + strconv.Itoa(len(g.Indices)), riskStyle(g.Risk.String())}}
 	case pLearning:
 		if i == 0 {
 			return []seg{{a.tr("web.tab.learning"), stNormal}}
@@ -471,10 +488,18 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{a.txt(e.Details), stDim},
 		}
 	case pSys:
-		f := a.system[i]
+		index := a.systemRows[i]
+		f := a.system[index]
+		if g, ok := a.systemGroups[index]; ok && a.systemGroup == "" {
+			return []seg{{riskShort(f.Risk.String()) + " ", riskStyle(f.Risk.String())}, {a.tr("web.system.group", len(g.Indices)) + " · " + g.Directory + " · " + g.Owner, stBold}}
+		}
+		mark := ""
+		if f.ReviewFirst && !f.Suppressed {
+			mark = "[!] "
+		}
 		return []seg{
 			{riskShort(f.Risk.String()) + " ", riskStyle(f.Risk.String())},
-			{a.txt(f.Title) + " ", stNormal},
+			{mark + a.txt(f.Title) + " ", stNormal},
 			{f.Path, stDim},
 		}
 	case pLoad:
@@ -709,9 +734,16 @@ func (a *App) mainContent(w int) (string, []line) {
 		a.f2bOverview(b)
 		return title, b.lines
 	case pSys:
+		overview := view.OverviewSystem(a.data.System)
+		b.para(a.tr("web.overview.system", overview.Attention, overview.Incomplete, len(overview.Details)), stBold, 0)
+		b.para(a.tr("web.overview.toggle", a.yesNo(a.showSystemInfo)), stDim, 0)
+		if g, ok := a.selSystemGroup(); ok {
+			a.systemGroupDetail(b, g)
+			return a.tr("web.system.group", len(g.Indices)), b.lines
+		}
 		f, ok := a.selSystem()
 		if !ok {
-			b.para(a.tr("tui.no_system"), stDim, 0)
+			b.para(a.tr("web.overview.empty"), stDim, 0)
 			return a.tr("tui.title.check"), b.lines
 		}
 		a.systemDetail(b, f)
@@ -738,21 +770,33 @@ func (a *App) mainContent(w int) (string, []line) {
 				b.para(a.txt(w), stDim, 0)
 			}
 		}
-		i := a.lists[pAuth].cursor
-		if i >= 0 && i < len(a.logins) {
-			e := a.logins[i]
-			b.para(fmtTime(e.Time)+" "+e.Kind+" "+e.Risk.String(), stBold, 0)
-			b.kv(a.tr("tui.k.user"), e.User)
-			b.kv("IP", e.IP)
-			b.kv(a.tr("web.auth.method"), e.Method)
-			b.kv(a.tr("web.auth.key"), e.Fingerprint+" "+e.KeyComment)
-			b.kv("TTY", e.TTY)
-			b.para(e.Source+" "+e.Detail, stNormal, 0)
-			if e.End != nil {
-				b.para(e.End.Sub(e.Time).String(), stNormal, 0)
+		if r := a.data.Auth; r != nil {
+			b.para(a.tr("web.overview.logins", len(r.Events), fmtTime(r.Since), fmtTime(r.Time)), stBold, 0)
+			b.para(a.tr("web.overview.login_groups"), stDim, 0)
+			if r.Incomplete {
+				b.para(a.tr("web.overview.incomplete"), stWarn, 0)
 			}
-			for _, id := range e.Findings {
-				b.para(id, stNormal, 0)
+		}
+		i := a.lists[pAuth].cursor
+		if i >= 0 && i < len(a.loginGroups) {
+			g := a.loginGroups[i]
+			b.para(a.tr("web.overview.group", len(g.Indices), fmtTime(g.First), fmtTime(g.Last)), stBold, 0)
+			for _, j := range g.Indices {
+				e := a.logins[j]
+				b.para(fmtTime(e.Time)+" "+e.Kind+" "+e.Risk.String(), stBold, 0)
+				b.kv(a.tr("tui.k.user"), e.User)
+				b.kv("IP", e.IP)
+				b.kv(a.tr("web.auth.method"), e.Method)
+				b.kv(a.tr("web.auth.key"), e.Fingerprint+" "+e.KeyComment)
+				b.kv("TTY", e.TTY)
+				b.kv("PID", strconv.Itoa(e.PID))
+				b.para(e.Source+" "+e.Detail, stNormal, 0)
+				if e.End != nil {
+					b.para(e.End.Sub(e.Time).String(), stNormal, 0)
+				}
+				for _, id := range e.Findings {
+					b.para(id, stNormal, 0)
+				}
 			}
 		}
 		if a.data.Auth != nil {
@@ -814,6 +858,9 @@ func (a *App) mainContent(w int) (string, []line) {
 					b.para(a.txt(w), stWarn, 0)
 				}
 				for _, c := range d.Changes {
+					if c.ReviewFirst {
+						b.para(a.tr("card.review_first"), stWarn, 0)
+					}
 					b.para(c.Section+" "+c.Kind+" "+c.Key, stBold, 0)
 					b.para(c.Before+" → "+c.After, stNormal, 2)
 				}
@@ -1067,15 +1114,17 @@ func findingBlock(b *lb, f model.Finding) {
 	}
 	tags += "]"
 	b.add(seg{"  " + mark + " ", st}, seg{sanitize(f.Title.In(b.lang)), st}, seg{tags, stDim})
-	b.findingContext(f.FindingContext)
 	if f.AllowlistProposal != "" {
 		b.header(b.tr("web.allow.legitimate"))
 		b.para(b.tr("web.allow.review"), stDim, 2)
 		b.para(f.AllowlistProposal, stNormal, 2)
 	}
+	b.header(b.tr("tui.h.facts"))
 	for _, e := range f.Evidence {
 		b.para("· "+e.In(b.lang), Style{FG: 250, BG: -1}, 6)
 	}
+	b.findingContext(f.FindingContext)
+	b.verification(f.VerifyCommands)
 	if !f.Recommendation.IsZero() {
 		b.para("→ "+f.Recommendation.In(b.lang), stDim, 6)
 	}
@@ -1154,6 +1203,7 @@ func (a *App) groupName(g string) string { return a.txt(view.AuditGroupText(g)) 
 
 // auditHeader — когда была проверка и сколько пройдено.
 func (a *App) auditHeader(b *lb) {
+	b.para(a.tr("web.overview.toggle", a.yesNo(a.showAuditDetails)), stDim, 0)
 	av := a.data.Audit
 	switch {
 	case av == nil || !av.Enabled:
@@ -1170,15 +1220,22 @@ func (a *App) auditHeader(b *lb) {
 		}
 		b.para(a.tr("web.audit.score", av.Passed, av.Total, av.Summary.Fail, av.Summary.Warn, av.Summary.Info, av.Summary.NA+av.Summary.Unknown), st, 0)
 	}
+	if av != nil && av.Enabled && av.Ready && av.InventorySource != nil {
+		src := av.InventorySource
+		switch {
+		case !src.Ready:
+			b.para(a.tr("web.audit.inventory_pending"), stWarn, 0)
+		case src.Incomplete:
+			b.para(a.tr("web.audit.inventory_incomplete", fmtTime(src.Time)), stWarn, 0)
+		default:
+			b.para(a.tr("web.audit.inventory_complete", fmtTime(src.Time)), stDim, 0)
+		}
+	}
 	b.blank()
 }
 
 // auditDetail — подробности проверки: факты, рекомендация, команда.
 func (a *App) auditDetail(b *lb, c model.AuditCheck) {
-	b.findingContext(c.FindingContext)
-	for _, cmd := range c.VerifyCommands {
-		b.para(cmd, stNormal, 2)
-	}
 	b.add(seg{" " + auditShort(c.Status) + " ", Style{FG: 16, BG: auditStyle(c.Status).FG, Bold: true}}, seg{"  " + sanitize(a.txt(c.Title)), stBold})
 	b.kv(a.tr("web.col.status"), a.statusName(c.Status))
 	b.kv(a.tr("web.col.severity"), c.Severity.String())
@@ -1193,6 +1250,8 @@ func (a *App) auditDetail(b *lb, c model.AuditCheck) {
 			b.para("· "+a.txt(m), stNormal, 2)
 		}
 	}
+	b.findingContext(c.FindingContext)
+	b.verification(c.VerifyCommands)
 	if !c.Recommendation.IsZero() {
 		b.header(a.tr("tui.h.recommendation"))
 		b.para(a.txt(c.Recommendation), stNormal, 2)
@@ -1478,11 +1537,10 @@ func fmtDur(a *App, sec int64) string {
 }
 
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
-	b.findingContext(f.FindingContext)
 	rs := f.Risk.String()
 	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
-	for _, cmd := range f.VerifyCommands {
-		b.para(cmd, stNormal, 0)
+	if f.ReviewFirst && !f.Suppressed {
+		b.para(a.tr("card.review_first"), stWarn, 0)
 	}
 	b.kv(a.tr("tui.k.file"), f.Path)
 	b.kv(a.tr("tui.k.modified"), fmtTime(f.ModTime))
@@ -1491,6 +1549,8 @@ func (a *App) systemDetail(b *lb, f model.SystemFinding) {
 	for _, e := range f.Evidence {
 		b.para("· "+a.txt(e), stNormal, 2)
 	}
+	b.findingContext(f.FindingContext)
+	b.verification(f.VerifyCommands)
 	if !f.Recommendation.IsZero() {
 		b.header(a.tr("tui.h.recommendation"))
 		b.para(a.txt(f.Recommendation), stNormal, 2)
@@ -1841,6 +1901,8 @@ func (a *App) drawBottom() {
 		}
 	case a.err != nil:
 		right, rst = a.tr("tui.error_lower", a.err.Error()), stErr
+	case a.data != nil && a.data.Status.Stale:
+		right, rst = a.tr("tui.data_stale"), stErr
 	case a.paused:
 		right, rst = "⏸ "+a.tr("tui.paused_key"), stWarn
 	case a.mouseOff:
@@ -1922,6 +1984,10 @@ func (a *App) drawHelp() {
 }
 
 func (a *App) ufwDetail(b *lb) {
+	if a.lists[pUFW].cursor == 0 {
+		a.ufwSummary(b)
+		return
+	}
 	b.para(a.tr("web.ufw.hint"), stDim, 0)
 	u := a.data.UFW
 	if u == nil {
@@ -1955,6 +2021,10 @@ func (b *lb) findingContext(c model.FindingContext) {
 		b.header(b.tr("card.why"))
 		b.para(c.Why.In(b.lang), stNormal, 2)
 	}
+	if !c.Confidence.IsZero() {
+		b.header(b.tr("card.confidence"))
+		b.para(c.Confidence.In(b.lang), stNormal, 2)
+	}
 	if !c.Legitimate.IsZero() {
 		b.header(b.tr("card.legitimate"))
 		b.para(c.Legitimate.In(b.lang), stDim, 2)
@@ -1970,5 +2040,15 @@ func (b *lb) findingContext(c model.FindingContext) {
 		for _, e := range c.RelatedEvents {
 			b.para(fmtTime(e.Time)+" · "+e.Details.In(b.lang), stDim, 2)
 		}
+	}
+}
+
+func (b *lb) verification(commands []string) {
+	if len(commands) == 0 {
+		return
+	}
+	b.header(b.tr("card.verify"))
+	for _, cmd := range commands {
+		b.para(cmd, stNormal, 2)
 	}
 }
