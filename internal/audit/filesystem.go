@@ -96,6 +96,11 @@ func (a *auditor) filesystemChecks() []model.AuditCheck {
 	}
 	perms.Recommendation = i18n.T("audit.fs_sensitive_perms.rec")
 	out = append(out, perms)
+	return append(out, a.inventoryChecks()...)
+}
+
+func (a *auditor) inventoryChecks() []model.AuditCheck {
+	var out []model.AuditCheck
 	for _, id := range []string{"fs_world_writable_system", "fs_unowned", "fs_suid_inventory", "fs_capabilities"} {
 		c := newCheck(id, model.AuditGroupFS, model.RiskInfo, "audit.fs_inventory.title")
 		c.Title = i18n.T("audit.fs_inventory.title", id)

@@ -76,20 +76,20 @@ type Source interface {
 // и живёт, пока открыт интерфейс: файлы истории службы не трогаются,
 // чтобы не мешать ей.
 type LocalSource struct {
-	sc      *scanner.Scanner
-	netOn   bool               // наблюдение за сетевой нагрузкой включено
-	audit   *audit.Runner      // nil — аудит выключен
-	met     *metrics.Collector // nil — метрики выключены
-	rng     atomic.Value       // окно графиков (строка)
-	cancel  context.CancelFunc
-	version string
-	demo    bool
-	note    i18n.Msg
+	sc        *scanner.Scanner
+	netOn     bool               // наблюдение за сетевой нагрузкой включено
+	audit     *audit.Runner      // nil — аудит выключен
+	met       *metrics.Collector // nil — метрики выключены
+	rng       atomic.Value       // окно графиков (строка)
+	auditDone chan struct{}
+	cancel    context.CancelFunc
+	version   string
+	demo      bool
+	note      i18n.Msg
 }
 
 // NewLocalSource запускает сканер в фоне и ждёт первого снимка. Аудит
-// (ar может быть nil) выполняется сразу и затем только по клавише r: он
-// быстрый, а отдельная горутина интерфейсу не нужна.
+// (ar может быть nil) выполняется сразу, затем по таймеру, запросу и обновлению инвентаря.
 func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector, netOn bool, version string, demo bool, note i18n.Msg) (*LocalSource, error) {
 	if _, err := sc.ScanOnce(); err != nil {
 		return nil, err
@@ -116,6 +116,10 @@ func NewLocalSource(sc *scanner.Scanner, ar *audit.Runner, mc *metrics.Collector
 		sc.Run(ctx)
 	}()
 	l := &LocalSource{sc: sc, audit: ar, met: mc, netOn: netOn, cancel: cancel, version: version, demo: demo, note: note}
+	if ar != nil {
+		l.auditDone = make(chan struct{})
+		go func() { defer close(l.auditDone); ar.Run(ctx) }()
+	}
 	l.rng.Store(metrics.RangeHour)
 	return l, nil
 }
@@ -191,7 +195,12 @@ func (l *LocalSource) Rescan() error {
 
 func (l *LocalSource) Describe() i18n.Msg { return l.note }
 
-func (l *LocalSource) Close() { l.cancel() }
+func (l *LocalSource) Close() {
+	l.cancel()
+	if l.auditDone != nil {
+		<-l.auditDone
+	}
+}
 
 // ---------------------------------------------------------------------
 // Источник-служба: API запущенной службы через локальный Unix-сокет
@@ -203,8 +212,8 @@ type RemoteSource struct {
 	path   string
 	rng    atomic.Value // окно графиков метрик (строка)
 	client *http.Client
-	// audit — последний полученный /api/audit: он меняется раз в час или
-	// по «Проверить сейчас», поэтому заново запрашивается, только когда
+	// audit — последний полученный /api/audit: он меняется по таймеру,
+	// новому инвентарю или по «Проверить сейчас», поэтому заново запрашивается, только когда
 	// сводка в /api/status говорит, что результат другой.
 	audit *view.AuditView
 }
@@ -349,7 +358,7 @@ func (r *RemoteSource) Fetch() (*Data, error) {
 	if err := r.get("/api/changes", &d.Changes); err != nil && !errors.Is(err, errNotFound) {
 		return nil, err
 	}
-	if c, b := r.audit, d.Status.Audit; c != nil && c.Enabled == b.Enabled && c.Running == b.Running && c.Time.Equal(b.Time) {
+	if c, b := r.audit, d.Status.Audit; c != nil && c.Enabled == b.Enabled && c.Running == b.Running && c.Time.Equal(b.Time) && c.UpdatedAt.Equal(b.UpdatedAt) {
 		d.Audit = c
 		return d, nil
 	}

@@ -1193,6 +1193,17 @@ func (a *App) auditHeader(b *lb) {
 		}
 		b.para(a.tr("web.audit.score", av.Passed, av.Total, av.Summary.Fail, av.Summary.Warn, av.Summary.Info, av.Summary.NA+av.Summary.Unknown), st, 0)
 	}
+	if av != nil && av.Enabled && av.Ready && av.InventorySource != nil {
+		src := av.InventorySource
+		switch {
+		case !src.Ready:
+			b.para(a.tr("web.audit.inventory_pending"), stWarn, 0)
+		case src.Incomplete:
+			b.para(a.tr("web.audit.inventory_incomplete", fmtTime(src.Time)), stWarn, 0)
+		default:
+			b.para(a.tr("web.audit.inventory_complete", fmtTime(src.Time)), stDim, 0)
+		}
+	}
 	b.blank()
 }
 

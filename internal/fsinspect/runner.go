@@ -20,10 +20,11 @@ type Runner struct {
 	report  *model.FileInventory
 	base    *model.FileInventory
 	baseErr error
+	updates chan struct{}
 }
 
 func New(opt Options) *Runner {
-	r := &Runner{opt: defaults(opt)}
+	r := &Runner{opt: defaults(opt), updates: make(chan struct{}, 1)}
 	if r.opt.StateDir != "" {
 		b, _, e := safefile.ReadRegular(statePath(r.opt), 16<<20, false)
 		if e == nil {
@@ -43,6 +44,10 @@ func New(opt Options) *Runner {
 	return r
 }
 func (r *Runner) Report() *model.FileInventory { r.mu.RLock(); defer r.mu.RUnlock(); return r.report }
+
+// Updates уведомляет единственного потребителя; последний отчёт доступен через Report.
+func (r *Runner) Updates() <-chan struct{} { return r.updates }
+
 func (r *Runner) Findings() []model.SystemFinding {
 	rep := r.Report()
 	if rep == nil {
@@ -98,6 +103,10 @@ func (r *Runner) RunOnce(ctx context.Context) *model.FileInventory {
 	r.mu.Lock()
 	r.report = rep
 	r.mu.Unlock()
+	select {
+	case r.updates <- struct{}{}:
+	default:
+	}
 	return rep
 }
 

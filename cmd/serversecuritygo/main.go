@@ -283,7 +283,7 @@ func auditRunner(cfg config.Config, hist *history.Store, log *slog.Logger, sc *s
 	if !cfg.AuditEnabled {
 		return nil
 	}
-	return audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, StateDir: cfg.DataDir,
+	return audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, Inventory: sc.Inventory, InventoryUpdates: sc.InventoryUpdates(), HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, StateDir: cfg.DataDir,
 		Record: hist.RecordAudit, Events: hist.Events, Logger: log})
 }
 
@@ -549,7 +549,7 @@ func newLocalTUISource(cfg config.Config, interval time.Duration, note i18n.Msg)
 	// файлы службы не трогаются.
 	var ar *audit.Runner
 	if cfg.AuditEnabled {
-		ar = audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Events: hist.Events, Logger: quiet})
+		ar = audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, Inventory: sc.Inventory, InventoryUpdates: sc.InventoryUpdates(), HostRoot: cfg.HostRoot, ProcRoot: cfg.ProcRoot, Interval: cfg.AuditInterval, Record: hist.RecordAudit, Events: hist.Events, Logger: quiet})
 	}
 	return tui.NewLocalSource(sc, ar, mc, nl != nil, version, false, note)
 }
@@ -757,7 +757,7 @@ func cmdDemo(args []string) error {
 	sc := scanner.New(scanner.Options{FS: fakeproc.NewFS(procRoot, hostRoot), Detect: det, History: hist, Interval: cfg.ScanInterval, Logger: log,
 		Auth: authlog.New(authlog.Options{Root: hostRoot, ReadOnly: true}), Recent: true, BeforeScan: anim.Step, Hostname: "demo-server", Demo: true, Metrics: mc, NetLoad: nl})
 	// Демо-файлы принадлежат текущему пользователю: он и считается root.
-	ar := audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Events: hist.Events, Logger: log})
+	ar := audit.NewRunner(audit.RunnerOptions{Snapshot: sc.Snapshot, Inventory: sc.Inventory, InventoryUpdates: sc.InventoryUpdates(), HostRoot: hostRoot, ProcRoot: procRoot, RootUID: os.Getuid(), Interval: time.Minute, Record: hist.RecordAudit, Events: hist.Events, Logger: log})
 	if *useTUI {
 		if !tui.IsTerminal() {
 			return i18n.Errorf("err.demo_tui_terminal")

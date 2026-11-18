@@ -335,6 +335,10 @@ function renderAudit() {
     const s = a.summary;
     $('audit-score').textContent = tr('web.audit.score', a.passed, a.total, s.fail, s.warn, s.info, s.na + s.unknown);
   }
+  if (a.enabled && a.ready && a.inventorySource) {
+    const src = a.inventorySource;
+    $('audit-when').textContent += ' · ' + (!src.ready ? tr('web.audit.inventory_pending') : src.incomplete ? tr('web.audit.inventory_incomplete', fmtTime(src.time)) : tr('web.audit.inventory_complete', fmtTime(src.time)));
+  }
   const q = $('a-q').value.trim().toLowerCase();
   const st = $('a-status').value;
   const grp = $('a-group').value;

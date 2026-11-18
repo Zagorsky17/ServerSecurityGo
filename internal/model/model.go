@@ -621,11 +621,20 @@ type AuditCheck struct {
 	Change bool `json:"change,omitempty"`
 }
 
-// AuditReport — результат одного запуска аудита.
+// AuditInventorySource — свежесть использованного файлового инвентаря, без его содержимого.
+type AuditInventorySource struct {
+	Ready      bool      `json:"ready"`
+	Time       time.Time `json:"time"`
+	Incomplete bool      `json:"incomplete"`
+}
+
+// AuditReport — полный аудит и последние обновления зависимых проверок.
 type AuditReport struct {
-	Time     time.Time     `json:"time"`
-	Duration time.Duration `json:"duration"`
-	Checks   []AuditCheck  `json:"checks"`
+	UpdatedAt       time.Time             `json:"updatedAt,omitzero"`
+	InventorySource *AuditInventorySource `json:"inventorySource,omitempty"`
+	Time            time.Time             `json:"time"`
+	Duration        time.Duration         `json:"duration"`
+	Checks          []AuditCheck          `json:"checks"`
 }
 
 // Типы событий истории.

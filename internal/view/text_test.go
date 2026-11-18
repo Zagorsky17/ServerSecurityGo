@@ -26,7 +26,7 @@ func TestPrintable(t *testing.T) {
 
 // TestAuditBrief: облегчённая сводка для /api/status совпадает с полной.
 func TestAuditBrief(t *testing.T) {
-	rep := &model.AuditReport{Time: time.Now(), Checks: []model.AuditCheck{
+	rep := &model.AuditReport{Time: time.Now(), UpdatedAt: time.Now().Add(time.Minute), Checks: []model.AuditCheck{
 		{Status: model.AuditFail}, {Status: model.AuditWarn}, {Status: model.AuditWarn}, {Status: model.AuditPass}, {Status: model.AuditInfo},
 	}}
 	full := BuildAudit(true, true, time.Hour, rep).Brief()

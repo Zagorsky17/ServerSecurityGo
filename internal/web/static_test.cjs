@@ -97,3 +97,16 @@ test('finding cards separate evidence, confidence and safe verification text', (
   const suppressed=ctx.findingContext({...f,suppressed:true});assert.equal(Object.hasOwn(suppressed.attrs,'open'),false);
   const legacy=ctx.findingContext({why:'old',verifyCommands:[]});assert.ok(legacy.textContent.includes('old'));
 });
+
+test('audit distinguishes full check time from pending and incomplete inventory', () => {
+  const fields=Object.fromEntries(['btn-audit-run','audit-when','audit-score','a-q','a-status','a-group'].map(k=>[k,{value:'',textContent:''}]));
+  const a={enabled:true,ready:true,running:false,time:'2026-11-18T00:00:00Z',interval:3600,durationMs:10,summary:{fail:0,warn:0,info:0,na:0,unknown:4},checks:[]};
+  const ctx=vm.createContext({$:id=>fields[id],state:{audit:a},tr:(k,...args)=>[k,...args].join(' '),fmtTime:String,tx:String,renderTable:()=>{}});
+  vm.runInContext(functions(['renderAudit']),ctx);
+  ctx.renderAudit();assert.ok(!fields['audit-when'].textContent.includes('inventory_'));
+  a.inventorySource={ready:false,incomplete:true};ctx.renderAudit();assert.ok(fields['audit-when'].textContent.includes('inventory_pending'));
+  a.inventorySource={ready:true,incomplete:true,time:'2026-11-18T00:30:00Z'};ctx.renderAudit();
+  assert.ok(fields['audit-when'].textContent.includes(a.time));assert.ok(fields['audit-when'].textContent.includes(a.inventorySource.time));assert.ok(fields['audit-when'].textContent.includes('inventory_incomplete'));
+  a.inventorySource.incomplete=false;ctx.renderAudit();assert.ok(fields['audit-when'].textContent.includes('inventory_complete'));
+  a.enabled=false;ctx.renderAudit();assert.ok(!fields['audit-when'].textContent.includes('inventory_'));
+});
