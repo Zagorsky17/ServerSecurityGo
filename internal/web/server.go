@@ -626,7 +626,8 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request, _ session)
 	if snap == nil {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"findings": view.SortedSystem(snap), "host": snap.Host, "warnings": snap.Warnings})
+	findings := view.SortedSystem(snap)
+	writeJSON(w, http.StatusOK, map[string]any{"findings": findings, "overview": view.OverviewSystem(findings), "host": snap.Host, "warnings": snap.Warnings})
 }
 
 // auditView — текущее состояние аудита конфигурации.
@@ -662,7 +663,11 @@ func (s *Server) handleLogins(w http.ResponseWriter, r *http.Request, _ session)
 	if snap == nil {
 		return
 	}
-	writeJSON(w, 200, map[string]any{"enabled": snap.Auth != nil, "report": snap.Auth})
+	var groups []view.LoginGroup
+	if snap.Auth != nil {
+		groups = view.GroupLogins(snap.Auth.Events)
+	}
+	writeJSON(w, 200, map[string]any{"enabled": snap.Auth != nil, "report": snap.Auth, "groups": groups})
 }
 func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request, _ session) {
 	snap := s.snapshot(w, r)

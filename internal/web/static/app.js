@@ -318,6 +318,10 @@ function renderPorts() {
   ], rows, (e) => e.procKey && openCard(e.procKey), tr('web.ports.empty'));
 }
 
+function auditAttention(c) {
+  return c.change || !['pass', 'info', 'n/a'].includes(c.status);
+}
+
 function renderAudit() {
   const a = state.audit;
   if (!a) return;
@@ -339,8 +343,9 @@ function renderAudit() {
   const st = $('a-status').value;
   const grp = $('a-group').value;
   const rows = (a.checks || []).filter((c) => {
+    if (st === 'attention' && !q && !auditAttention(c)) return false;
     if (st === 'problems' && c.status !== 'fail' && c.status !== 'warn') return false;
-    if (st && st !== 'problems' && c.status !== st) return false;
+    if (st && st !== 'attention' && st !== 'problems' && c.status !== st) return false;
     if (grp && c.group !== grp) return false;
     if (q && ![c.id, tx(c.title), ...(c.evidence || []).map(tx)].join(' ').toLowerCase().includes(q)) return false;
     return true;
@@ -793,6 +798,10 @@ function renderSystem() {
   );
   const warns = s.warnings && s.warnings.length ? s.warnings.map(tx) : [tr('web.no_limits')];
   $('sys-warn').replaceChildren(...warns.map((w) => h('li', null, w)));
+  const overview = s.overview;
+  $('sys-overview').textContent = overview ? tr('web.overview.system', overview.attention, overview.incomplete, overview.details.length) : '';
+  const hidden = new Set(overview?.details || []);
+  const rows = (s.findings || []).filter((f, i) => $('sys-all').checked || !hidden.has(i));
   renderTable('t-system', [
     { t: tr('web.col.risk'), v: (f) => riskNum(f.risk), r: (f) => riskBadge(f.risk), desc: true },
     { t: tr('tui.title.check'), v: (f) => tx(f.title), r: (f) => tx(f.title), c: 'wrap' },
@@ -800,7 +809,7 @@ function renderSystem() {
     { t: tr('tui.k.modified'), v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
     { t: tr('tui.h.facts'), v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))), c: 'wrap' },
     { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => h('div', {}, tx(f.recommendation), findingContext(f)), c: 'wrap' },
-  ], s.findings || [], null, tr('web.empty.system'));
+  ], rows, null, tr('web.overview.empty'));
 }
 
 function yesNo(v) { return v ? tr('tui.yes') : tr('tui.no'); }
@@ -1156,6 +1165,7 @@ async function init() {
 
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   $('m-range').addEventListener('change', (e) => { state.mrange = e.target.value; switchTab('metrics'); });
+  $('sys-all').addEventListener('change', renderSystem);
   for (const id of ['proc-filters', 'net-filters', 'ports-filters', 'audit-filters', 'f2b-filters', 'hist-filters']) {
     const form = $(id);
     form.addEventListener('input', () => { state.showAll = {}; renderAll(); });
@@ -1222,20 +1232,57 @@ async function init() {
 
 init();
 
+function loginRows(events, groups) {
+ // Старые службы не присылают группы; исходные события остаются доступны.
+ groups = groups || events.map((e, i) => ({indices: [i], first: e.time, last: e.time, risk: e.risk})).reverse();
+ return groups.map(g => ({...events[g.indices[0]], time: g.last, risk: g.risk, group: g}));
+}
+
+function loginGroupDetails(row, events, opened) {
+ const g = row.group;
+ const key = JSON.stringify([row.ip, row.source, row.method, row.kind, g.first]);
+ const body = h('div');
+ const details = h('details', {}, h('summary', {}, tr('web.overview.group', g.indices.length, fmtTime(g.first), fmtTime(g.last)), ' · ', row.source || ''), body);
+ details.dataset.group = key;
+ let loaded = false;
+ const load = () => {
+  if (!details.open || loaded) return;
+  loaded = true;
+  for (const i of g.indices) {
+   const e = events[i];
+   body.append(h('dl', {class: 'kv'}, ...kv(tr('web.col.time'), fmtTime(e.time)), ...kv(tr('tui.title.event'), e.kind),
+    ...kv(tr('tui.k.user'), e.user), ...kv('IP', e.ip), ...kv(tr('web.auth.method'), e.method),
+    ...kv(tr('web.auth.key'), [e.fingerprint, e.keyComment].filter(Boolean).join(' ')), ...kv('TTY', e.tty), ...kv('PID', e.pid),
+    ...kv(tr('tui.k.file'), e.source), ...kv(tr('web.col.risk'), e.risk)),
+    h('p', {}, e.detail || '', ' ', (e.findings || []).join(', '), e.end ? ' '+fmtTime(e.end) : ''));
+  }
+ };
+ details.addEventListener('toggle', load);
+ details.open = opened.has(key);
+ load();
+ return details;
+}
+
 function renderLogins() {
  const a = state.auth?.report;
  $('auth-notes').replaceChildren(...(a?.warnings || []).map(w => h('p', {}, tx(w))));
  if (!a) $('auth-notes').textContent = tr('web.auth.disabled');
+ else {
+  $('auth-notes').prepend(h('p', {}, tr('web.overview.logins', (a.events || []).length, fmtTime(a.since), fmtTime(a.time))), h('p', {}, tr('web.overview.login_groups')));
+  if (a.incomplete) $('auth-notes').append(h('p', {}, tr('web.overview.incomplete')));
+ }
+ const opened = new Set([...$('t-logins').querySelectorAll('details[open]')].map(e => e.dataset.group));
+ const rows = loginRows(a?.events || [], state.auth?.groups);
  renderTable('t-logins', [
  {t: tr('web.col.time'), v:e=>e.time, r:e=>fmtTime(e.time)},
  {t: tr('tui.title.event'), v:e=>e.kind, r:e=>e.kind},
- {t: tr('tui.k.user'), v:e=>e.user || '', r:e=>e.user || ''},
+ {t: tr('tui.k.user'), v:e=>e.user || '', r:e=>e.group.indices.length > 1 ? '—' : e.user || ''},
  {t:'IP',v:e=>e.ip || '',r:e=>e.ip || ''},
  {t:tr('web.auth.method'),v:e=>e.method || '',r:e=>e.method || ''},
- {t:tr('web.auth.key'),v:e=>e.fingerprint || '',r:e=>[e.fingerprint,e.keyComment].filter(Boolean).join(' ')},
- {t:tr('tui.title.details'),v:e=>e.detail || '',r:e=>h('div',{},e.detail || '',h('div',{},e.source),h('div',{},(e.findings || []).join(', ')),e.end ? h('div',{},fmtTime(e.end)) : '')},
+ {t:tr('web.auth.key'),v:e=>e.fingerprint || '',r:e=>e.group.indices.length > 1 ? '—' : [e.fingerprint,e.keyComment].filter(Boolean).join(' ')},
+ {t:tr('tui.title.details'),v:e=>e.group.indices.length,r:e=>loginGroupDetails(e, a.events, opened)},
  {t:tr('web.col.risk'),v:e=>riskNum(e.risk),r:e=>riskBadge(e.risk)}
- ], [...(a?.events || [])].reverse(), null, tr('web.empty.events'));
+ ], rows, null, tr('web.empty.events'));
 
  for (const [id, rows, label] of [['t-auth-ips',a?.failedIPs,'IP'],['t-auth-users',a?.failedUsers,tr('tui.k.user')],['t-auth-hours',a?.failedHours,'UTC']]) {
  renderTable(id,[{t:label,v:e=>e.name,r:e=>e.name},{t:tr('web.auth.count'),v:e=>e.count,r:e=>e.count}],rows || [],null,tr('web.empty.events'));

@@ -103,14 +103,16 @@ type Options struct {
 
 // App — состояние интерфейса.
 type App struct {
-	logins   []model.LoginEvent
-	timeline []model.TimelineEvent
-	src      Source
-	out      io.Writer
-	scr      *Screen
-	w, h     int
-	refresh  time.Duration
-	lang     i18n.Lang // язык интерфейса, переключается клавишей L
+	logins                           []model.LoginEvent
+	loginGroups                      []view.LoginGroup
+	showSystemInfo, showAuditDetails bool
+	timeline                         []model.TimelineEvent
+	src                              Source
+	out                              io.Writer
+	scr                              *Screen
+	w, h                             int
+	refresh                          time.Duration
+	lang                             i18n.Lang // язык интерфейса, переключается клавишей L
 
 	data    *Data
 	err     error
@@ -405,6 +407,7 @@ func (a *App) rebuild() {
 		}
 		sort.SliceStable(a.logins, func(i, j int) bool { return a.logins[i].Time.After(a.logins[j].Time) })
 	}
+	a.loginGroups = view.GroupLogins(a.logins)
 	for _, e := range a.data.Timeline {
 		if matches(a.lists[pTimeline].filter, e.Kind, e.Source, e.Detail.In(a.lang)) {
 			a.timeline = append(a.timeline, e)
@@ -469,7 +472,7 @@ func (a *App) rebuild() {
 	a.checks = a.checks[:0]
 	if av := a.data.Audit; av != nil {
 		for _, c := range av.Checks {
-			if matches(a.lists[pAudit].filter, c.ID, c.Group, c.Status, a.txt(c.Title), c.Severity.String(), i18n.Join(" ", c.Evidence...).In(a.lang)) {
+			if (a.showAuditDetails || a.lists[pAudit].filter != "" || view.AuditAttention(c)) && matches(a.lists[pAudit].filter, c.ID, c.Group, c.Status, a.txt(c.Title), c.Severity.String(), i18n.Join(" ", c.Evidence...).In(a.lang)) {
 				a.checks = append(a.checks, c)
 			}
 		}
@@ -508,7 +511,7 @@ func (a *App) rebuild() {
 	}
 	a.system = a.system[:0]
 	for _, f := range a.data.System {
-		if matches(a.lists[pSys].filter, a.txt(f.Title), f.Path, f.ID, f.Risk.String()) {
+		if (a.showSystemInfo || a.lists[pSys].filter != "" || !view.SystemDetailOnly(f)) && matches(a.lists[pSys].filter, a.txt(f.Title), f.Path, f.ID, f.Risk.String()) {
 			a.system = append(a.system, f)
 		}
 	}
@@ -654,7 +657,7 @@ func (a *App) buildNet() {
 func (a *App) count(p panelID) int {
 	switch p {
 	case pAuth:
-		return len(a.logins)
+		return len(a.loginGroups)
 	case pLearning:
 		if a.data != nil && a.data.Learning != nil {
 			return 1 + len(a.data.Learning.Candidates)
@@ -874,6 +877,14 @@ func (a *App) runeKey(r rune, list panelID) bool {
 			a.flash(a.tr("tui.flash.range", a.rangeName(a.mrange)), false)
 			a.load()
 		}
+	case 'i':
+		if a.focus == pSys {
+			a.showSystemInfo = !a.showSystemInfo
+		}
+		if a.focus == pAudit {
+			a.showAuditDetails = !a.showAuditDetails
+		}
+		a.rebuild()
 	case 'L':
 		a.toggleLang()
 	case '+', 'z':
@@ -1004,8 +1015,15 @@ func (a *App) copyJSON() {
 			v = a.data.Learning
 		}
 	case pAuth:
-		if i := a.lists[pAuth].cursor; i >= 0 && i < len(a.logins) {
-			v = a.logins[i]
+		if i := a.lists[pAuth].cursor; i >= 0 && i < len(a.loginGroups) {
+			events := []model.LoginEvent{}
+			for _, j := range a.loginGroups[i].Indices {
+				events = append(events, a.logins[j])
+			}
+			v = events
+			if len(events) == 1 {
+				v = events[0]
+			}
 		}
 	case pChanges:
 		if a.data != nil {

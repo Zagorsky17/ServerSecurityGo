@@ -166,6 +166,12 @@ While no password is set, the service lets only root into the dashboard: for eve
 
 ## Features
 
+### Diagnostic summaries
+
+Audit results initially show failures, warnings, unavailable checks and change checks. Select **All results** to inspect passes and advice. The system overview keeps incomplete checks and findings with linked history visible; other INFO findings are available through **Show all results, including INFO**. In TUI, `i` toggles all results in the audit and system panels; searching includes their details. UFW settings and reading limitations precede configuration file contents.
+
+Failed-login records are grouped by IP, log source and authentication method within fixed 15-minute UTC intervals. Counts refer to records, not unique attempts: different logs can describe the same attempt. Successful logins and records without a source, IP or timestamp remain separate. Expand a web group or select it in TUI to inspect every event; `Y` copies the selected group as a JSON array (a single event remains an object). No raw events or findings are removed from the API or history.
+
 **Data collection** reads `/proc` and related sources:
 
 | Data | Source |
@@ -666,6 +672,12 @@ go run ./cmd/serversecuritygo demo         # in the browser: http://127.0.0.1:80
 ```
 
 ## Building and testing
+
+For a bounded repeatability run on the synthetic `/proc` fixture with temporary on-disk history, use the command below. It checks stable event counts and history reload; it does not measure real-world detection accuracy or replace long observation of a live service. Test directories are removed automatically. The ordinary test suite runs 30 iterations without waiting.
+
+```bash
+SSG_TEST_SOAK_DURATION=20m go test ./internal/scanner -run '^TestDiagnosticStability$' -count=1 -timeout 25m -v
+```
 
 Requires Go 1.27.4 or newer; there are no external modules.
 

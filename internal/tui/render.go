@@ -435,8 +435,13 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{"×" + strconv.Itoa(b.Count), cst},
 		}
 	case pAuth:
-		e := a.logins[i]
-		return []seg{{e.Time.Local().Format("01-02 15:04") + " ", stDim}, {e.User + " " + e.IP + " " + e.Kind, riskStyle(e.Risk.String())}}
+		g := a.loginGroups[i]
+		e := a.logins[g.Indices[0]]
+		user := e.User
+		if len(g.Indices) > 1 {
+			user = ""
+		}
+		return []seg{{g.Last.Local().Format("01-02 15:04") + " ", stDim}, {user + " " + e.IP + " " + e.Kind + " ×" + strconv.Itoa(len(g.Indices)), riskStyle(g.Risk.String())}}
 	case pLearning:
 		if i == 0 {
 			return []seg{{a.tr("web.tab.learning"), stNormal}}
@@ -709,9 +714,12 @@ func (a *App) mainContent(w int) (string, []line) {
 		a.f2bOverview(b)
 		return title, b.lines
 	case pSys:
+		overview := view.OverviewSystem(a.data.System)
+		b.para(a.tr("web.overview.system", overview.Attention, overview.Incomplete, len(overview.Details)), stBold, 0)
+		b.para(a.tr("web.overview.toggle", a.yesNo(a.showSystemInfo)), stDim, 0)
 		f, ok := a.selSystem()
 		if !ok {
-			b.para(a.tr("tui.no_system"), stDim, 0)
+			b.para(a.tr("web.overview.empty"), stDim, 0)
 			return a.tr("tui.title.check"), b.lines
 		}
 		a.systemDetail(b, f)
@@ -738,21 +746,33 @@ func (a *App) mainContent(w int) (string, []line) {
 				b.para(a.txt(w), stDim, 0)
 			}
 		}
-		i := a.lists[pAuth].cursor
-		if i >= 0 && i < len(a.logins) {
-			e := a.logins[i]
-			b.para(fmtTime(e.Time)+" "+e.Kind+" "+e.Risk.String(), stBold, 0)
-			b.kv(a.tr("tui.k.user"), e.User)
-			b.kv("IP", e.IP)
-			b.kv(a.tr("web.auth.method"), e.Method)
-			b.kv(a.tr("web.auth.key"), e.Fingerprint+" "+e.KeyComment)
-			b.kv("TTY", e.TTY)
-			b.para(e.Source+" "+e.Detail, stNormal, 0)
-			if e.End != nil {
-				b.para(e.End.Sub(e.Time).String(), stNormal, 0)
+		if r := a.data.Auth; r != nil {
+			b.para(a.tr("web.overview.logins", len(r.Events), fmtTime(r.Since), fmtTime(r.Time)), stBold, 0)
+			b.para(a.tr("web.overview.login_groups"), stDim, 0)
+			if r.Incomplete {
+				b.para(a.tr("web.overview.incomplete"), stWarn, 0)
 			}
-			for _, id := range e.Findings {
-				b.para(id, stNormal, 0)
+		}
+		i := a.lists[pAuth].cursor
+		if i >= 0 && i < len(a.loginGroups) {
+			g := a.loginGroups[i]
+			b.para(a.tr("web.overview.group", len(g.Indices), fmtTime(g.First), fmtTime(g.Last)), stBold, 0)
+			for _, j := range g.Indices {
+				e := a.logins[j]
+				b.para(fmtTime(e.Time)+" "+e.Kind+" "+e.Risk.String(), stBold, 0)
+				b.kv(a.tr("tui.k.user"), e.User)
+				b.kv("IP", e.IP)
+				b.kv(a.tr("web.auth.method"), e.Method)
+				b.kv(a.tr("web.auth.key"), e.Fingerprint+" "+e.KeyComment)
+				b.kv("TTY", e.TTY)
+				b.kv("PID", strconv.Itoa(e.PID))
+				b.para(e.Source+" "+e.Detail, stNormal, 0)
+				if e.End != nil {
+					b.para(e.End.Sub(e.Time).String(), stNormal, 0)
+				}
+				for _, id := range e.Findings {
+					b.para(id, stNormal, 0)
+				}
 			}
 		}
 		if a.data.Auth != nil {
@@ -1154,6 +1174,7 @@ func (a *App) groupName(g string) string { return a.txt(view.AuditGroupText(g)) 
 
 // auditHeader — когда была проверка и сколько пройдено.
 func (a *App) auditHeader(b *lb) {
+	b.para(a.tr("web.overview.toggle", a.yesNo(a.showAuditDetails)), stDim, 0)
 	av := a.data.Audit
 	switch {
 	case av == nil || !av.Enabled:

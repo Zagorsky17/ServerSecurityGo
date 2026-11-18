@@ -50,7 +50,6 @@ func init() {
 		"tui.deleted":        {"(удалён)", "(deleted)"},
 		"tui.unknown":        {"неизвестно", "unknown"},
 		"tui.no_data":        {"Нет данных. {0}", "No data. {0}"},
-		"tui.no_system":      {"Системных находок нет.", "No system findings."},
 		"tui.select_process": {"Выберите процесс в списке слева.", "Select a process in the list on the left."},
 		"tui.detail_error":   {"Не удалось получить карточку: {0}", "Failed to get the process card: {0}"},
 		"tui.exited":         {"Процесс завершился", "Process has exited"},
