@@ -680,7 +680,7 @@ func (a *App) count(p panelID) int {
 	case pF2B:
 		return len(a.bans)
 	case pUFW:
-		return len(a.ufwFiles)
+		return 1 + len(a.ufwFiles)
 	case pHist:
 		return len(a.events)
 	case pSys:
@@ -1031,7 +1031,10 @@ func (a *App) copyJSON() {
 		if f, ok := a.selUFW(); ok {
 			v = f
 		} else {
-			v = a.data.UFW
+			v = struct {
+				UFW      *model.UFWReport      `json:"ufw"`
+				Exposure *model.ExposureReport `json:"exposure"`
+			}{a.data.UFW, a.data.Exposure}
 		}
 
 	case pF2B:
@@ -1204,7 +1207,7 @@ func eventName(l i18n.Lang, t string) string {
 func IsTerminal() bool { return isTerminal(int(os.Stdin.Fd())) }
 
 func (a *App) selUFW() (model.UFWFile, bool) {
-	if c := a.lists[pUFW].cursor; c >= 0 && c < len(a.ufwFiles) {
+	if c := a.lists[pUFW].cursor - 1; c >= 0 && c < len(a.ufwFiles) {
 		return a.ufwFiles[c], true
 	}
 	return model.UFWFile{}, false

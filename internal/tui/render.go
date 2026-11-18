@@ -281,7 +281,7 @@ func (a *App) columnsHeader(p panelID, w int) string {
 	case pAudit:
 		return fit(a.tr("tui.cols.audit"), w)
 	case pUFW:
-		return fit(a.tr("web.ufw.files"), w)
+		return fit(a.tr("tui.ufw.contents"), w)
 	case pF2B:
 		return fit(a.tr("tui.cols.f2b"), w)
 	case pAuth, pTimeline:
@@ -411,7 +411,10 @@ func (a *App) row(p panelID, i, w int) []seg {
 			{a.txt(c.Title), stNormal},
 		}
 	case pUFW:
-		f := a.ufwFiles[i]
+		if i == 0 {
+			return []seg{{a.tr("tui.ufw.summary"), stBold}}
+		}
+		f := a.ufwFiles[i-1]
 		st := stNormal
 		if f.Status != "ok" {
 			st = stWarn
@@ -1922,6 +1925,10 @@ func (a *App) drawHelp() {
 }
 
 func (a *App) ufwDetail(b *lb) {
+	if a.lists[pUFW].cursor == 0 {
+		a.ufwSummary(b)
+		return
+	}
 	b.para(a.tr("web.ufw.hint"), stDim, 0)
 	u := a.data.UFW
 	if u == nil {
