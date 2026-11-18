@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -77,8 +79,15 @@ func TestRemoteAuditCacheRefreshesWithoutFullAudit(t *testing.T) {
 		case "/api/status":
 			json.NewEncoder(w).Encode(map[string]any{"ready": true, "audit": rep.Brief()})
 		case "/api/audit":
+			body, _ := json.Marshal(rep)
+			etag := fmt.Sprintf("\"%x\"", sha256.Sum256(body))
+			w.Header().Set("ETag", etag)
+			if r.Header.Get("If-None-Match") == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
 			requests.Add(1)
-			json.NewEncoder(w).Encode(rep)
+			w.Write(body)
 		default:
 			io.WriteString(w, "{}")
 		}
@@ -111,7 +120,7 @@ func TestRemoteAuditCacheRefreshesWithoutFullAudit(t *testing.T) {
 	if requests.Load() != 2 || second.Audit == first.Audit || !second.Audit.InventorySource.Ready || !second.Audit.Time.Equal(first.Audit.Time) {
 		t.Fatal("partial update stayed cached")
 	}
-	// Старый сервер без updatedAt сохраняет прежний механизм кеширования.
+	// Отсутствие updatedAt не мешает условному запросу по содержимому.
 	legacy := next
 	legacy.UpdatedAt = time.Time{}
 	legacy.InventorySource = nil

@@ -77,6 +77,7 @@ func (s *Server) reportJSON(w http.ResponseWriter, r *http.Request, c *reportCac
 }
 
 type systemReport struct {
+	Overview view.SystemOverview   `json:"overview"`
 	Groups   []view.SystemGroup    `json:"groups"`
 	Findings []model.SystemFinding `json:"findings"`
 	Host     model.HostInfo        `json:"host"`
@@ -102,7 +103,7 @@ func (s *Server) systemReport(w http.ResponseWriter, r *http.Request) (reportRep
 	source := systemReport{Findings: snap.System, Host: snap.Host, Warnings: snap.Warnings}
 	reply, err := s.systemCache.get(source, func() any {
 		findings := view.SortedSystem(snap)
-		return systemReport{Findings: findings, Groups: view.GroupSystem(findings), Host: snap.Host, Warnings: snap.Warnings}
+		return systemReport{Findings: findings, Groups: view.GroupSystem(findings), Overview: view.OverviewSystem(findings), Host: snap.Host, Warnings: snap.Warnings}
 	})
 	if err != nil {
 		s.errJSON(w, r, http.StatusInternalServerError, "web.err.report")

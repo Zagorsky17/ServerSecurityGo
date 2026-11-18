@@ -646,13 +646,14 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request, _ session)
 			items = append(items, item)
 		}
 		return struct {
-			Groups   []view.SystemGroup `json:"groups"`
-			Findings []systemItem       `json:"findings"`
-			Host     model.HostInfo     `json:"host"`
-			Warnings []i18n.Msg         `json:"warnings"`
-			Revision string             `json:"revision"`
-			Summary  bool               `json:"summary"`
-		}{report.Groups, items, report.Host, report.Warnings, reply.etag, true}
+			Overview view.SystemOverview `json:"overview"`
+			Groups   []view.SystemGroup  `json:"groups"`
+			Findings []systemItem        `json:"findings"`
+			Host     model.HostInfo      `json:"host"`
+			Warnings []i18n.Msg          `json:"warnings"`
+			Revision string              `json:"revision"`
+			Summary  bool                `json:"summary"`
+		}{report.Overview, report.Groups, items, report.Host, report.Warnings, reply.etag, true}
 	})
 }
 
@@ -691,7 +692,11 @@ func (s *Server) handleLogins(w http.ResponseWriter, r *http.Request, _ session)
 	if snap == nil {
 		return
 	}
-	writeJSON(w, 200, map[string]any{"enabled": snap.Auth != nil, "report": snap.Auth})
+	var groups []view.LoginGroup
+	if snap.Auth != nil {
+		groups = view.GroupLogins(snap.Auth.Events)
+	}
+	writeJSON(w, 200, map[string]any{"enabled": snap.Auth != nil, "report": snap.Auth, "groups": groups})
 }
 func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request, _ session) {
 	snap := s.snapshot(w, r)
