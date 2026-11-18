@@ -5,12 +5,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/i18n"
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
+	"github.com/Zagorsky17/ServerSecurityGo/internal/view"
 )
 
 func TestSystemConditionalSummaryAndDetail(t *testing.T) {
@@ -132,5 +134,62 @@ func TestAuditConditionalRefreshWithUnchangedTime(t *testing.T) {
 	a.running = true
 	if response = do(s, "GET", "/api/audit", "127.0.0.1:8090", "", map[string]string{"If-None-Match": tag}); response.Code != 200 {
 		t.Fatal("running status hidden")
+	}
+}
+
+func TestSummaryRetainsGroupsOverviewAndPriorities(t *testing.T) {
+	s := newTestServer(t, "")
+	snap := s.opt.Scanner.Snapshot()
+	snap.System = []model.SystemFinding{
+		{Path: "/opt/app/tree/a", Risk: model.RiskMedium, Finding: model.Finding{ID: "fs_unowned", Evidence: i18n.Ls([]string{"uid=501 gid=50"})}},
+		{Path: "/opt/app/tree/b", Risk: model.RiskMedium, Finding: model.Finding{ID: "fs_unowned", Evidence: i18n.Ls([]string{"uid=501 gid=50"})}},
+		{Risk: model.RiskInfo, Finding: model.Finding{ID: "routine"}},
+		{Risk: model.RiskHigh, Finding: model.Finding{ID: "changed", ReviewFirst: true, Evidence: i18n.Ls([]string{"changed facts"})}},
+	}
+	response := do(s, "GET", "/api/system?summary=1", "127.0.0.1", "", nil)
+	var summary struct {
+		Findings []systemItem
+		Groups   []view.SystemGroup
+		Overview view.SystemOverview
+		Revision string
+	}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &summary) != nil {
+		t.Fatal(response.Code, response.Body)
+	}
+	if len(summary.Findings) != 4 || len(summary.Groups) != 1 || summary.Overview.Attention != 3 || len(summary.Overview.Details) != 1 {
+		t.Fatalf("combined summary lost metadata: %+v", summary)
+	}
+	if summary.Findings[0].ID != "changed" || !summary.Findings[0].ReviewFirst {
+		t.Fatal("priority lost")
+	}
+	for _, i := range summary.Groups[0].Indices {
+		if summary.Findings[i].ID != "fs_unowned" || summary.Findings[i].Index != i {
+			t.Fatal("group index changed")
+		}
+	}
+	if summary.Findings[summary.Overview.Details[0]].ID != "routine" {
+		t.Fatal("attention hidden")
+	}
+	full := do(s, "GET", "/api/system", "127.0.0.1", "", nil)
+	var report systemReport
+	if json.Unmarshal(full.Body.Bytes(), &report) != nil || len(report.Groups) != 1 || len(report.Overview.Details) != 1 {
+		t.Fatal(full.Body)
+	}
+	for _, item := range summary.Findings {
+		detail := do(s, "GET", "/api/system/detail?index="+strconv.Itoa(item.Index)+"&revision="+url.QueryEscape(summary.Revision), "127.0.0.1", "", nil)
+		var finding model.SystemFinding
+		if detail.Code != 200 || json.Unmarshal(detail.Body.Bytes(), &finding) != nil || finding.ID != item.ID || finding.Path != item.Path {
+			t.Fatal("detail index changed", detail.Body)
+		}
+	}
+	tag := response.Header().Get("ETag")
+	if r := do(s, "GET", "/api/system?summary=1", "127.0.0.1", "", map[string]string{"If-None-Match": tag}); r.Code != 304 {
+		t.Fatal("unchanged report retransmitted")
+	}
+	snap.System = append([]model.SystemFinding(nil), snap.System...)
+	snap.System[2].Risk = model.RiskHigh
+	r := do(s, "GET", "/api/system?summary=1", "127.0.0.1", "", map[string]string{"If-None-Match": tag})
+	if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &summary) != nil || len(summary.Overview.Details) != 0 {
+		t.Fatal("changed overview stayed cached")
 	}
 }

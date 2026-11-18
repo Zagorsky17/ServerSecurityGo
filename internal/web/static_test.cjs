@@ -75,6 +75,16 @@ test('system group buttons open members, survive refresh and return safely', () 
   state.system={findings:[...members],groups:[{...group}]};ctx.renderSystem();assert.equal(table.rows.length,2);
   nodes['sys-group-nav'].children[0].events.click();assert.equal(state.systemGroup,'');assert.equal(table.rows.length,1);
   state.systemGroup='group';state.system.groups=[];ctx.renderSystem();assert.equal(state.systemGroup,'');assert.equal(table.rows.length,2);
+  let requested;ctx.openSystemDetail=(index,revision)=>{requested=[index,revision]};
+  members.forEach((f,i)=>f.index=i);members[1].reviewFirst=true;
+  state.system={findings:members,groups:[group],summary:true,revision:'revision',overview:{attention:1,incomplete:0,details:[0]}};
+  nodes['sys-all'].checked=false;ctx.renderSystem();assert.equal(table.rows.length,1);
+  assert.equal(table.cols[4].r(table.rows[0]),'');
+  ctx.systemFindingTitle(table.rows[0]).events.click();assert.equal(table.rows.length,1);assert.equal(table.rows[0].index,1);
+  assert.ok(table.cols[1].r(table.rows[0]).textContent.includes('card.review_first'));
+  table.cols[4].r(table.rows[0]).events.click();assert.deepEqual(requested,[1,'revision']);
+  nodes['sys-all'].checked=true;ctx.renderSystem();assert.equal(table.rows.length,2);
+
 });
 
 test('finding cards separate evidence, confidence and safe verification text', () => {
