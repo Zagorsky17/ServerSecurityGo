@@ -126,17 +126,33 @@ async function copyText(text) {
 const state = {
   csrf: '', status: null, processes: [], sockets: [], events: [], system: null, tree: null, exposure: null, audit: null, fail2ban: null, ufw: null,
   metrics: null, mrange: '1h', netload: null,
-  tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
+  refreshError: '', tab: 'suspicious', sort: {}, showAll: {}, collapsed: new Set(), treeExpandedAll: false,
 };
+
+const reportCache = new Map();
+const cachedPaths = new Set(['/api/system?summary=1', '/api/audit', '/api/ufw', '/api/changes']);
 
 async function api(path, opts = {}) {
   const headers = { 'Accept': 'application/json', 'X-SSG-Lang': I18N.lang };
-  if (opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = state.csrf;
-  const r = await fetch(path, { credentials: 'same-origin', ...opts, headers });
-  if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
-  return data;
+  const get = !opts.method || opts.method === 'GET';
+  if (!get) { headers['X-CSRF-Token'] = state.csrf; reportCache.clear(); }
+  const cached = get && cachedPaths.has(path) ? reportCache.get(path) : null;
+  if (cached) headers['If-None-Match'] = cached.etag;
+  try {
+    const r = await fetch(path, { credentials: 'same-origin', ...opts, headers });
+    if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+    if (r.status === 304) {
+      if (!cached) throw new Error(tr('web.err.report'));
+      return cached.data;
+    }
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    const etag = r.headers.get('ETag');
+    if (get && cachedPaths.has(path)) {
+      if (etag) reportCache.set(path, { etag, data }); else reportCache.delete(path);
+    }
+    return data;
+  } catch (e) { reportCache.clear(); throw e; }
 }
 
 // ---------------------------------------------------------------------
@@ -798,8 +814,10 @@ function renderSystem() {
     { t: tr('tui.title.check'), v: (f) => tx(f.title), r: (f) => tx(f.title), c: 'wrap' },
     { t: tr('tui.k.file'), v: (f) => f.path, r: (f) => f.path, c: 'mono' },
     { t: tr('tui.k.modified'), v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
+    ...(s.summary ? [{ t: tr('tui.title.details'), v: () => 0, r: (f) => h('button', {type:'button', class:'small secondary', onclick:()=>openSystemDetail(f.index,s.revision)}, tr('tui.title.details')) }] : [
     { t: tr('tui.h.facts'), v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))), c: 'wrap' },
     { t: tr('tui.h.recommendation'), v: () => 0, r: (f) => h('div', {}, tx(f.recommendation), findingContext(f)), c: 'wrap' },
+    ]),
   ], s.findings || [], null, tr('web.empty.system'));
 }
 
@@ -867,6 +885,15 @@ async function openCard(key) {
   }
 }
 
+async function openSystemDetail(index, revision) {
+  try {
+    const finding = await api('/api/system/detail?index=' + encodeURIComponent(index) + '&revision=' + encodeURIComponent(revision));
+    cardData = { systemFinding: finding };
+    renderCard(cardData);
+    $('modal').classList.remove('hidden');
+  } catch (e) { toast(tr('web.card_error', e.message)); }
+}
+
 function closeCard() {
   $('modal').classList.add('hidden');
   cardData = null;
@@ -877,6 +904,14 @@ function section(title, ...content) { return h('section', null, h('h3', null, ti
 
 function renderCard(data) {
   const body = $('m-body');
+  if (data.systemFinding) {
+    const f = data.systemFinding;
+    $('m-title').replaceChildren(riskBadge(f.risk), tx(f.title));
+    body.replaceChildren(h('p', {class:'mono'}, f.path),
+      section(tr('tui.h.facts'), h('ul', null, (f.evidence || []).map(e=>h('li',{class:'mono'},tx(e))))),
+      findingContext(f), section(tr('tui.h.recommendation'), tx(f.recommendation)));
+    return;
+  }
   if (data.exited) {
     const t = data.track;
     $('m-title').replaceChildren(tr('web.card.exited_title', t.pid, t.name));
@@ -1027,8 +1062,9 @@ function renderSummary() {
       h('div', { class: 'lbl' }, tr('web.stat.metrics'))) : '',
   );
   const banner = $('banner');
-  if (s.warnings && s.warnings.length) {
-    banner.replaceChildren(h('b', null, tr('web.limits') + ' '), s.warnings.map(tx).join(' '));
+  const warnings = [...(s.warnings || []).map(tx), ...(s.stale ? [tr('web.data_stale')] : []), ...(state.refreshError ? [state.refreshError] : [])];
+  if (warnings.length) {
+    banner.replaceChildren(h('b', null, tr('web.limits') + ' '), warnings.join(' '));
     banner.classList.remove('hidden');
   } else banner.classList.add('hidden');
   $('btn-logout').classList.toggle('hidden', !s.auth);
@@ -1045,8 +1081,12 @@ function renderSummary() {
   $('cnt-fail2ban').textContent = s.fail2ban ? s.fail2ban.banned : 0;
 }
 
-function renderAll() {
+let renderedReport = null;
+function renderAll(skipUnchanged = false) {
   renderSummary();
+  const report = ['system','audit','ufw','changes'].includes(state.tab) ? state[state.tab] : null;
+  if (skipUnchanged && report && renderedReport && renderedReport.data === report && renderedReport.tab === state.tab && renderedReport.lang === I18N.lang) return;
+  renderedReport = {data:report,tab:state.tab,lang:I18N.lang};
   switch (state.tab) {
     case 'suspicious': renderSuspicious(); break;
     case 'all': renderAllProcs(); break;
@@ -1080,7 +1120,7 @@ case 'learning': state.learning = await api('/api/learning'); break;
 case 'changes': state.changes = await api('/api/changes'); break;
 case 'timeline': state.timeline = await api('/api/timeline?since=48h'); break;
 case 'history': state.events = (await api('/api/events?limit=2000')).events || []; break;
-    case 'system': state.system = await api('/api/system'); break;
+    case 'system': state.system = await api('/api/system?summary=1'); break;
     case 'metrics': state.metrics = await api('/api/metrics?range=' + encodeURIComponent(state.mrange)); break;
     case 'netload': state.netload = await api('/api/netload'); break;
   }
@@ -1108,9 +1148,14 @@ async function refresh() {
       state.processes = (await api('/api/processes')).processes || [];
     }
     await loadTabData();
-    renderAll();
+    state.refreshError = '';
+    renderAll(true);
   } catch (e) {
-    if (e.message !== 'unauthorized') toast(tr('web.refresh_error', e.message));
+    if (e.message !== 'unauthorized') {
+      state.refreshError = tr('web.refresh_error', e.message);
+      renderSummary();
+      toast(state.refreshError);
+    }
   } finally {
     loading = false;
   }
@@ -1189,7 +1234,7 @@ async function init() {
     try {
       const r = await api('/api/audit/run', { method: 'POST' });
       toast(r.started ? tr('web.audit.started') : tr('web.audit.already'));
-      if (state.audit) { state.audit.running = true; renderAudit(); }
+      if (state.audit) { state.audit = {...state.audit, running:true}; renderAudit(); }
       setTimeout(refresh, 1000);
     } catch (e) { toast(e.message); }
   });
