@@ -51,6 +51,17 @@ func TestQuickRunPreservesIncompleteSweeps(t *testing.T) {
 		if found == quick {
 			t.Fatalf("quick=%v complete=%v", quick, found)
 		}
+		if quick {
+			pending := map[string]bool{}
+			for _, f := range sc.Snapshot().System {
+				pending[f.ID] = true
+			}
+			for _, id := range []string{"rootkit_sweep_pending", "fs_inventory_pending"} {
+				if !pending[id] {
+					t.Fatalf("quick mode hid incomplete check: %s", id)
+				}
+			}
+		}
 		if quick && sc.opt.Inventory.Report() != nil {
 			t.Fatal("quick mode started file inventory")
 		}
