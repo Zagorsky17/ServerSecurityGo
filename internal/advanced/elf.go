@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"math"
 	"os"
-	"strings"
 
 	"github.com/Zagorsky17/ServerSecurityGo/internal/model"
 )
@@ -62,7 +61,7 @@ func InspectELF(data []byte) (model.ExecutableInspection, error) {
 		return out, os.ErrInvalid
 	}
 
-	if strIndex == 0xffff || (shnum > 0 && strIndex >= shnum) {
+	if strIndex == 0xffff || (strIndex != 0 && strIndex >= shnum) {
 		return out, os.ErrInvalid
 	}
 	required := uint16(40)
@@ -107,14 +106,10 @@ func InspectELF(data []byte) (model.ExecutableInspection, error) {
 			}
 		}
 	}
-	for _, s := range f.Sections {
-		if strings.HasPrefix(s.Name, "UPX") {
-			out.Packing = "upx-section"
-		}
+	if hasUPXHeader(data, f) {
+		out.Packing = "upx-header"
 	}
-	if out.Packing == "" && bytes.Contains(data, []byte("UPX!")) {
-		out.Packing = "upx-marker"
-	}
+
 	if len(sample) >= 4096 {
 		var counts [256]int
 		for _, b := range sample {
