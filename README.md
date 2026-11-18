@@ -785,6 +785,14 @@ A complete initial public-port section establishes expected protocol/address/por
 
 The offline support table was checked on 2026-11-18 against [Ubuntu release information](https://ubuntu.com/project/docs/release-team/list-of-releases/) and [Debian releases](https://www.debian.org/releases/). It distinguishes Ubuntu standard support and Debian LTS from separately purchased Pro/ESM/ELTS coverage, which must be verified by the administrator. File capabilities follow the [Linux VFS capability format](https://github.com/torvalds/linux/blob/master/include/uapi/linux/capability.h), including revisions 1–3.
 
+### Change priority and evidence
+
+The system list shows CRITICAL findings first, then unsuppressed `new_public_listener`, `fs_privilege_new` and `ssh_keys_recent`, then other findings by risk. **Change — review first** controls review order without raising severity or proving an attack. Snapshot comparisons prioritize changes to ports, SSH keys, SUID/SGID and capabilities; incomplete or incompatible sections cannot produce these differences.
+
+Web and TUI cards separate observed evidence, risk and consequences, confidence and limitations, and verification commands. `fs_privilege_new` shows before/after privileges; absence from the baseline privileged-file list does not prove that the file itself was absent. Package ownership does not dismiss the warning. `ssh_keys_recent` uses mtime alone and cannot confirm changed keys: compare fingerprints with approved keys and complete compatible snapshots. A new public listener does not prove external reachability.
+
+Confidence describes evidence and limits without attack-probability percentages. Commands are displayed only, with shell-quoted paths. `explain` also includes these explanations. JSON adds `reviewFirst` and `confidence` to finding context, and `reviewFirst` to snapshot changes. Data from an older service lacks the new explanations and markers.
+
 ### Allowlist review, learning and additional detectors
 
 Process finding cards offer **This is legitimate** for eligible signals: a JSON fragment constrained to the exact executable, user and finding ID. `"exact": true` prevents `*`, `?` or `[` in a filename from becoming allowlist wildcards. Review the fragment and merge its rule into your existing allowlist yourself; copying it changes nothing. Critical processes, strong signals, informational and already suppressed findings do not produce suggestions. System and audit findings have no automatic allowlist action.

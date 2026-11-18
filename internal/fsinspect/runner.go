@@ -3,6 +3,7 @@ package fsinspect
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -71,7 +72,14 @@ func (r *Runner) RunOnce(ctx context.Context) *model.FileInventory {
 			if (f.SUID && (!exists || !prev.SUID)) || (f.SGID && (!exists || !prev.SGID)) || (f.Permitted&^prev.Permitted) != 0 || (f.Inheritable&^prev.Inheritable) != 0 || (f.Effective && !prev.Effective && f.Permitted != 0) {
 				add(rep, "fs_privilege_new", f.Path, model.RiskHigh, "")
 				if n := len(rep.Findings); n > 0 && rep.Findings[n-1].ID == "fs_privilege_new" {
-					rep.Findings[n-1].Evidence = []i18n.Msg{i18n.T("ev.fs_new")}
+					finding := &rep.Findings[n-1]
+					finding.Title = i18n.T("rule.fs_privilege_new.title")
+					finding.Recommendation = i18n.T("rule.fs_privilege_new.rec")
+					before := i18n.T("ev.fs_privilege_absent")
+					if exists {
+						before = i18n.L(privilegeState(prev))
+					}
+					finding.Evidence = []i18n.Msg{i18n.T("ev.fs_new"), i18n.T("ev.fs_privilege_before", before), i18n.T("ev.fs_privilege_after", privilegeState(f))}
 				}
 			}
 		}
@@ -91,6 +99,10 @@ func (r *Runner) RunOnce(ctx context.Context) *model.FileInventory {
 	r.report = rep
 	r.mu.Unlock()
 	return rep
+}
+
+func privilegeState(f model.FilePrivilege) string {
+	return fmt.Sprintf("uid=%d gid=%d suid=%t sgid=%t permitted=%#x inheritable=%#x effective=%t rootid=%d", f.UID, f.GID, f.SUID, f.SGID, f.Permitted, f.Inheritable, f.Effective, f.RootID)
 }
 func (r *Runner) Run(ctx context.Context) {
 	t := time.NewTicker(r.opt.Interval)

@@ -29,6 +29,7 @@ func Explain(id string) (model.Finding, error) {
 	case strings.HasPrefix(id, "fs_") && title == "rule.fs_observation.title":
 		rec = "rec.fs_review"
 	case strings.HasPrefix(title, "audit."):
+		f.Confidence = i18n.T("card.confidence.audit")
 		f.Why = i18n.T("card.why.audit")
 		f.Legitimate = i18n.T("card.legitimate.audit")
 		if !i18n.Has(rec) && (strings.HasPrefix(id, "kern_") || strings.HasPrefix(id, "net_")) {
@@ -47,7 +48,7 @@ func Explain(id string) (model.Finding, error) {
 
 var explanationTitles = map[string]string{
 	"advanced_process_pending": "warn.advanced_process_pending", "promisc_unavailable": "warn.promisc_unavailable",
-	"fs_world_writable_system": "rule.fs_observation.title", "fs_unowned": "rule.fs_observation.title", "fs_suid_inventory": "rule.fs_observation.title", "fs_suid_unusual": "rule.fs_observation.title", "fs_capabilities": "rule.fs_observation.title", "fs_privilege_new": "rule.fs_observation.title",
+	"fs_world_writable_system": "rule.fs_observation.title", "fs_unowned": "rule.fs_observation.title", "fs_suid_inventory": "rule.fs_observation.title", "fs_suid_unusual": "rule.fs_observation.title", "fs_capabilities": "rule.fs_observation.title",
 	"fs_inventory_pending": "warn.fs_pending", "fs_inventory_unavailable": "warn.fs_incomplete", "advanced_pending": "warn.advanced_pending", "advanced_unavailable": "warn.advanced_incomplete", "packet_inventory_unavailable": "warn.packet_incomplete", "ports_baseline_unavailable": "warn.baseline_ports",
 	"kern_userns": "audit.kernel_inventory.title", "kern_modules_disabled": "audit.kernel_inventory.title", "net_ip_forward": "audit.kernel_inventory.title", "kern_tainted": "audit.kernel_inventory.title", "kern_sysrq": "audit.kernel_inventory.title",
 }

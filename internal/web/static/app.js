@@ -795,7 +795,7 @@ function renderSystem() {
   $('sys-warn').replaceChildren(...warns.map((w) => h('li', null, w)));
   renderTable('t-system', [
     { t: tr('web.col.risk'), v: (f) => riskNum(f.risk), r: (f) => riskBadge(f.risk), desc: true },
-    { t: tr('tui.title.check'), v: (f) => tx(f.title), r: (f) => tx(f.title), c: 'wrap' },
+    { t: tr('tui.title.check'), v: (f) => tx(f.title), r: (f) => h('div', null, f.reviewFirst && !f.suppressed ? h('strong', null, tr('card.review_first')) : '', h('div', null, tx(f.title))), c: 'wrap' },
     { t: tr('tui.k.file'), v: (f) => f.path, r: (f) => f.path, c: 'mono' },
     { t: tr('tui.k.modified'), v: (f) => f.modTime || '', r: (f) => fmtTime(f.modTime), c: 'nowrap' },
     { t: tr('tui.h.facts'), v: () => 0, r: (f) => h('ul', { class: 'findings' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))), c: 'wrap' },
@@ -944,10 +944,12 @@ function renderCard(data) {
 }
 
 function findingContext(f) {
-  return h('details', null, h('summary', null, tr('card.why')),
-    h('p', null, tx(f.why)), h('b', null, tr('card.legitimate')), h('p', null, tx(f.legitimate)),
+  return h('details', {open: f.reviewFirst && !f.suppressed}, h('summary', null, tr('card.why')),
+    h('p', null, tx(f.why)),
+    f.confidence ? h('div', null, h('b', null, tr('card.confidence')), h('p', null, tx(f.confidence))) : '',
+    (f.verifyCommands || []).length ? h('div', null, h('b', null, tr('card.verify')), h('pre', null, f.verifyCommands.join('\n'))) : '',
+    h('b', null, tr('card.legitimate')), h('p', null, tx(f.legitimate)),
     (f.attack || []).length ? h('div', null, tr('card.attack'), ' ', (f.attack || []).filter(id => /^T[0-9]{4}(\.[0-9]{3})?$/.test(id)).map(id => h('a', {href: 'https://attack.mitre.org/techniques/' + id.replace('.', '/') + '/', target: '_blank', rel: 'noopener noreferrer'}, id + ' '))) : '',
-    h('pre', null, (f.verifyCommands || []).join('\n')),
     (f.relatedEvents || []).length ? h('div', null, tr('card.related'), h('ul', null, f.relatedEvents.map(e => h('li', null, fmtTime(e.time) + ' · ' + tx(e.details))))) : '');
 }
 
@@ -958,6 +960,7 @@ function findingBlock(f) {
       f.category !== 'info' ? h('span', { class: 'tag' }, tr('web.card.points', f.weight)) : '',
       f.strong ? h('span', { class: 'tag strong' }, tr('web.card.strong')) : '',
       f.suppressed ? h('span', { class: 'tag' }, tr('tui.suppressed')) : ''),
+    h('b', null, tr('tui.h.facts')),
     h('ul', { class: 'ev' }, (f.evidence || []).map((e) => h('li', { class: 'mono' }, tx(e)))),
     findingContext(f), allowlistProposal(f.allowlistProposal),
     tx(f.recommendation) ? h('div', { class: 'rec' }, '→ ' + tx(f.recommendation)) : '');
@@ -1270,7 +1273,7 @@ function renderChanges() {
   box.append(h('p',null,tr('web.changes.period',fmtTime(d.from),fmtTime(d.to))));
   for (const w of d.warnings || []) box.append(h('p',null,tx(w)));
   box.append(h('table',null,h('thead',null,h('tr',null,[tr('web.col.group'),tr('tui.k.file'),tr('web.changes.kind'),tr('web.changes.before'),tr('web.changes.after')].map(x=>h('th',null,x)))),
-   h('tbody',null,(d.changes || []).map(c=>h('tr',null,[c.section,c.key,c.kind,c.before || '',c.after || ''].map(x=>h('td',{class:'mono wrap'},x)))))));
+   h('tbody',null,(d.changes || []).map(c=>h('tr',null,[h('div',null,c.reviewFirst ? h('strong',null,tr('card.review_first')) : '',h('div',null,c.section)),c.key,c.kind,c.before || '',c.after || ''].map(x=>h('td',{class:'mono wrap'},x)))))));
  }
 }
 

@@ -472,9 +472,13 @@ func (a *App) row(p panelID, i, w int) []seg {
 		}
 	case pSys:
 		f := a.system[i]
+		mark := ""
+		if f.ReviewFirst && !f.Suppressed {
+			mark = "[!] "
+		}
 		return []seg{
 			{riskShort(f.Risk.String()) + " ", riskStyle(f.Risk.String())},
-			{a.txt(f.Title) + " ", stNormal},
+			{mark + a.txt(f.Title) + " ", stNormal},
 			{f.Path, stDim},
 		}
 	case pLoad:
@@ -814,6 +818,9 @@ func (a *App) mainContent(w int) (string, []line) {
 					b.para(a.txt(w), stWarn, 0)
 				}
 				for _, c := range d.Changes {
+					if c.ReviewFirst {
+						b.para(a.tr("card.review_first"), stWarn, 0)
+					}
 					b.para(c.Section+" "+c.Kind+" "+c.Key, stBold, 0)
 					b.para(c.Before+" → "+c.After, stNormal, 2)
 				}
@@ -1067,15 +1074,17 @@ func findingBlock(b *lb, f model.Finding) {
 	}
 	tags += "]"
 	b.add(seg{"  " + mark + " ", st}, seg{sanitize(f.Title.In(b.lang)), st}, seg{tags, stDim})
-	b.findingContext(f.FindingContext)
 	if f.AllowlistProposal != "" {
 		b.header(b.tr("web.allow.legitimate"))
 		b.para(b.tr("web.allow.review"), stDim, 2)
 		b.para(f.AllowlistProposal, stNormal, 2)
 	}
+	b.header(b.tr("tui.h.facts"))
 	for _, e := range f.Evidence {
 		b.para("· "+e.In(b.lang), Style{FG: 250, BG: -1}, 6)
 	}
+	b.findingContext(f.FindingContext)
+	b.verification(f.VerifyCommands)
 	if !f.Recommendation.IsZero() {
 		b.para("→ "+f.Recommendation.In(b.lang), stDim, 6)
 	}
@@ -1175,10 +1184,6 @@ func (a *App) auditHeader(b *lb) {
 
 // auditDetail — подробности проверки: факты, рекомендация, команда.
 func (a *App) auditDetail(b *lb, c model.AuditCheck) {
-	b.findingContext(c.FindingContext)
-	for _, cmd := range c.VerifyCommands {
-		b.para(cmd, stNormal, 2)
-	}
 	b.add(seg{" " + auditShort(c.Status) + " ", Style{FG: 16, BG: auditStyle(c.Status).FG, Bold: true}}, seg{"  " + sanitize(a.txt(c.Title)), stBold})
 	b.kv(a.tr("web.col.status"), a.statusName(c.Status))
 	b.kv(a.tr("web.col.severity"), c.Severity.String())
@@ -1193,6 +1198,8 @@ func (a *App) auditDetail(b *lb, c model.AuditCheck) {
 			b.para("· "+a.txt(m), stNormal, 2)
 		}
 	}
+	b.findingContext(c.FindingContext)
+	b.verification(c.VerifyCommands)
 	if !c.Recommendation.IsZero() {
 		b.header(a.tr("tui.h.recommendation"))
 		b.para(a.txt(c.Recommendation), stNormal, 2)
@@ -1478,11 +1485,10 @@ func fmtDur(a *App, sec int64) string {
 }
 
 func (a *App) systemDetail(b *lb, f model.SystemFinding) {
-	b.findingContext(f.FindingContext)
 	rs := f.Risk.String()
 	b.add(seg{" " + rs + " ", Style{FG: 16, BG: riskStyle(rs).FG, Bold: true}}, seg{"  " + sanitize(a.txt(f.Title)), stBold})
-	for _, cmd := range f.VerifyCommands {
-		b.para(cmd, stNormal, 0)
+	if f.ReviewFirst && !f.Suppressed {
+		b.para(a.tr("card.review_first"), stWarn, 0)
 	}
 	b.kv(a.tr("tui.k.file"), f.Path)
 	b.kv(a.tr("tui.k.modified"), fmtTime(f.ModTime))
@@ -1491,6 +1497,8 @@ func (a *App) systemDetail(b *lb, f model.SystemFinding) {
 	for _, e := range f.Evidence {
 		b.para("· "+a.txt(e), stNormal, 2)
 	}
+	b.findingContext(f.FindingContext)
+	b.verification(f.VerifyCommands)
 	if !f.Recommendation.IsZero() {
 		b.header(a.tr("tui.h.recommendation"))
 		b.para(a.txt(f.Recommendation), stNormal, 2)
@@ -1955,6 +1963,10 @@ func (b *lb) findingContext(c model.FindingContext) {
 		b.header(b.tr("card.why"))
 		b.para(c.Why.In(b.lang), stNormal, 2)
 	}
+	if !c.Confidence.IsZero() {
+		b.header(b.tr("card.confidence"))
+		b.para(c.Confidence.In(b.lang), stNormal, 2)
+	}
 	if !c.Legitimate.IsZero() {
 		b.header(b.tr("card.legitimate"))
 		b.para(c.Legitimate.In(b.lang), stDim, 2)
@@ -1970,5 +1982,15 @@ func (b *lb) findingContext(c model.FindingContext) {
 		for _, e := range c.RelatedEvents {
 			b.para(fmtTime(e.Time)+" · "+e.Details.In(b.lang), stDim, 2)
 		}
+	}
+}
+
+func (b *lb) verification(commands []string) {
+	if len(commands) == 0 {
+		return
+	}
+	b.header(b.tr("card.verify"))
+	for _, cmd := range commands {
+		b.para(cmd, stNormal, 2)
 	}
 }

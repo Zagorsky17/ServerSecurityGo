@@ -17,11 +17,12 @@ type BaselineSnapshot struct {
 	Sections map[string]BaselineSection `json:"sections"`
 }
 type BaselineChange struct {
-	Section string `json:"section"`
-	Key     string `json:"key"`
-	Kind    string `json:"kind"`
-	Before  string `json:"before,omitempty"`
-	After   string `json:"after,omitempty"`
+	ReviewFirst bool   `json:"reviewFirst,omitempty"`
+	Section     string `json:"section"`
+	Key         string `json:"key"`
+	Kind        string `json:"kind"`
+	Before      string `json:"before,omitempty"`
+	After       string `json:"after,omitempty"`
 }
 type BaselineDiff struct {
 	From       time.Time        `json:"from"`

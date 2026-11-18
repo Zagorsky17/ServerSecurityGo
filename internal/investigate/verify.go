@@ -10,6 +10,9 @@ import (
 
 func Quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 func Commands(id string, pid int, path string) []string {
+	if id == "new_public_listener" {
+		return []string{"ss -lntup", "ufw status verbose", "nft list ruleset"}
+	}
 	if pid == 0 && id == "hidden_process" && strings.HasPrefix(path, "/proc/") {
 		part := strings.Split(strings.TrimPrefix(path, "/proc/"), "/")[0]
 		if n, e := strconv.Atoi(part); e == nil && n > 0 {
@@ -40,6 +43,10 @@ func Commands(id string, pid int, path string) []string {
 	if path != "" && strings.HasPrefix(path, "/") {
 		q := Quote(path)
 		switch id {
+		case "ssh_keys_recent":
+			return []string{"stat -- " + q, "ssh-keygen -lf " + q}
+		case "fs_privilege_new":
+			return []string{"stat -- " + q, "getcap -n " + q, "dpkg-query -S -- " + q}
 		case "bin_modified", "bin_unpackaged":
 			return []string{"sha256sum -- " + q, "md5sum -- " + q, "dpkg-query -S -- " + q, "dpkg -V"}
 		case "log_utmp_missing":
@@ -76,6 +83,7 @@ func Attach(snap *model.Snapshot, events ...model.Event) {
 			f.AllowlistProposal = detect.AllowlistProposal(p, *f)
 			f.VerifyCommands = Commands(f.ID, p.PID, p.Exe)
 			f.FindingContext = contextFor(f.ID, f.Category, p.Exe)
+			f.ReviewFirst = f.ReviewFirst && !f.Suppressed
 			if f.ID == "scheduler_suspicious" {
 				if par := parents[p.PPID]; par != nil && (par.Name == "cron" || par.Name == "crond") {
 					f.Attack = []string{"T1053.003"}
@@ -88,6 +96,7 @@ func Attach(snap *model.Snapshot, events ...model.Event) {
 		f := &snap.System[i]
 		f.VerifyCommands = Commands(f.ID, 0, f.Path)
 		f.FindingContext = contextFor(f.ID, f.Category, f.Path)
+		f.ReviewFirst = f.ReviewFirst && !f.Suppressed
 		if f.Path != "" {
 			f.RelatedEvents = idx["path:"+f.Path]
 		}
